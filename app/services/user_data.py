@@ -1,7 +1,50 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Participant, Q1Answer, Q2Answer, Reminder, DailySession
+from app.db.models import Participant, Q1Answer, Q2Answer, Reminder, DailySession, Chat
+
+
+async def ensure_chat_saved(chat_id: int, chat_type: str, title: str | None) -> None:
+    from app.db.engine import SessionMaker
+
+    async with SessionMaker() as session:
+        existing = await session.get(Chat, chat_id)
+        if existing:
+            existing.chat_type = chat_type
+            existing.title = title
+            existing.is_enabled = True
+        else:
+            session.add(Chat(chat_id=chat_id, chat_type=chat_type, title=title, is_enabled=True))
+        await session.commit()
+
+
+async def upsert_participant(chat_id: int, user_id: int, username: str | None, full_name: str) -> None:
+    from app.db.engine import SessionMaker
+
+    async with SessionMaker() as session:
+        q = Participant.__table__.select().where(
+            (Participant.chat_id == chat_id) & (Participant.user_id == user_id)
+        )
+        res = await session.execute(q)
+        row = res.first()
+
+        if row:
+            await session.execute(
+                Participant.__table__.update()
+                .where((Participant.chat_id == chat_id) & (Participant.user_id == user_id))
+                .values(username=username, full_name=full_name, is_opted_out=False)
+            )
+        else:
+            session.add(
+                Participant(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    username=username,
+                    full_name=full_name,
+                    is_opted_out=False,
+                )
+            )
+        await session.commit()
 
 
 async def set_opt_out(session: AsyncSession, chat_id: int, user_id: int, value: bool) -> None:

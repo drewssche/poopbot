@@ -108,9 +108,10 @@ async def increment_q1_count(
     row = await get_or_create_q1_row(session, sess, chat_id, user_id)
     new_count = int(row.poop_count) + 1
     if new_count > max_count:
-        new_count = int(row.poop_count)  # не меняем
-    else:
-        await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
+        # не меняем
+        return int(row.poop_count)
+
+    await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
     return new_count
 
 
@@ -124,9 +125,10 @@ async def decrement_q1_count(
     row = await get_or_create_q1_row(session, sess, chat_id, user_id)
     new_count = int(row.poop_count) - 1
     if new_count < 0:
-        new_count = int(row.poop_count)  # не меняем
-    else:
-        await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
+        # не меняем
+        return int(row.poop_count)
+
+    await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
     return new_count
 
 
@@ -139,10 +141,9 @@ async def set_q1_remind_at(
     now_utc: datetime,
 ) -> None:
     """
-    Ставит напоминание (в UTC). Счётчик не трогает.
+    Ставит remind_at (UTC) для пользователя на текущую сессию.
     """
-    row = await get_or_create_q1_row(session, sess, chat_id, user_id)
-    # если строки не было — теперь есть
+    await get_or_create_q1_row(session, sess, chat_id, user_id)
     await session.execute(
         update(Q1Answer)
         .where(Q1Answer.session_id == sess.id, Q1Answer.user_id == user_id)
@@ -222,3 +223,19 @@ async def is_session_closed(session: AsyncSession, chat_id: int, day: date) -> b
     res = await session.execute(q)
     val = res.scalar_one_or_none()
     return bool(val) if val is not None else False
+
+
+# -------------------------
+# Backward compatible API
+# -------------------------
+
+async def get_q1_answers_map(session: AsyncSession, sess_id: int):
+    """
+    Backward-compatible alias.
+
+    Старый код ожидал get_q1_answers_map(), теперь это get_q1_state_map().
+
+    Возвращаем тот же формат:
+    mp[user_id] = (poop_count, remind_at)
+    """
+    return await get_q1_state_map(session, sess_id)

@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session

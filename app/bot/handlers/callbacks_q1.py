@@ -70,6 +70,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             return
 
         upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
+        db.flush()
         sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
         if sess.status == "closed":

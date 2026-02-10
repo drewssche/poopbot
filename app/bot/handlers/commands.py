@@ -67,6 +67,7 @@ async def start_cmd(message: Message) -> None:
         if q1_msg_id:
             try:
                 await message.answer("Актуальный вопрос за сессию выше 👆", reply_to_message_id=q1_msg_id)
+                await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
                 return
             except TelegramBadRequest as e:
                 if "message to be replied not found" not in str(e).lower():

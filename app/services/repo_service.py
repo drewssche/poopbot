@@ -31,6 +31,12 @@ def upsert_user(db: Session, user_id: int, username: Optional[str], first_name: 
 
 
 def ensure_chat_member(db: Session, chat_id: int, user_id: int) -> ChatMember:
+    user = db.get(User, user_id)
+    if user is None:
+        user = User(user_id=user_id, username=None, first_name=None, last_name=None)
+        db.add(user)
+        db.flush()
+
     member = db.get(ChatMember, {"chat_id": chat_id, "user_id": user_id})
     if member is None:
         member = ChatMember(chat_id=chat_id, user_id=user_id, joined_at=datetime.utcnow())

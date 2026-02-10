@@ -26,3 +26,10 @@ def help_time_kb(owner_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🌙 Вечер (19:00)", callback_data=f"help:time:19:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
     return kb.as_markup()
+
+
+def help_delete_confirm_kb(owner_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"help:delete_confirm:{owner_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:settings:{owner_id}"))
+    return kb.as_markup()

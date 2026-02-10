@@ -7,7 +7,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
-from app.bot.keyboards.help import help_root_kb, help_settings_kb, help_time_kb
+from app.bot.keyboards.help import help_root_kb, help_settings_kb, help_time_kb, help_delete_confirm_kb
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
@@ -103,6 +103,18 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
                     await cb.answer("Это не твои настройки", show_alert=False)
+                    return
+                mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
+                await cb.message.edit_text(
+                    f"⚠️ {mention}, уверен(а), что хочешь удалить себя из базы?",
+                    reply_markup=help_delete_confirm_kb(owner_id),
+                )
+                await cb.answer()
+
+            elif data.startswith("help:delete_confirm:"):
+                expected_owner = _parse_owner(data)
+                if actor_id != expected_owner:
+                    await cb.answer("Это не твоё подтверждение", show_alert=False)
                     return
 
                 delete_user_everywhere(db, chat_id, actor_id)

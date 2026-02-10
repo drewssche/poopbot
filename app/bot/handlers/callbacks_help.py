@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import logging
+from aiogram import Router, F
+from aiogram.types import CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
+
+from app.bot.keyboards.help import help_root_kb, help_settings_kb, help_time_kb
+from app.bot.keyboards.q1 import q1_keyboard
+from app.db.engine import make_engine, make_session_factory
+from app.db.session import db_session
+from app.services.help_service import set_chat_post_time, delete_user_everywhere
+from app.services.repo_service import upsert_chat, get_or_create_session, get_session_message_id
+from app.services.time_service import get_session_window
+from app.services.q1_service import render_q1
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+_engine = None
+_session_factory = None
+
+
+def init_db(database_url: str) -> None:
+    global _engine, _session_factory
+    if _engine is None:
+        _engine = make_engine(database_url)
+        _session_factory = make_session_factory(_engine)
+
+
+def _parse_owner(data: str) -> int:
+    return int(data.split(":")[-1])
+
+
+ROOT_TEXT = (
+    "ℹ️ Помощь\n\n"
+    "💩 Кнопки Q1:\n"
+    "• +💩 / -💩 — отметить сколько раз сегодня\n"
+    "• ⏳ — подписка/отписка на напоминалку в 22:00\n\n"
+    "🧻 Q2/Q3:\n"
+    "• можно выбрать только если сегодня 💩 > 0\n"
+)
+
+SETTINGS_TEXT = (
+    "⚙️ Настройки\n\n"
+    "🗑️ Удалить меня — полностью убирает тебя из базы и статистики.\n"
+    "⏱️ Установить время — меняет время автопоста ежедневных вопросов для этого чата.\n"
+    "⬅️ Назад — вернуться в меню помощи.\n"
+)
+
+ABOUT_TEXT = "🤖 О боте\n\nОн выясняет, как часто вы какаете и потом показывает вам"
+TIME_TEXT = "⏱️ Установить время вопросов для этого чата:"
+
+
+@router.callback_query(F.data.startswith("help:"))
+async def help_callbacks(cb: CallbackQuery) -> None:
+    if cb.message is None or cb.from_user is None:
+        return
+
+    from app.core.config import load_settings
+    settings = load_settings()
+    init_db(settings.database_url)
+
+    data = cb.data
+    chat_id = cb.message.chat.id
+    actor_id = cb.from_user.id
+
+    # ВАЖНО: owner всегда тот, кто сейчас нажал (перехват управления меню)
+    owner_id = actor_id
+
+    with db_session(_session_factory) as db:
+        try:
+            if data.startswith("help:settings:"):
+                await cb.message.edit_text(SETTINGS_TEXT, reply_markup=help_settings_kb(owner_id))
+                await cb.answer()
+
+            elif data.startswith("help:about:"):
+                await cb.message.edit_text(ABOUT_TEXT, reply_markup=help_root_kb(owner_id))
+                await cb.answer()
+
+            elif data.startswith("help:set_time:"):
+                await cb.message.edit_text(TIME_TEXT, reply_markup=help_time_kb(owner_id))
+                await cb.answer()
+
+            elif data.startswith("help:time:"):
+                hour = int(data.split(":")[2])
+                set_chat_post_time(db, chat_id, hour)
+                await cb.answer("Готово", show_alert=False)
+                await cb.message.edit_text(TIME_TEXT, reply_markup=help_time_kb(owner_id))
+
+            elif data.startswith("help:delete_me:"):
+                # персонально: удалить может только тот, кто сейчас "владеет" меню (то есть сам актор)
+                expected_owner = _parse_owner(data)
+                if actor_id != expected_owner:
+                    await cb.answer("Это не твои настройки", show_alert=False)
+                    return
+
+                delete_user_everywhere(db, chat_id, actor_id)
+
+                # обновить актуальный Q1 (если есть)
+                chat = upsert_chat(db, chat_id)
+                window = get_session_window(chat.timezone)
+                if not window.is_blocked_window:
+                    sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+                    q1_id = get_session_message_id(db, sess.session_id, "Q1")
+                    if q1_id and sess.status != "closed":
+                        text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+                        has_any_members = "Участники:" in text
+                        try:
+                            await cb.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=q1_id,
+                                text=text,
+                                reply_markup=q1_keyboard(has_any_members),
+                            )
+                        except TelegramBadRequest as e:
+                            if "message is not modified" not in str(e).lower():
+                                logger.exception("Failed to edit Q1 after delete_me: %s", e)
+
+                await cb.answer("Удалил", show_alert=False)
+                await cb.message.edit_text("✅ Готово. Ты удалён из базы.", reply_markup=help_root_kb(owner_id))
+
+            elif data.startswith("help:back:"):
+                # Назад доступен всем + перехватывает owner текущим актором
+                await cb.message.edit_text(ROOT_TEXT, reply_markup=help_root_kb(owner_id))
+                await cb.answer()
+
+            else:
+                await cb.answer()
+
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return
+            logger.exception("Help edit failed: %s", e)
+            await cb.answer("Ошибка (см. логи)", show_alert=False)

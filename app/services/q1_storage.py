@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select, desc, update
@@ -6,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import DailySession, Q1Answer, Participant
 
 
+# -------------------------
+# Sessions / participants
+# -------------------------
+
 async def get_or_create_session(session: AsyncSession, chat_id: int, day: date) -> DailySession:
     q = select(DailySession).where(
         DailySession.chat_id == chat_id, DailySession.day == day)
@@ -13,9 +19,10 @@ async def get_or_create_session(session: AsyncSession, chat_id: int, day: date) 
     s = res.scalar_one_or_none()
     if s:
         return s
+
     s = DailySession(chat_id=chat_id, day=day)
     session.add(s)
-    await session.flush()  # получить s.id
+    await session.flush()
     return s
 
 
@@ -34,34 +41,140 @@ async def get_active_participants(session: AsyncSession, chat_id: int) -> list[P
     return list(res.scalars().all())
 
 
-async def get_q1_answers_map(session: AsyncSession, sess_id: int) -> dict[int, tuple[str, datetime | None]]:
-    q = select(Q1Answer).where(Q1Answer.session_id == sess_id)
+# -------------------------
+# Q1 storage (count + remind)
+# -------------------------
+
+async def get_q1_row(session: AsyncSession, sess_id: int, user_id: int) -> Q1Answer | None:
+    q = select(Q1Answer).where(Q1Answer.session_id ==
+                               sess_id, Q1Answer.user_id == user_id)
     res = await session.execute(q)
-    mp: dict[int, tuple[str, datetime | None]] = {}
-    for row in res.scalars().all():
-        mp[row.user_id] = (row.answer, row.remind_at)
-    return mp
+    return res.scalar_one_or_none()
 
 
-async def user_already_answered_q1(session: AsyncSession, sess_id: int, user_id: int) -> bool:
-    q = select(Q1Answer.id).where(Q1Answer.session_id ==
-                                  sess_id, Q1Answer.user_id == user_id)
-    res = await session.execute(q)
-    return res.scalar_one_or_none() is not None
-
-
-async def insert_q1_answer(
+async def get_or_create_q1_row(
     session: AsyncSession,
     sess: DailySession,
     chat_id: int,
     user_id: int,
-    answer: str,
-    remind_at: datetime | None,
+) -> Q1Answer:
+    row = await get_q1_row(session, sess.id, user_id)
+    if row:
+        return row
+
+    row = Q1Answer(session_id=sess.id, chat_id=chat_id,
+                   user_id=user_id, poop_count=0, remind_at=None)
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def get_q1_state_map(session: AsyncSession, sess_id: int) -> dict[int, tuple[int, datetime | None]]:
+    """
+    Возвращает mp[user_id] = (poop_count, remind_at)
+    """
+    q = select(Q1Answer).where(Q1Answer.session_id == sess_id)
+    res = await session.execute(q)
+
+    mp: dict[int, tuple[int, datetime | None]] = {}
+    for row in res.scalars().all():
+        mp[row.user_id] = (int(row.poop_count), row.remind_at)
+    return mp
+
+
+async def update_q1_count_and_touch(
+    session: AsyncSession,
+    sess_id: int,
+    user_id: int,
+    poop_count: int,
+    now_utc: datetime,
 ) -> None:
-    session.add(Q1Answer(session_id=sess.id, chat_id=chat_id,
-                user_id=user_id, answer=answer, remind_at=remind_at))
+    await session.execute(
+        update(Q1Answer)
+        .where(Q1Answer.session_id == sess_id, Q1Answer.user_id == user_id)
+        .values(poop_count=poop_count, last_action_at=now_utc)
+    )
     await session.flush()
 
+
+async def increment_q1_count(
+    session: AsyncSession,
+    sess: DailySession,
+    chat_id: int,
+    user_id: int,
+    now_utc: datetime,
+    max_count: int = 10,
+) -> int:
+    row = await get_or_create_q1_row(session, sess, chat_id, user_id)
+    new_count = int(row.poop_count) + 1
+    if new_count > max_count:
+        new_count = int(row.poop_count)  # не меняем
+    else:
+        await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
+    return new_count
+
+
+async def decrement_q1_count(
+    session: AsyncSession,
+    sess: DailySession,
+    chat_id: int,
+    user_id: int,
+    now_utc: datetime,
+) -> int:
+    row = await get_or_create_q1_row(session, sess, chat_id, user_id)
+    new_count = int(row.poop_count) - 1
+    if new_count < 0:
+        new_count = int(row.poop_count)  # не меняем
+    else:
+        await update_q1_count_and_touch(session, sess.id, user_id, new_count, now_utc)
+    return new_count
+
+
+async def set_q1_remind_at(
+    session: AsyncSession,
+    sess: DailySession,
+    chat_id: int,
+    user_id: int,
+    remind_at_utc: datetime,
+    now_utc: datetime,
+) -> None:
+    """
+    Ставит напоминание (в UTC). Счётчик не трогает.
+    """
+    row = await get_or_create_q1_row(session, sess, chat_id, user_id)
+    # если строки не было — теперь есть
+    await session.execute(
+        update(Q1Answer)
+        .where(Q1Answer.session_id == sess.id, Q1Answer.user_id == user_id)
+        .values(remind_at=remind_at_utc, last_action_at=now_utc)
+    )
+    await session.flush()
+
+
+async def cancel_q1_remind(
+    session: AsyncSession,
+    sess_id: int,
+    user_id: int,
+    now_utc: datetime,
+) -> None:
+    await session.execute(
+        update(Q1Answer)
+        .where(Q1Answer.session_id == sess_id, Q1Answer.user_id == user_id)
+        .values(remind_at=None, last_action_at=now_utc)
+    )
+    await session.flush()
+
+
+async def get_q1_positive_user_ids(session: AsyncSession, sess_id: int) -> list[int]:
+    q = select(Q1Answer.user_id).where(
+        Q1Answer.session_id == sess_id, Q1Answer.poop_count > 0)
+    res = await session.execute(q)
+    return [x[0] for x in res.all()]
+
+
+# -------------------------
+# Streak (history-based fallback)
+# -------------------------
 
 async def calc_streak_for_user(
     session: AsyncSession,
@@ -70,13 +183,14 @@ async def calc_streak_for_user(
     today: date,
 ) -> tuple[int, date | None]:
     """
-    Стрик по 💩: считаем подряд идущие дни, где ответ = 'poop'.
-    Возвращаем (кол-во дней, дата старта стрика) либо (0, None).
+    Фоллбек пересчёт стрика из истории:
+    подряд идущие дни, где poop_count > 0.
+
+    В финале мы будем поддерживать current_streak_days в Participant при закрытии дня,
+    но этот метод полезен для совместимости/проверок.
     """
-    # Берём последние ответы по дням, начиная с today, только для чата и юзера
-    # Чтобы не таскать много, ограничим верхом 365 (друзья/малые чаты — ок)
     q = (
-        select(DailySession.day, Q1Answer.answer)
+        select(DailySession.day, Q1Answer.poop_count)
         .join(Q1Answer, Q1Answer.session_id == DailySession.id)
         .where(DailySession.chat_id == chat_id, Q1Answer.user_id == user_id)
         .order_by(desc(DailySession.day))
@@ -86,57 +200,23 @@ async def calc_streak_for_user(
     rows = res.all()
 
     streak = 0
-    start_day: date | None = None
-
     expected = today
-    for day, ans in rows:
-        if day != expected:
-            # пропуск дня — стрик рвётся
+
+    for day_val, cnt in rows:
+        if day_val != expected:
             break
-        if ans != "poop":
+        if int(cnt) <= 0:
             break
         streak += 1
-        start_day = day
         expected = expected - timedelta(days=1)
 
-    # start_day сейчас указывает на самый ранний день, дошли ли мы до него
     if streak == 0:
         return 0, None
-    # дата старта — это today - (streak-1)
-    real_start = today - timedelta(days=streak - 1)
-    return streak, real_start
+    start_day = today - timedelta(days=streak - 1)
+    return streak, start_day
 
 
-async def get_q1_answer(session: AsyncSession, sess_id: int, user_id: int) -> Q1Answer | None:
-    q = select(Q1Answer).where(Q1Answer.session_id ==
-                               sess_id, Q1Answer.user_id == user_id)
-    res = await session.execute(q)
-    return res.scalar_one_or_none()
-
-
-async def update_q1_answer(
-    session: AsyncSession,
-    sess_id: int,
-    user_id: int,
-    answer: str,
-    remind_at: datetime | None,
-) -> None:
-    await session.execute(
-        update(Q1Answer)
-        .where(Q1Answer.session_id == sess_id, Q1Answer.user_id == user_id)
-        .values(answer=answer, remind_at=remind_at)
-    )
-    await session.flush()
-
-
-async def get_q1_poop_user_ids(session: AsyncSession, sess_id: int) -> list[int]:
-    q = select(Q1Answer.user_id).where(
-        Q1Answer.session_id == sess_id, Q1Answer.answer == "poop")
-    res = await session.execute(q)
-    return [x[0] for x in res.all()]
-
-
-async def is_session_closed(session: AsyncSession, chat_id: int, day) -> bool:
+async def is_session_closed(session: AsyncSession, chat_id: int, day: date) -> bool:
     q = select(DailySession.is_closed).where(
         DailySession.chat_id == chat_id, DailySession.day == day)
     res = await session.execute(q)

@@ -2,6 +2,11 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -17,12 +22,15 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file: .env
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./:/app
     command: ["bash", "-lc", "alembic upgrade head && python -m app.main"]
 
 volumes:

@@ -1,7 +1,11 @@
+# git
+.git
+.gitignore
+
 # env
 .env
 
-# python
+# python cache
 __pycache__/
 *.pyc
 *.pyo
@@ -14,8 +18,11 @@ __pycache__/
 .idea/
 .vscode/
 
-# local volumes / data
+# local data
 poopbot_pgdata/
+
+# backups (на сервере)
+backups/
 
 # OS
 .DS_Store

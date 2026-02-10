@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -21,6 +21,9 @@ from app.services.repo_service import (
 )
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1, mention
+from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.stats_service import build_stats_text_chat
+from app.services.command_message_service import get_command_message_id, set_command_message_id
 from app.bot.keyboards.q1 import q1_keyboard
 
 logger = logging.getLogger(__name__)
@@ -124,6 +127,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         window = get_session_window(chat.timezone)
         now_local = now_in_tz(chat.timezone)
         local_time = now_local.time()
+        local_date = now_local.date()
 
         sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
@@ -152,6 +156,10 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
             await _send_reminder_22(bot, db, chat_id, sess.session_id)
             sess.reminded_22_sent = True
 
+        # 23:00 периодическая статистика (неделя/месяц/год)
+        if local_time.hour == 23 and local_time.minute == 0:
+            await _send_periodic_stats(bot, db, chat_id, local_date)
+
 
 async def _post_q1(bot: Bot, db, chat_id: int, session_id: int, session_date) -> None:
     member_count = db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id)) or 0
@@ -160,6 +168,7 @@ async def _post_q1(bot: Bot, db, chat_id: int, session_id: int, session_date) ->
     text = render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
     sent = await _safe_send_message(bot, chat_id=chat_id, text=text, reply_markup=q1_keyboard(has_any_members))
     set_session_message_id(db, session_id, "Q1", sent.message_id)
+    await ensure_q2_q3_exist(bot, db, chat_id, session_id)
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
 
 
@@ -239,3 +248,32 @@ async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, b
         return
     text = f"{LOCK_LINE}\n\n{body_text}"
     await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+
+
+def _is_last_day_of_month(d: date) -> bool:
+    return (d + timedelta(days=1)).month != d.month
+
+
+async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> None:
+    # используем user_id=0 как системную метку, чтобы не дублировать отправки
+    def _already_sent(kind: str) -> bool:
+        return get_command_message_id(db, chat_id, 0, kind, local_date) is not None
+
+    async def _send(kind: str, period: str, title: str) -> None:
+        if _already_sent(kind):
+            return
+        text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period)
+        sent = await _safe_send_message(bot, chat_id=chat_id, text=text)
+        set_command_message_id(db, chat_id, 0, kind, local_date, sent.message_id)
+
+    # неделя: считаем концом недели воскресенье (weekday=6)
+    if local_date.weekday() == 6:
+        await _send("weekly_stats", "week", "📊 Итоги недели")
+
+    # месяц
+    if _is_last_day_of_month(local_date):
+        await _send("monthly_stats", "month", "📊 Итоги месяца")
+
+    # год
+    if local_date.month == 12 and local_date.day == 31:
+        await _send("yearly_stats", "year", "📊 Итоги года")

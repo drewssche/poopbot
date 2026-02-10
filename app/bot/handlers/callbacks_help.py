@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import time as dtime
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -32,14 +34,16 @@ def _parse_owner(data: str) -> int:
     return int(data.split(":")[-1])
 
 
-ROOT_TEXT = (
-    "ℹ️ Помощь\n\n"
-    "💩 Кнопки Q1:\n"
-    "• +💩 / -💩 — отметить сколько раз сегодня\n"
-    "• ⏳ — подписка/отписка на напоминалку в 22:00\n\n"
-    "🧻 Q2/Q3:\n"
-    "• можно выбрать только если сегодня 💩 > 0\n"
-)
+def _root_text() -> str:
+    return (
+        "ℹ️ Помощь\n\n"
+        "💩 Кнопки Q1:\n"
+        "• +💩 / -💩 — отметить сколько раз сегодня покакали\n"
+        "• ⏳ — подписка/отписка на напоминалку в 22:00\n\n"
+        "🧻 Q2/Q3:\n"
+        "• можно выбрать только если сегодня 💩 покакали хотя бы 1 раз\n"
+    )
+
 
 SETTINGS_TEXT = (
     "⚙️ Настройки\n\n"
@@ -49,7 +53,10 @@ SETTINGS_TEXT = (
 )
 
 ABOUT_TEXT = "🤖 О боте\n\nОн выясняет, как часто вы какаете и потом показывает вам"
-TIME_TEXT = "⏱️ Установить время вопросов для этого чата:"
+
+
+def _time_text(current_time: dtime) -> str:
+    return f"⏱️ Установить время вопросов для этого чата:\n\nТекущее: {current_time.strftime('%H:%M')}"
 
 
 @router.callback_query(F.data.startswith("help:"))
@@ -65,10 +72,12 @@ async def help_callbacks(cb: CallbackQuery) -> None:
     chat_id = cb.message.chat.id
     actor_id = cb.from_user.id
 
-    # ВАЖНО: owner всегда тот, кто сейчас нажал (перехват управления меню)
+    # owner всегда тот, кто нажал
     owner_id = actor_id
 
     with db_session(_session_factory) as db:
+        chat = upsert_chat(db, chat_id)
+
         try:
             if data.startswith("help:settings:"):
                 await cb.message.edit_text(SETTINGS_TEXT, reply_markup=help_settings_kb(owner_id))
@@ -79,17 +88,18 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
             elif data.startswith("help:set_time:"):
-                await cb.message.edit_text(TIME_TEXT, reply_markup=help_time_kb(owner_id))
+                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id))
                 await cb.answer()
 
             elif data.startswith("help:time:"):
                 hour = int(data.split(":")[2])
                 set_chat_post_time(db, chat_id, hour)
+                db.flush()
+                chat = upsert_chat(db, chat_id)  # заново читаем
                 await cb.answer("Готово", show_alert=False)
-                await cb.message.edit_text(TIME_TEXT, reply_markup=help_time_kb(owner_id))
+                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id))
 
             elif data.startswith("help:delete_me:"):
-                # персонально: удалить может только тот, кто сейчас "владеет" меню (то есть сам актор)
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
                     await cb.answer("Это не твои настройки", show_alert=False)
@@ -98,7 +108,6 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 delete_user_everywhere(db, chat_id, actor_id)
 
                 # обновить актуальный Q1 (если есть)
-                chat = upsert_chat(db, chat_id)
                 window = get_session_window(chat.timezone)
                 if not window.is_blocked_window:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
@@ -121,8 +130,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.message.edit_text("✅ Готово. Ты удалён из базы.", reply_markup=help_root_kb(owner_id))
 
             elif data.startswith("help:back:"):
-                # Назад доступен всем + перехватывает owner текущим актором
-                await cb.message.edit_text(ROOT_TEXT, reply_markup=help_root_kb(owner_id))
+                await cb.message.edit_text(_root_text(), reply_markup=help_root_kb(owner_id))
                 await cb.answer()
 
             else:

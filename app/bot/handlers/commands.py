@@ -19,6 +19,7 @@ from app.services.repo_service import (
     set_session_message_id,
 )
 from app.services.q1_service import render_q1
+from app.services.q2_q3_service import ensure_q2_q3_exist
 from app.services.command_message_service import (
     get_command_message_id,
     get_any_command_message_id,
@@ -64,20 +65,18 @@ async def start_cmd(message: Message) -> None:
         q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
 
         if q1_msg_id:
-            # пробуем реплаем на актуальный вопрос
             try:
                 await message.answer("Актуальный вопрос за сессию выше 👆", reply_to_message_id=q1_msg_id)
                 return
             except TelegramBadRequest as e:
-                # сообщение удалено/недоступно — форсим новый Q1
                 if "message to be replied not found" not in str(e).lower():
                     raise
 
-        # создать новый Q1 и сохранить новый message_id
         text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
         has_any_members = "Участники:" in text
         sent = await message.answer(text, reply_markup=q1_keyboard(has_any_members))
         set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
+        await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
 
 
 @router.message(Command("help"))
@@ -95,10 +94,10 @@ async def help_cmd(message: Message) -> None:
     root_text = (
         "ℹ️ Помощь\n\n"
         "💩 Кнопки Q1:\n"
-        "• +💩 / -💩 — отметить сколько раз сегодня\n"
+        "• +💩 / -💩 — отметить сколько раз сегодня покакали\n"
         "• ⏳ — подписка/отписка на напоминалку в 22:00\n\n"
         "🧻 Q2/Q3:\n"
-        "• можно выбрать только если сегодня 💩 > 0\n"
+        "• можно выбрать только если сегодня 💩 покакали хотя бы 1 раз\n"
     )
 
     with db_session(_session_factory) as db:
@@ -114,7 +113,6 @@ async def help_cmd(message: Message) -> None:
         except TelegramBadRequest as e:
             if "message to be replied not found" not in str(e).lower():
                 raise
-            # help-сообщение удалили — создадим новое ниже
 
     sent = await message.answer(root_text, reply_markup=help_root_kb(user.id))
 
@@ -150,7 +148,6 @@ async def stats_cmd(message: Message) -> None:
         except TelegramBadRequest as e:
             if "message to be replied not found" not in str(e).lower():
                 raise
-            # stats-сообщение удалили — создадим новое
 
     text = "📊 Статистика\n\nВыбери раздел:"
     sent = await message.answer(text, reply_markup=stats_root_kb())

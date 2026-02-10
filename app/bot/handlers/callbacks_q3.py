@@ -20,14 +20,13 @@ from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q3 import q3_keyboard
+from app.services.q2_q3_service import Q3_TEXT
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 _engine = None
 _session_factory = None
-
-Q3_TEXT = "😮‍💨 Как прошёл процесс?"
 
 
 def init_db(database_url: str) -> None:
@@ -80,7 +79,12 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
             await cb.answer("Сессия закрыта", show_alert=False)
             return
 
-        # защита от клика по старому/удалённому Q3
+        q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
+        if not q1_msg_id:
+            await cb.answer("Неактуально", show_alert=False)
+            return
+
+                # защита от клика по старому/удалённому Q3
         q3_msg_id = get_session_message_id(db, sess.session_id, "Q3")
         if q3_msg_id and cb.message.message_id != q3_msg_id:
             await cb.answer("Неактуально", show_alert=False)

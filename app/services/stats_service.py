@@ -61,18 +61,6 @@ def _bristol_bucket(val: int | None) -> str | None:
     return "💦"
 
 
-def _bristol_score(val: int | None) -> int | None:
-    if val is None:
-        return None
-    if val <= 2:
-        return 1
-    if val <= 4:
-        return 2
-    if val <= 6:
-        return 3
-    return 4
-
-
 def _bristol_from_avg(avg_score: float | None) -> str | None:
     if avg_score is None:
         return None
@@ -88,16 +76,6 @@ def _feeling_emoji(val: str | None) -> str | None:
         return "😐"
     if val == "bad":
         return "😫"
-    return None
-
-
-def _feeling_score(val: str | None) -> int | None:
-    if val == "great":
-        return 3
-    if val == "ok":
-        return 2
-    if val == "bad":
-        return 1
     return None
 
 
@@ -344,7 +322,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     my_fe_icon = _feeling_from_avg(my_fe_avg)
 
     lines = [
-        "🌍 Глобальная статистика (обезличено)",
+        "🌍 Глобальная статистика",
         f"Период: {r.start.strftime('%d.%m.%y')}–{r.end.strftime('%d.%m.%y')}",
         "",
         f"👤 Участников: {int(users_count)}",

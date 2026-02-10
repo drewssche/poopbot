@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import random
 from datetime import date
 from typing import Optional
-import html as py_html
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from app.db.models import SessionUserState, User, ChatMember, UserStreak
-from app.services.achievement_service import pick_achievement
+from app.db.models import User, ChatMember, SessionUserState, UserStreak, Chat
 
 
 BRISTOL_EMOJI = {
-    1: "🧱", 2: "🧱",
-    3: "🍌", 4: "🍌",
-    5: "🍦", 6: "🍦",
+    1: "🧱",
+    2: "🧱",
+    3: "🍌",
+    4: "🍌",
+    5: "🍦",
+    6: "🍦",
     7: "💦",
 }
 
@@ -25,130 +27,148 @@ FEELING_EMOJI = {
 }
 
 
-def mention(user: User) -> str:
-    """
-    HTML-safe упоминание:
-    - если username: @username (экранируем)
-    - иначе: кликабельный mention по user_id
-    """
-    if user.username:
-        return py_html.escape(f"@{user.username}")
+def mention(u: User) -> str:
+    if u.username:
+        return f"@{u.username}"
+    # Без @ тэгнуть нельзя — показываем имя как есть (как ты хотел), но это не “тег”.
+    name = (u.first_name or "").strip()
+    if not name:
+        name = "Безымянный"
+    return name
 
-    name = " ".join([p for p in [user.first_name, user.last_name] if p]) or f"User{user.user_id}"
-    safe_name = py_html.escape(name)
-    return f'<a href="tg://user?id={user.user_id}">{safe_name}</a>'
+
+def _achievement_pool(n: int) -> list[str]:
+    if n == 1:
+        return ["Стартанул", "Разминка", "Первый пошёл"]
+    if 2 <= n <= 3:
+        return ["Стабильный", "По графику", "Режимный"]
+    if 4 <= n <= 5:
+        return ["Говнопушка!", "Турборежим", "Двигатель прогрет"]
+    if 6 <= n <= 7:
+        return ["Штормит", "Конвейер", "Многоходовочка"]
+    if 8 <= n <= 10:
+        return ["Легенда", "Портал открыт", "Гига-режим"]
+    return []
+
+
+def apply_plus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
+    if st is None:
+        st = SessionUserState(session_id=session_id, user_id=user_id, poops_n=0)
+        db.add(st)
+        db.flush()
+
+    if st.poops_n >= 10:
+        return False, "Я тебе не верю"
+
+    prev = st.poops_n
+    st.poops_n += 1
+
+    # фиксируем ачивку при первом n>0 (0->1)
+    if prev == 0 and st.poops_n > 0:
+        pool = _achievement_pool(st.poops_n)
+        st.achievement_text = random.choice(pool) if pool else None
+    elif st.poops_n > 0 and not st.achievement_text:
+        pool = _achievement_pool(st.poops_n)
+        st.achievement_text = random.choice(pool) if pool else None
+
+    n = st.poops_n
+    if 1 <= n <= 3:
+        return True, "Принял"
+    if 4 <= n <= 7:
+        return True, "Ох, вот это ты даёшь"
+    return True, "WOW"
+
+
+def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
+    if st is None or st.poops_n <= 0:
+        return False, "Нельзя вкакаться"
+
+    st.poops_n -= 1
+    if st.poops_n == 0:
+        st.achievement_text = None
+        st.bristol = None
+        st.feeling = None
+    return True, "Ок"
+
+
+def toggle_remind(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
+    if st is None:
+        st = SessionUserState(session_id=session_id, user_id=user_id, poops_n=0)
+        db.add(st)
+        db.flush()
+
+    st.remind_22 = not bool(st.remind_22)
+    return True, ("Записал" if st.remind_22 else "Убрал")
 
 
 def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) -> str:
-    header = f"💩 Кто сегодня какал? ({session_date.strftime('%d.%m.%y')})"
-    hint = "Чтобы попасть в список участников — нажми +1💩."
+    date_str = session_date.strftime("%d.%m.%y")
 
-    rows = (
-        db.execute(
-            select(User, UserStreak)
-            .join(ChatMember, ChatMember.user_id == User.user_id)
-            .join(UserStreak, (UserStreak.user_id == User.user_id) & (UserStreak.chat_id == ChatMember.chat_id))
-            .where(ChatMember.chat_id == chat_id)
-        )
-        .all()
+    members = db.scalars(
+        select(ChatMember).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
+    ).all()
+
+    header = (
+        f"💩 Кто сегодня какал? ({date_str})\n"
+        f"Чтобы попасть в список участников — нажми +1💩.\n"
     )
 
-    if not rows:
-        return f"{header}\n{hint}\n\n(Пока никто не участвует)"
+    if not members:
+        return header + "\n(Пока никто не участвует)"
+
+    # подтягиваем юзеров и состояния
+    user_ids = [m.user_id for m in members]
+    users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()}
 
     states = {
         s.user_id: s
         for s in db.scalars(select(SessionUserState).where(SessionUserState.session_id == session_id)).all()
     }
 
-    items: list[tuple[int, str, str]] = []
-    for user, streak in rows:
-        st = states.get(user.user_id)
-        poops_n = st.poops_n if st else 0
+    streaks = {
+        s.user_id: s
+        for s in db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
+    }
 
-        ach = st.achievement_text if (st and st.poops_n > 0) else None
-        remind = "⏳" if (st and st.remind_22) else None
-        bristol = BRISTOL_EMOJI.get(st.bristol) if (st and st.bristol) else None
-        feeling = FEELING_EMOJI.get(st.feeling) if (st and st.feeling) else None
+    lines = [header, "", "Участники:"]
 
-        parts = []
-        if ach:
-            parts.append(f'«{py_html.escape(ach)}»')
-        parts.append(f"— 💩({poops_n})")
-        if bristol:
-            parts.append(bristol)
-        if feeling:
-            parts.append(feeling)
-        parts.append(f"• стрик {streak.current_streak} дн.")
-        if remind:
-            parts.append(remind)
+    for uid in user_ids:
+        u = users.get(uid)
+        if not u:
+            continue
+        st = states.get(uid)
+        poops = int(st.poops_n) if st else 0
 
-        m = mention(user)
-        items.append((poops_n, m, " ".join(parts)))
+        parts: list[str] = []
+        # ник + ачивка (только если n>0)
+        name = mention(u)
+        if poops > 0 and st and st.achievement_text:
+            name = f'{name} «{st.achievement_text}»'
+        parts.append(name)
 
-    # сортировка: по какашкам убыв., потом по тексту упоминания
-    items.sort(key=lambda x: (-x[0], x[1].lower()))
+        # статусные штуки собираем через " • "
+        status_bits: list[str] = []
+        status_bits.append(f"💩({poops})")
 
-    lines = ["Участники:"]
-    for i, (_, m, rest) in enumerate(items, start=1):
-        lines.append(f"{i}) {m} {rest}")
+        if poops > 0 and st:
+            b = BRISTOL_EMOJI.get(int(st.bristol or 0))
+            if b:
+                status_bits.append(b)
+            f = FEELING_EMOJI.get(st.feeling or "")
+            if f:
+                status_bits.append(f)
 
-    return f"{header}\n{hint}\n\n" + "\n".join(lines)
+        # ⏳ если подписан
+        if st and st.remind_22:
+            status_bits.append("⏳")
 
+        streak_val = streaks.get(uid).current_streak if uid in streaks else 0
+        status_bits.append(f"стрик {streak_val} дн.")
 
-def apply_plus(db: Session, session_id: int, user_id: int) -> tuple[bool, Optional[str]]:
-    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
-    if st is None:
-        st = SessionUserState(
-            session_id=session_id,
-            user_id=user_id,
-            poops_n=0,
-            achievement_text=None,
-            remind_22=False,
-            bristol=None,
-            feeling=None,
-        )
-        db.add(st)
+        line = " — " + " • ".join(status_bits)
+        lines.append(parts[0] + line)
 
-    if st.poops_n >= 10:
-        return False, "Я тебе не верю"
-
-    st.poops_n += 1
-    if st.poops_n == 1 and not st.achievement_text:
-        st.achievement_text = pick_achievement(st.poops_n)
-
-    if 1 <= st.poops_n <= 3:
-        return True, "Принял"
-    if 4 <= st.poops_n <= 7:
-        return True, "Ох, вот это ты даёшь"
-    return True, "WOW"
-
-
-def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, Optional[str]]:
-    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
-    if st is None or st.poops_n <= 0:
-        return False, "Нельзя вкакаться"
-
-    st.poops_n -= 1
-    if st.poops_n <= 0:
-        st.poops_n = 0
-        st.achievement_text = None
-    return True, None
-
-
-def toggle_remind(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
-    st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
-    if st is None:
-        st = SessionUserState(
-            session_id=session_id,
-            user_id=user_id,
-            poops_n=0,
-            achievement_text=None,
-            remind_22=False,
-            bristol=None,
-            feeling=None,
-        )
-        db.add(st)
-
-    st.remind_22 = not st.remind_22
-    return True, ("Записал" if st.remind_22 else "Убрал")
+    return "\n".join(lines)

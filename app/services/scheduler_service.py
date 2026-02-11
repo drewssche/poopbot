@@ -24,27 +24,29 @@ from app.services.q1_service import render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
 from app.services.stats_service import build_stats_text_chat
 from app.services.command_message_service import get_command_message_id, set_command_message_id
+from app.services.reminder_service import REMINDER22_COMMAND, build_reminder_22_text
 from app.bot.keyboards.q1 import q1_keyboard
+from app.bot.keyboards.reminder import reminder_keyboard
 
 logger = logging.getLogger(__name__)
 _streak_recalc_date: dict[int, date] = {}
 
-LOCK_LINE = "рџ”’ РЎРµСЃСЃРёСЏ Р·Р°РєСЂС‹С‚Р°."
+LOCK_LINE = "🔒 Сессия закрыта."
 
 Q2_TEXT = (
-    "рџ§» Р‘СЂРёСЃС‚РѕР»СЊ (С‚РёРї СЃС‚СѓР»Р°)\n"
-    'РЈР·РЅР°С‚СЊ Рѕ <a href="https://ru.wikipedia.org/wiki/Р‘СЂРёСЃС‚РѕР»СЊСЃРєР°СЏ_С€РєР°Р»Р°_С„РѕСЂРјС‹_РєР°Р»Р°">С€РєР°Р»Рµ Р‘СЂРёСЃС‚РѕР»СЏ</a>\n\n'
-    "рџ§± 1вЂ“2 (Р¶С‘СЃС‚РєРѕ / СЃСѓС…Рѕ)\n"
-    "рџЌЊ 3вЂ“4 (РЅРѕСЂРјР°)\n"
-    "рџЌ¦ 5вЂ“6 (РјСЏРіРєРѕ)\n"
-    "рџ’¦ 7 (РІРѕРґРёС‡РєР°)"
+    "🧻 Бристоль (тип стула)\n"
+    'Узнать о <a href="https://ru.wikipedia.org/wiki/Бристольская_шкала_формы_кала">шкале Бристоля</a>\n\n'
+    "🧱 1–2 (жёстко / сухо)\n"
+    "🍌 3–4 (норма)\n"
+    "🍦 5–6 (мягко)\n"
+    "💦 7 (водичка)"
 )
 
 Q3_TEXT = (
-    "рџ®вЂЌрџ’Ё РљР°Рє РїСЂРѕС€С‘Р» РїСЂРѕС†РµСЃСЃ?\n"
-    "рџ‡ РџСЂРµРєСЂР°СЃРЅРѕ\n"
-    "рџђ РЎРѕР№РґС‘С‚\n"
-    "рџ« РЈР¶Р°СЃРЅРѕ"
+    "😮‍💨 Как прошёл процесс?\n"
+    "😇 Прекрасно\n"
+    "😐 Сойдёт\n"
+    "😫 Ужасно"
 )
 
 
@@ -182,7 +184,14 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         if local_time.hour == chat.post_time.hour and local_time.minute == chat.post_time.minute:
             q1_id = get_session_message_id(db, sess.session_id, "Q1")
             if not q1_id:
-                await _post_q1(bot, db, chat_id, sess.session_id, window.session_date)
+                await _post_q1(
+                    bot,
+                    db,
+                    chat_id,
+                    sess.session_id,
+                    window.session_date,
+                    show_remind=(local_time < time(22, 0)),
+                )
 
         # 22:00 РЅР°РїРѕРјРёРЅР°Р»РєР° (РѕРґРёРЅ СЂР°Р·)
         if local_time.hour == 22 and local_time.minute == 0 and not sess.reminded_22_sent:
@@ -196,12 +205,24 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         await _send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
 
 
-async def _post_q1(bot: Bot, db, chat_id: int, session_id: int, session_date) -> None:
+async def _post_q1(
+    bot: Bot,
+    db,
+    chat_id: int,
+    session_id: int,
+    session_date,
+    show_remind: bool = True,
+) -> None:
     member_count = db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id)) or 0
     has_any_members = member_count > 0
 
     text = render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
-    sent = await _safe_send_message(bot, chat_id=chat_id, text=text, reply_markup=q1_keyboard(has_any_members))
+    sent = await _safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+    )
     set_session_message_id(db, session_id, "Q1", sent.message_id)
     await ensure_q2_q3_exist(bot, db, chat_id, session_id)
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
@@ -212,28 +233,21 @@ async def _send_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None
     if not q1_id:
         return
 
-    subs = db.scalars(
-        select(SessionUserState).where(SessionUserState.session_id == session_id, SessionUserState.remind_22 == True)
-    ).all()
-    if not subs:
+    text = build_reminder_22_text(db, session_id)
+    if not text:
         return
 
-    user_ids = [s.user_id for s in subs]
-    users = db.scalars(select(User).where(User.user_id.in_(user_ids))).all()
-    mentions: list[str] = []
-    for u in users:
-        if u.username:
-            mentions.append(f"@{u.username}")
-            continue
-        full_name = " ".join(
-            part for part in [(u.first_name or "").strip(), (u.last_name or "").strip()] if part
-        ).strip()
-        if not full_name:
-            full_name = "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ"
-        mentions.append(f'<a href="tg://user?id={u.user_id}">{full_name}</a>')
-
-    text = "вЏ° Рђ РІРѕС‚ Рё 22:00. РќСѓ С‡С‚Рѕ СЂРµР±СЏС‚Р°, РїРѕРєР°РєР°Р»Рё?\n" + "\n".join(mentions)
-    await _safe_send_message(bot, chat_id=chat_id, text=text, reply_to_message_id=q1_id)
+    sent = await _safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        parse_mode="HTML",
+        reply_to_message_id=q1_id,
+        reply_markup=reminder_keyboard(),
+    )
+    sess = db.get(DaySession, session_id)
+    if sess is not None:
+        set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, sent.message_id)
     logger.info("Sent 22:00 reminder chat_id=%s session_id=%s", chat_id, session_id)
 
 
@@ -311,12 +325,16 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
 
     text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=session_date)
     has_any_members = "РЈС‡Р°СЃС‚РЅРёРєРё:" in text
+    chat = db.get(Chat, chat_id)
+    show_remind = True
+    if chat is not None:
+        show_remind = now_in_tz(chat.timezone).time() < time(22, 0)
     await _safe_edit_message_text(
         bot,
         chat_id=chat_id,
         message_id=q1_id,
         text=text,
-        reply_markup=q1_keyboard(has_any_members),
+        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
     )
 
 
@@ -389,15 +407,15 @@ async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> 
 
     # РЅРµРґРµР»СЏ: СЃС‡РёС‚Р°РµРј РєРѕРЅС†РѕРј РЅРµРґРµР»Рё РІРѕСЃРєСЂРµСЃРµРЅСЊРµ (weekday=6)
     if local_date.weekday() == 6:
-        await _send("weekly_stats", "week", "рџ“Љ РС‚РѕРіРё РЅРµРґРµР»Рё")
+        await _send("weekly_stats", "week", "📉 Итоги недели")
 
     # РјРµСЃСЏС†
     if _is_last_day_of_month(local_date):
-        await _send("monthly_stats", "month", "рџ“Љ РС‚РѕРіРё РјРµСЃСЏС†Р°")
+        await _send("monthly_stats", "month", "📉 Итоги месяца")
 
     # РіРѕРґ
     if local_date.month == 12 and local_date.day == 31:
-        await _send("yearly_stats", "year", "рџ“Љ РС‚РѕРіРё РіРѕРґР°")
+        await _send("yearly_stats", "year", "📉 Итоги года")
 
 async def _send_holiday_notice_if_needed(bot: Bot, db, chat_id: int, session_id: int, local_date: date) -> None:
     holiday_text = None

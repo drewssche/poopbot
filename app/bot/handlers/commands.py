@@ -75,7 +75,8 @@ async def start_cmd(message: Message) -> None:
 
         text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
         has_any_members = "Участники:" in text
-        sent = await message.answer(text, reply_markup=q1_keyboard(has_any_members))
+        show_remind = now_in_tz(chat.timezone).time().hour < 22
+        sent = await message.answer(text, reply_markup=q1_keyboard(has_any_members, show_remind=show_remind))
         set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
         await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
 

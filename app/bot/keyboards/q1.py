@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def q1_keyboard(has_any_members: bool) -> InlineKeyboardMarkup:
+def q1_keyboard(has_any_members: bool, show_remind: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
     # row 1
@@ -17,6 +17,7 @@ def q1_keyboard(has_any_members: bool) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(text="➕💩", callback_data="q1:plus"))
 
     # row 2
-    kb.row(InlineKeyboardButton(text="⏳ Напомнить в 22:00", callback_data="q1:remind"))
+    if show_remind:
+        kb.row(InlineKeyboardButton(text="⏳ Напомнить в 22:00", callback_data="q1:remind"))
 
     return kb.as_markup()

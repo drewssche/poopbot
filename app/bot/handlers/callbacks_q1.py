@@ -26,6 +26,9 @@ from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1, apply_plus, apply_minus, toggle_remind
 from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.command_message_service import get_command_message_id
+from app.services.reminder_service import REMINDER22_COMMAND, build_reminder_22_text
+from app.bot.keyboards.reminder import reminder_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -42,7 +45,7 @@ def init_db(database_url: str) -> None:
         _session_factory = make_session_factory(_engine)
 
 
-@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:remind"}))
+@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:remind", "q1:plus_reminder"}))
 async def q1_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
         return
@@ -77,9 +80,11 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             await cb.answer("Сессия закрыта", show_alert=False)
             return
 
-        # клик только по актуальному Q1
+        # клик только по актуальному Q1 или по напоминалке текущей сессии
         q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-        if q1_msg_id and cb.message.message_id != q1_msg_id:
+        reminder_msg_id = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, window.session_date)
+        allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
+        if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
             await cb.answer("Неактуально", show_alert=False)
             return
 
@@ -92,7 +97,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             ok, popup = apply_minus(db, sess.session_id, user.id)
             await cb.answer(popup, show_alert=False)
 
-        elif cb.data == "q1:plus":
+        elif cb.data in ("q1:plus", "q1:plus_reminder"):
             ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
             ok, popup = apply_plus(db, sess.session_id, user.id)
             if ok and now_in_tz(chat.timezone).time().hour < 11:
@@ -113,15 +118,41 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
 
         else:  # q1:remind
-            ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
-            ok, popup = toggle_remind(db, sess.session_id, user.id)
-            await cb.answer(popup, show_alert=False)
+            if now_in_tz(chat.timezone).time().hour >= 22:
+                await cb.answer("После 22:00 напоминалка уже отправлена", show_alert=False)
+            else:
+                ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
+                ok, popup = toggle_remind(db, sess.session_id, user.id)
+                await cb.answer(popup, show_alert=False)
 
         # обновляем Q1 (всегда)
         text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
         has_any_members = "Участники:" in text
+        show_remind = now_in_tz(chat.timezone).time().hour < 22
         try:
-            await cb.message.edit_text(text, reply_markup=q1_keyboard(has_any_members))
+            if q1_msg_id:
+                await cb.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=q1_msg_id,
+                    text=text,
+                    reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+                )
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e).lower():
                 logger.exception("Failed to edit Q1 message: %s", e)
+
+        # если есть напоминалка — обновляем в ней статус и счетчики
+        if reminder_msg_id:
+            reminder_text = build_reminder_22_text(db, sess.session_id)
+            if reminder_text:
+                try:
+                    await cb.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=reminder_msg_id,
+                        text=reminder_text,
+                        parse_mode="HTML",
+                        reply_markup=reminder_keyboard(),
+                    )
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in str(e).lower():
+                        logger.exception("Failed to edit reminder message: %s", e)

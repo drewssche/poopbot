@@ -15,7 +15,7 @@ from app.services.repo_service import (
     get_or_create_session,
     get_session_message_id,
 )
-from app.services.time_service import get_session_window
+from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1
 from app.bot.keyboards.q1 import q1_keyboard
@@ -119,7 +119,10 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                     chat_id=chat_id,
                     message_id=q1_msg_id,
                     text=text,
-                    reply_markup=q1_keyboard(has_any_members),
+                    reply_markup=q1_keyboard(
+                        has_any_members,
+                        show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                    ),
                 )
             except TelegramBadRequest as e:
                 msg = str(e).lower()

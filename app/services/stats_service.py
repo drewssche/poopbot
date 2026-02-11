@@ -278,6 +278,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     above_pct = _calc_above_percent(my_total, totals) if my_rank is not None else None
 
     top5 = [(TOP5_ROLES[i], int(row.poops or 0)) for i, row in enumerate(agg[:5])]
+    max_streak = db.scalar(select(func.max(UserStreak.current_streak)))
 
     states_pos = db.scalars(
         select(SessionUserState).where(
@@ -359,6 +360,12 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
             lines.append(f"- {role} — 💩({poops})")
     else:
         lines.append("- пока нет данных")
+
+    lines.extend(["", "Легенда стрика:"])
+    if max_streak is None or int(max_streak) <= 0:
+        lines.append("- пока нет данных")
+    else:
+        lines.append(f"- Железный кишечник — {int(max_streak)} дн.")
 
     lines.extend(["", "Твое место в топе:", f"- {me_name}"])
     if my_rank is None:

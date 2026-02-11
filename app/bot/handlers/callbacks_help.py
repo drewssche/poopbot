@@ -13,7 +13,7 @@ from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.help_service import set_chat_post_time, delete_user_everywhere
 from app.services.repo_service import upsert_chat, get_or_create_session, get_session_message_id
-from app.services.time_service import get_session_window
+from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                 chat_id=chat_id,
                                 message_id=q1_id,
                                 text=text,
-                                reply_markup=q1_keyboard(has_any_members),
+                                reply_markup=q1_keyboard(
+                                    has_any_members,
+                                    show_remind=get_session_window(chat.timezone).is_blocked_window is False
+                                    and now_in_tz(chat.timezone).time().hour < 22,
+                                ),
                             )
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e).lower():

@@ -147,7 +147,10 @@ async def stats_cmd(message: Message) -> None:
             await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
-            if "message to be replied not found" not in str(e).lower():
+            if all(
+                x not in str(e).lower()
+                for x in ("message to be replied not found", "replied message not found", "message_id_invalid")
+            ):
                 raise
 
     text = "📊 Статистика\n\nВыбери раздел:"

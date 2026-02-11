@@ -278,7 +278,38 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     above_pct = _calc_above_percent(my_total, totals) if my_rank is not None else None
 
     top5 = [(TOP5_ROLES[i], int(row.poops or 0)) for i, row in enumerate(agg[:5])]
-    max_streak = db.scalar(select(func.max(UserStreak.current_streak)))
+    # В Q1 стрик отображается "прогнозом" на текущий день:
+    # если сегодня уже есть poops_n > 0, при показе прибавляем день.
+    # Для консистентности глобальной статистики считаем максимум по той же логике.
+    streak_rows = db.execute(
+        select(
+            UserStreak.chat_id,
+            UserStreak.user_id,
+            UserStreak.current_streak,
+            UserStreak.last_poop_date,
+        )
+    ).all()
+    today_positive = set(
+        db.execute(
+            select(DaySession.chat_id, SessionUserState.user_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.session_date == today,
+                SessionUserState.poops_n > 0,
+            )
+        ).all()
+    )
+    yesterday = today - timedelta(days=1)
+    max_streak = 0
+    for row in streak_rows:
+        projected = int(row.current_streak or 0)
+        if (row.chat_id, row.user_id) in today_positive:
+            if row.last_poop_date == yesterday:
+                projected = projected + 1
+            else:
+                projected = 1
+        if projected > max_streak:
+            max_streak = projected
 
     states_pos = db.scalars(
         select(SessionUserState).where(
@@ -362,7 +393,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("- пока нет данных")
 
     lines.extend(["", "Легенда стрика:"])
-    if max_streak is None or int(max_streak) <= 0:
+    if int(max_streak) <= 0:
         lines.append("- пока нет данных")
     else:
         lines.append(f"- Железный кишечник — {int(max_streak)} дн.")

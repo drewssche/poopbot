@@ -139,7 +139,14 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         local_date = now_local.date()
         close_cutoff = time(23, 55)
 
-        if _streak_recalc_date.get(chat_id) != local_date:
+        # Recalculate once per day in a narrow low-traffic window,
+        # so daytime polling is not impacted by heavy DB work.
+        should_recalc_now = (
+            local_time.hour == 0
+            and 6 <= local_time.minute <= 10
+            and _streak_recalc_date.get(chat_id) != local_date
+        )
+        if should_recalc_now:
             _recalculate_streaks_from_history(db, chat_id, local_date)
             _streak_recalc_date[chat_id] = local_date
             await _refresh_current_q1_view(bot, db, chat_id, window.session_date)

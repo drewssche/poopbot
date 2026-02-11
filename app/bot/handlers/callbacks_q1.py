@@ -99,7 +99,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             if ok:
                 total_after = total_before + 1  # гарантированно +1 к сумме
-                # Q2/Q3 появляются когда в сессии впервые появился хотя бы 1 💩
+                # Q2/Q3 должны уже существовать (создаются при появлении Q1),
+                # здесь оставляем self-heal на случай удаления сообщений.
                 if total_before == 0 and total_after > 0:
                     await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
                 else:

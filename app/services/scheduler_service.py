@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -27,6 +27,7 @@ from app.services.command_message_service import get_command_message_id, set_com
 from app.bot.keyboards.q1 import q1_keyboard
 
 logger = logging.getLogger(__name__)
+_streak_recalc_date: dict[int, date] = {}
 
 LOCK_LINE = "🔒 Сессия закрыта."
 
@@ -129,11 +130,28 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         now_local = now_in_tz(chat.timezone)
         local_time = now_local.time()
         local_date = now_local.date()
+        close_cutoff = time(23, 55)
+
+        if _streak_recalc_date.get(chat_id) != local_date:
+            _recalculate_streaks_from_history(db, chat_id, local_date)
+            _streak_recalc_date[chat_id] = local_date
+            await _refresh_current_q1_view(bot, db, chat_id, window.session_date)
+
+        active_sessions = db.scalars(
+            select(DaySession)
+            .where(DaySession.chat_id == chat_id, DaySession.status == "active")
+            .order_by(DaySession.session_date.asc())
+        ).all()
+        for active_sess in active_sessions:
+            is_past_day = active_sess.session_date < local_date
+            is_today_after_cutoff = active_sess.session_date == local_date and local_time >= close_cutoff
+            if is_past_day or is_today_after_cutoff:
+                await _close_session(bot, db, chat_id, active_sess.session_id, chat.timezone)
 
         sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
         # 23:55 — закрыть
-        if local_time.hour == 23 and local_time.minute == 55:
+        if local_time >= close_cutoff:
             if sess.status != "closed":
                 await _close_session(bot, db, chat_id, sess.session_id, chat.timezone)
             return
@@ -211,7 +229,7 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
         for s in db.scalars(select(SessionUserState).where(SessionUserState.session_id == session_id)).all()
     }
 
-    local_date = now_in_tz(tz_name).date()
+    local_date = sess.session_date
 
     for user_id, streak in member_rows:
         poops = states.get(user_id).poops_n if user_id in states else 0
@@ -249,6 +267,82 @@ async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, b
         return
     text = f"{LOCK_LINE}\n\n{body_text}"
     await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+
+
+async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: date) -> None:
+    sess = db.scalar(
+        select(DaySession).where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date == session_date,
+        )
+    )
+    if sess is None or sess.status == "closed":
+        return
+
+    q1_id = get_session_message_id(db, sess.session_id, "Q1")
+    if not q1_id:
+        return
+
+    text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=session_date)
+    has_any_members = "Участники:" in text
+    await _safe_edit_message_text(
+        bot,
+        chat_id=chat_id,
+        message_id=q1_id,
+        text=text,
+        reply_markup=q1_keyboard(has_any_members),
+    )
+
+
+def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
+    member_user_ids = db.scalars(
+        select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
+    ).all()
+    if not member_user_ids:
+        return
+
+    rows = db.execute(
+        select(DaySession.session_date, SessionUserState.user_id)
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date < today,
+            SessionUserState.poops_n > 0,
+            SessionUserState.user_id.in_(member_user_ids),
+        )
+        .order_by(DaySession.session_date.asc())
+    ).all()
+
+    days_by_user: dict[int, list[date]] = {int(uid): [] for uid in member_user_ids}
+    for session_date, user_id in rows:
+        uid = int(user_id)
+        day = session_date
+        if not days_by_user[uid] or days_by_user[uid][-1] != day:
+            days_by_user[uid].append(day)
+
+    yesterday = today - timedelta(days=1)
+    for uid in member_user_ids:
+        uid_int = int(uid)
+        streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": uid_int})
+        if streak is None:
+            streak = UserStreak(chat_id=chat_id, user_id=uid_int, current_streak=0, last_poop_date=None)
+            db.add(streak)
+
+        days = days_by_user[uid_int]
+        if not days:
+            streak.current_streak = 0
+            streak.last_poop_date = None
+            continue
+
+        last_day = days[-1]
+        trailing = 1
+        idx = len(days) - 2
+        while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+            trailing += 1
+            idx -= 1
+
+        streak.last_poop_date = last_day
+        streak.current_streak = trailing if last_day == yesterday else 0
 
 
 def _is_last_day_of_month(d: date) -> bool:

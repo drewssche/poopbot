@@ -106,8 +106,9 @@ async def help_cmd(message: Message) -> None:
         window = get_session_window(chat.timezone)
         session_date = window.session_date
         existing_mid = get_any_command_message_id(db, chat_id, "help", session_date)
+        is_private_chat = (message.chat.type == "private")
 
-    if existing_mid:
+    if existing_mid and not is_private_chat:
         try:
             # Пробуем обновить существующее сообщение: если удалено, Telegram вернет ошибку.
             await message.bot.edit_message_text(
@@ -160,9 +161,10 @@ async def stats_cmd(message: Message) -> None:
 
         today = now_in_tz(chat.timezone).date()
         existing_mid = get_command_message_id(db, chat_id, user.id, "stats", today)
+        is_private_chat = (message.chat.type == "private")
 
     text = "📊 Статистика\n\nВыбери раздел:"
-    if existing_mid:
+    if existing_mid and not is_private_chat:
         try:
             await message.bot.edit_message_text(
                 chat_id=chat_id,

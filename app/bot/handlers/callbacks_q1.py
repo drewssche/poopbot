@@ -22,7 +22,7 @@ from app.services.repo_service import (
     get_or_create_session,
     get_session_message_id,
 )
-from app.services.time_service import get_session_window
+from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1, apply_plus, apply_minus, toggle_remind
 from app.services.q2_q3_service import ensure_q2_q3_exist
@@ -95,6 +95,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
         elif cb.data == "q1:plus":
             ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
             ok, popup = apply_plus(db, sess.session_id, user.id)
+            if ok and now_in_tz(chat.timezone).time().hour < 11:
+                popup = "Кофейку и цигарку бахнул? Красава"
             await cb.answer(popup, show_alert=False)
 
             if ok:

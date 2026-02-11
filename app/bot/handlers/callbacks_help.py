@@ -100,10 +100,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id))
 
             elif data.startswith("help:delete_me:"):
-                expected_owner = _parse_owner(data)
-                if actor_id != expected_owner:
-                    await cb.answer("Это не твои настройки", show_alert=False)
-                    return
+                owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(
                     f"⚠️ {mention}, уверен(а), что хочешь удалить себя из базы?",
@@ -114,7 +111,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
             elif data.startswith("help:delete_confirm:"):
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
-                    await cb.answer("Это не твоё подтверждение", show_alert=False)
+                    await cb.answer("Р­С‚Рѕ РЅРµ С‚РІРѕС‘ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ", show_alert=False)
                     return
 
                 delete_user_everywhere(db, chat_id, actor_id)
@@ -153,3 +150,4 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 return
             logger.exception("Help edit failed: %s", e)
             await cb.answer("Ошибка (см. логи)", show_alert=False)
+

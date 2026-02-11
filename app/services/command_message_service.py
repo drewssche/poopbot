@@ -23,6 +23,7 @@ def get_any_command_message_id(db: Session, chat_id: int, command: str, session_
             CommandMessage.command == command,
             CommandMessage.session_date == session_date,
         )
+        .order_by(CommandMessage.created_at.desc())
         .limit(1)
     ).first()
     return int(row.message_id) if row else None

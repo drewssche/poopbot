@@ -35,3 +35,10 @@ def stats_period_kb(scope: str, active_period: str) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text=_mark("♾️ За всё время", active_period == PERIOD_ALL), callback_data=f"stats:period:{scope}:{PERIOD_ALL}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
     return kb.as_markup()
+
+
+def stats_global_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👤 Показать меня", callback_data="stats:global:me"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
+    return kb.as_markup()

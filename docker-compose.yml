@@ -2,17 +2,40 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
     volumes:
       - poopbot_pgdata:/var/lib/postgresql/data
+
+    # Небольшой тюнинг памяти (актуально для 2GB VPS)
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_buffers=64MB",
+        "-c",
+        "work_mem=4MB",
+        "-c",
+        "maintenance_work_mem=64MB",
+        "-c",
+        "effective_cache_size=256MB",
+        "-c",
+        "max_connections=50",
+      ]
+
+    mem_limit: 512m
+    mem_reservation: 128m
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -22,16 +45,23 @@ services:
   bot:
     build: .
     restart: unless-stopped
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
     env_file: .env
+
     depends_on:
       db:
         condition: service_healthy
+
     command: ["bash", "-lc", "alembic upgrade head && python -m app.main"]
+
+    mem_limit: 512m
+    mem_reservation: 128m
 
 volumes:
   poopbot_pgdata:

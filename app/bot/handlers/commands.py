@@ -109,10 +109,29 @@ async def help_cmd(message: Message) -> None:
 
     if existing_mid:
         try:
+            # Пробуем обновить существующее сообщение: если удалено, Telegram вернет ошибку.
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=existing_mid,
+                text=root_text,
+                reply_markup=help_root_kb(user.id),
+            )
             await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
-            if all(x not in str(e).lower() for x in ("message to be replied not found", "replied message not found", "message_id_invalid")):
+            err = str(e).lower()
+            if "message is not modified" in err:
+                await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
+                return
+            if all(
+                x not in err
+                for x in (
+                    "message to edit not found",
+                    "message to be replied not found",
+                    "replied message not found",
+                    "message_id_invalid",
+                )
+            ):
                 raise
 
     sent = await message.answer(root_text, reply_markup=help_root_kb(user.id))
@@ -142,18 +161,33 @@ async def stats_cmd(message: Message) -> None:
         today = now_in_tz(chat.timezone).date()
         existing_mid = get_command_message_id(db, chat_id, user.id, "stats", today)
 
+    text = "📊 Статистика\n\nВыбери раздел:"
     if existing_mid:
         try:
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=existing_mid,
+                text=text,
+                reply_markup=stats_root_kb(),
+            )
             await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
+            err = str(e).lower()
+            if "message is not modified" in err:
+                await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
+                return
             if all(
-                x not in str(e).lower()
-                for x in ("message to be replied not found", "replied message not found", "message_id_invalid")
+                x not in err
+                for x in (
+                    "message to edit not found",
+                    "message to be replied not found",
+                    "replied message not found",
+                    "message_id_invalid",
+                )
             ):
                 raise
 
-    text = "📊 Статистика\n\nВыбери раздел:"
     sent = await message.answer(text, reply_markup=stats_root_kb())
 
     with db_session(_session_factory) as db:

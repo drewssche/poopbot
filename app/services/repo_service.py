@@ -14,6 +14,8 @@ def upsert_chat(db: Session, chat_id: int) -> Chat:
     if chat is None:
         chat = Chat(chat_id=chat_id, timezone="Europe/Minsk", post_time=time(10, 0), is_enabled=True)
         db.add(chat)
+    elif not chat.is_enabled:
+        chat.is_enabled = True
     return chat
 
 

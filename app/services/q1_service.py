@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from sqlalchemy import select, func
@@ -165,7 +165,16 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         if st and st.remind_22:
             status_bits.append("⏳")
 
-        streak_val = streaks.get(uid).current_streak if uid in streaks else 0
+        streak_row = streaks.get(uid)
+        streak_val = streak_row.current_streak if streak_row else 0
+        # Отображаем "прогноз" текущего стрика до закрытия дня:
+        # если сегодня уже есть poops_n > 0, показываем значение как после закрытия сессии.
+        if poops > 0:
+            yesterday = session_date - timedelta(days=1)
+            if streak_row and streak_row.last_poop_date == yesterday:
+                streak_val = streak_row.current_streak + 1
+            else:
+                streak_val = 1
         status_bits.append(f"стрик {streak_val} дн.")
 
         line = " — " + " • ".join(status_bits)

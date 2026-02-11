@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, date, time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
@@ -116,6 +116,13 @@ async def _tick(bot: Bot, session_factory: sessionmaker) -> None:
     for chat in chats:
         try:
             await _process_chat(bot, session_factory, chat.chat_id)
+        except TelegramForbiddenError:
+            # Bot no longer has access to this chat (kicked/blocked): stop scheduling it.
+            with db_session(session_factory) as db:
+                stale_chat = db.get(Chat, chat.chat_id)
+                if stale_chat is not None:
+                    stale_chat.is_enabled = False
+            logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat.chat_id)
         except Exception:
             logger.exception("Scheduler chat processing failed chat_id=%s", chat.chat_id)
 

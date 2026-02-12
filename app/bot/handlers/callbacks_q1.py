@@ -87,9 +87,15 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             )
 
             if cb.data == "q1:plus_reminder":
-                # Reminder button always applies to current active session.
+                # Reminder button always works only for the current active session reminder.
+                # This prevents cross-day drift when old reminder messages are clicked.
+                current_reminder_msg_id = get_command_message_id(
+                    db, chat_id, 0, REMINDER22_COMMAND, current_sess.session_date
+                )
+                if current_reminder_msg_id is None or cb.message.message_id != current_reminder_msg_id:
+                    await cb.answer("Неактуально", show_alert=False)
+                    return
                 sess = current_sess
-                set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, cb.message.message_id)
             else:
                 sess = db.scalar(
                     select(DaySession)
@@ -110,9 +116,12 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer("Сессия закрыта", show_alert=False)
                 return
 
-            # Для reminder-кнопки допускаем fallback на текущую сессию, если mapping сообщения потерян.
             q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-            reminder_msg_id = cb.message.message_id if cb.data == "q1:plus_reminder" else get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+            reminder_msg_id = (
+                cb.message.message_id
+                if cb.data == "q1:plus_reminder"
+                else get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+            )
             if cb.data != "q1:plus_reminder":
                 allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
                 if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:

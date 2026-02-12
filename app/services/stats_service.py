@@ -4,9 +4,10 @@ import calendar
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from sqlalchemy import Float, case, cast, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.db.models import PoopEvent
 from app.db.models import Session as DaySession
 from app.db.models import SessionUserState, User, UserStreak
 from app.services.q1_service import mention
@@ -23,8 +24,7 @@ def period_to_range(today: date, period: str) -> Range:
         return Range(today, today)
     if period == "week":
         start = today - timedelta(days=today.weekday())
-        end = start + timedelta(days=6)
-        return Range(start, end)
+        return Range(start, start + timedelta(days=6))
     if period == "month":
         start = today.replace(day=1)
         end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
@@ -53,6 +53,25 @@ def _bristol_bucket(bristol: int | None) -> str | None:
     return "💦"
 
 
+def _bristol_score(bristol: int | None) -> int | None:
+    if bristol is None:
+        return None
+    if bristol <= 2:
+        return 1
+    if bristol <= 4:
+        return 2
+    if bristol <= 6:
+        return 3
+    return 4
+
+
+def _bristol_from_avg(avg_score: float | None) -> str | None:
+    if avg_score is None:
+        return None
+    val = max(1, min(4, int(round(avg_score))))
+    return {1: "🧱", 2: "🍌", 3: "🍦", 4: "💦"}[val]
+
+
 def _feeling_emoji(feeling: str | None) -> str | None:
     if feeling == "great":
         return "😇"
@@ -63,11 +82,14 @@ def _feeling_emoji(feeling: str | None) -> str | None:
     return None
 
 
-def _bristol_from_avg(avg_score: float | None) -> str | None:
-    if avg_score is None:
-        return None
-    val = max(1, min(4, int(round(avg_score))))
-    return {1: "🧱", 2: "🍌", 3: "🍦", 4: "💦"}[val]
+def _feeling_score(feeling: str | None) -> int | None:
+    if feeling == "bad":
+        return 1
+    if feeling == "ok":
+        return 2
+    if feeling == "great":
+        return 3
+    return None
 
 
 def _feeling_from_avg(avg_score: float | None) -> str | None:
@@ -87,7 +109,6 @@ def _format_dist_block(title: str, counts: dict[str, int], legend: dict[str, str
     if total <= 0:
         lines.append("- нет данных")
         return lines
-
     for icon, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
         pct = int(round((cnt / total) * 100))
         lines.append(f"- {icon} {legend.get(icon, '')}: {pct}% ({cnt})")
@@ -106,6 +127,29 @@ def _calc_above_percent(value: int, all_values: list[int]) -> int | None:
     less = sum(1 for v in all_values if v < value)
     eq = sum(1 for v in all_values if v == value)
     return int(round(100.0 * (less + 0.5 * eq) / len(all_values)))
+
+
+def _collect_events_map(db: Session, session_ids: list[int], user_id: int | None = None) -> dict[tuple[int, int], list[PoopEvent]]:
+    if not session_ids:
+        return {}
+    stmt = select(PoopEvent).where(PoopEvent.session_id.in_(session_ids))
+    if user_id is not None:
+        stmt = stmt.where(PoopEvent.user_id == user_id)
+    rows = db.scalars(stmt.order_by(PoopEvent.session_id.asc(), PoopEvent.user_id.asc(), PoopEvent.event_n.asc())).all()
+    out: dict[tuple[int, int], list[PoopEvent]] = {}
+    for row in rows:
+        out.setdefault((int(row.session_id), int(row.user_id)), []).append(row)
+    return out
+
+
+def _iter_effective_events(state: SessionUserState, events_map: dict[tuple[int, int], list[PoopEvent]]) -> list[tuple[int | None, str | None]]:
+    key = (int(state.session_id), int(state.user_id))
+    evs = events_map.get(key)
+    if evs:
+        return [(e.bristol, e.feeling) for e in evs]
+    if int(state.poops_n or 0) > 0:
+        return [(state.bristol, state.feeling)]
+    return []
 
 
 BRISTOL_LEGEND = {
@@ -145,20 +189,20 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     ).all()
 
     total_poops = sum(int(s.poops_n or 0) for s in states)
-    days_any = sum(1 for s in states if (s.poops_n or 0) > 0)
+    days_any = sum(1 for s in states if int(s.poops_n or 0) > 0)
     days_total = (r.end - r.start).days + 1
 
+    events_map = _collect_events_map(db, session_ids, user_id=user_id)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
     for s in states:
-        if (s.poops_n or 0) <= 0:
-            continue
-        b = _bristol_bucket(s.bristol)
-        if b:
-            br[b] += 1
-        f = _feeling_emoji(s.feeling)
-        if f:
-            fe[f] += 1
+        for bristol, feeling in _iter_effective_events(s, events_map):
+            b = _bristol_bucket(bristol)
+            if b:
+                br[b] += 1
+            f = _feeling_emoji(feeling)
+            if f:
+                fe[f] += 1
 
     streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
     streak_val = int(streak.current_streak) if streak else 0
@@ -193,7 +237,6 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
         .group_by(SessionUserState.user_id)
         .order_by(func.sum(SessionUserState.poops_n).desc())
     ).all()
-
     total_poops = sum(int(row.poops or 0) for row in rows)
 
     states_pos = db.scalars(
@@ -203,15 +246,17 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
         )
     ).all()
 
+    events_map = _collect_events_map(db, session_ids)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
     for s in states_pos:
-        b = _bristol_bucket(s.bristol)
-        if b:
-            br[b] += 1
-        f = _feeling_emoji(s.feeling)
-        if f:
-            fe[f] += 1
+        for bristol, feeling in _iter_effective_events(s, events_map):
+            b = _bristol_bucket(bristol)
+            if b:
+                br[b] += 1
+            f = _feeling_emoji(feeling)
+            if f:
+                fe[f] += 1
 
     user_ids = [int(row.user_id) for row in rows]
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()}
@@ -241,7 +286,7 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
 
 
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
-    _ = period  # В глобальной статистике период всегда за все время.
+    _ = period
     all_time = Range(date(1970, 1, 1), today)
 
     sessions = _sessions_in_range(db, None, all_time)
@@ -276,27 +321,16 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
             my_total = poops
 
     above_pct = _calc_above_percent(my_total, totals) if my_rank is not None else None
-
     top5 = [(TOP5_ROLES[i], int(row.poops or 0)) for i, row in enumerate(agg[:5])]
-    # В Q1 стрик отображается "прогнозом" на текущий день:
-    # если сегодня уже есть poops_n > 0, при показе прибавляем день.
-    # Для консистентности глобальной статистики считаем максимум по той же логике.
+
     streak_rows = db.execute(
-        select(
-            UserStreak.chat_id,
-            UserStreak.user_id,
-            UserStreak.current_streak,
-            UserStreak.last_poop_date,
-        )
+        select(UserStreak.chat_id, UserStreak.user_id, UserStreak.current_streak, UserStreak.last_poop_date)
     ).all()
     today_positive = set(
         db.execute(
             select(DaySession.chat_id, SessionUserState.user_id)
             .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(
-                DaySession.session_date == today,
-                SessionUserState.poops_n > 0,
-            )
+            .where(DaySession.session_date == today, SessionUserState.poops_n > 0)
         ).all()
     )
     yesterday = today - timedelta(days=1)
@@ -304,12 +338,8 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     for row in streak_rows:
         projected = int(row.current_streak or 0)
         if (row.chat_id, row.user_id) in today_positive:
-            if row.last_poop_date == yesterday:
-                projected = projected + 1
-            else:
-                projected = 1
-        if projected > max_streak:
-            max_streak = projected
+            projected = projected + 1 if row.last_poop_date == yesterday else 1
+        max_streak = max(max_streak, projected)
 
     states_pos = db.scalars(
         select(SessionUserState).where(
@@ -318,59 +348,47 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         )
     ).all()
 
+    events_map = _collect_events_map(db, session_ids)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
+    user_br_scores: dict[int, list[int]] = {}
+    user_fe_scores: dict[int, list[int]] = {}
+
     for s in states_pos:
-        b = _bristol_bucket(s.bristol)
-        if b:
-            br[b] += 1
-        f = _feeling_emoji(s.feeling)
-        if f:
-            fe[f] += 1
+        uid = int(s.user_id)
+        for bristol, feeling in _iter_effective_events(s, events_map):
+            b = _bristol_bucket(bristol)
+            if b:
+                br[b] += 1
+            f = _feeling_emoji(feeling)
+            if f:
+                fe[f] += 1
 
-    br_score_case = case(
-        (SessionUserState.bristol <= 2, 1),
-        (SessionUserState.bristol <= 4, 2),
-        (SessionUserState.bristol <= 6, 3),
-        else_=4,
-    )
-    fe_score_case = case(
-        (SessionUserState.feeling == "bad", 1),
-        (SessionUserState.feeling == "ok", 2),
-        (SessionUserState.feeling == "great", 3),
-        else_=None,
-    )
+            bs = _bristol_score(bristol)
+            if bs is not None:
+                user_br_scores.setdefault(uid, []).append(bs)
+            fs = _feeling_score(feeling)
+            if fs is not None:
+                user_fe_scores.setdefault(uid, []).append(fs)
 
-    br_rows = db.execute(
-        select(SessionUserState.user_id, func.avg(cast(br_score_case, Float)).label("avg_br"))
-        .where(
-            SessionUserState.session_id.in_(session_ids),
-            SessionUserState.poops_n > 0,
-            SessionUserState.bristol.isnot(None),
-        )
-        .group_by(SessionUserState.user_id)
-    ).all()
-
-    fe_rows = db.execute(
-        select(SessionUserState.user_id, func.avg(cast(fe_score_case, Float)).label("avg_fe"))
-        .where(
-            SessionUserState.session_id.in_(session_ids),
-            SessionUserState.poops_n > 0,
-            SessionUserState.feeling.isnot(None),
-        )
-        .group_by(SessionUserState.user_id)
-    ).all()
-
-    br_map = {int(row.user_id): float(row.avg_br) for row in br_rows if row.avg_br is not None}
-    fe_map = {int(row.user_id): float(row.avg_fe) for row in fe_rows if row.avg_fe is not None}
+    br_map = {uid: (sum(vals) / len(vals)) for uid, vals in user_br_scores.items() if vals}
+    fe_map = {uid: (sum(vals) / len(vals)) for uid, vals in user_fe_scores.items() if vals}
 
     my_br_avg = br_map.get(user_id)
     my_fe_avg = fe_map.get(user_id)
     my_br_icon = _bristol_from_avg(my_br_avg)
     my_fe_icon = _feeling_from_avg(my_fe_avg)
 
-    my_br_pct = _calc_above_percent(int(round(my_br_avg * 1000)), [int(round(v * 1000)) for v in br_map.values()]) if my_br_avg is not None else None
-    my_fe_pct = _calc_above_percent(int(round(my_fe_avg * 1000)), [int(round(v * 1000)) for v in fe_map.values()]) if my_fe_avg is not None else None
+    my_br_pct = (
+        _calc_above_percent(int(round(my_br_avg * 1000)), [int(round(v * 1000)) for v in br_map.values()])
+        if my_br_avg is not None
+        else None
+    )
+    my_fe_pct = (
+        _calc_above_percent(int(round(my_fe_avg * 1000)), [int(round(v * 1000)) for v in fe_map.values()])
+        if my_fe_avg is not None
+        else None
+    )
 
     me = db.get(User, user_id)
     me_name = _display_name(me, user_id)
@@ -393,7 +411,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("- пока нет данных")
 
     lines.extend(["", "Легенда стрика:"])
-    if int(max_streak) <= 0:
+    if max_streak <= 0:
         lines.append("- пока нет данных")
     else:
         lines.append(f"- Железный кишечник — {int(max_streak)} дн.")

@@ -93,7 +93,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
             elif data.startswith("help:set_time:"):
-                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id))
+                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id, chat.post_time.hour))
                 await cb.answer()
 
             elif data.startswith("help:time:"):
@@ -102,7 +102,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 db.flush()
                 chat = upsert_chat(db, chat_id)  # заново читаем
                 await cb.answer("Готово", show_alert=False)
-                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id))
+                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id, chat.post_time.hour))
 
             elif data.startswith("help:delete_me:"):
                 owner_id = actor_id

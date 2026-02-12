@@ -102,6 +102,25 @@ class SessionUserState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PoopEvent(Base):
+    __tablename__ = "poop_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "user_id", "event_n", name="uq_poop_event_per_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    event_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    bristol: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1..7
+    feeling: Mapped[str | None] = mapped_column(
+        Enum("great", "ok", "bad", name="feeling_kind"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class RateLimit(Base):
     __tablename__ = "rate_limits"
     __table_args__ = (PrimaryKeyConstraint("chat_id", "user_id", "scope"),)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def _mark(label: str, active: bool) -> str:
+    return f"• {label}" if active else label
 
 
 def help_root_kb(owner_id: int) -> InlineKeyboardMarkup:
@@ -19,11 +23,26 @@ def help_settings_kb(owner_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def help_time_kb(owner_id: int) -> InlineKeyboardMarkup:
+def help_time_kb(owner_id: int, current_hour: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="🌅 Утро (10:00)", callback_data=f"help:time:10:{owner_id}"))
-    kb.row(InlineKeyboardButton(text="🍽️ Обед (14:00)", callback_data=f"help:time:14:{owner_id}"))
-    kb.row(InlineKeyboardButton(text="🌙 Вечер (19:00)", callback_data=f"help:time:19:{owner_id}"))
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("🌅 Утро (10:00)", current_hour == 10),
+            callback_data=f"help:time:10:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("🍽️ Обед (14:00)", current_hour == 14),
+            callback_data=f"help:time:14:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("🌙 Вечер (19:00)", current_hour == 19),
+            callback_data=f"help:time:19:{owner_id}",
+        )
+    )
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
     return kb.as_markup()
 

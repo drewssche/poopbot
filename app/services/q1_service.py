@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import random
 from datetime import date, timedelta
-from typing import Optional
-
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import User, ChatMember, SessionUserState, UserStreak, Chat
+from app.db.models import User, ChatMember, SessionUserState, UserStreak
+from app.services.poop_event_service import create_event, delete_event
 
 
 BRISTOL_EMOJI = {
@@ -63,6 +62,7 @@ def apply_plus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
 
     prev = st.poops_n
     st.poops_n += 1
+    create_event(db, session_id=session_id, user_id=user_id, event_n=st.poops_n)
 
     # фиксируем ачивку при первом n>0 (0->1)
     if prev == 0 and st.poops_n > 0:
@@ -85,6 +85,7 @@ def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
     if st is None or st.poops_n <= 0:
         return False, "Нельзя вкакаться"
 
+    delete_event(db, session_id=session_id, user_id=user_id, event_n=st.poops_n)
     st.poops_n -= 1
     if st.poops_n == 0:
         st.achievement_text = None
@@ -143,23 +144,12 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         poops = int(st.poops_n) if st else 0
 
         parts: list[str] = []
-        # ник + ачивка (только если n>0)
         name = mention(u)
-        if poops > 0 and st and st.achievement_text:
-            name = f'{name} «{st.achievement_text}»'
         parts.append(name)
 
         # статусные штуки собираем через " • "
         status_bits: list[str] = []
         status_bits.append(f"💩({poops})")
-
-        if poops > 0 and st:
-            b = BRISTOL_EMOJI.get(int(st.bristol or 0))
-            if b:
-                status_bits.append(b)
-            f = FEELING_EMOJI.get(st.feeling or "")
-            if f:
-                status_bits.append(f)
 
         # ⏳ если подписан
         if st and st.remind_22:

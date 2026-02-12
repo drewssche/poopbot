@@ -174,6 +174,54 @@ TOP5_ROLES = [
 ]
 
 
+def _streak_nickname(days: int) -> str:
+    if days >= 365:
+        return "Бессмертный керамики"
+    if days >= 180:
+        return "Владыка трона"
+    if days >= 90:
+        return "Маршал унитаза"
+    if days >= 30:
+        return "Гранд-каколог"
+    if days >= 7:
+        return "Железный кишечник"
+    return "Разогревочный напор"
+
+
+def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | None, int, int] | None:
+    streak_rows = db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
+    if not streak_rows:
+        return None
+
+    today_positive = {
+        int(uid)
+        for uid in db.scalars(
+            select(SessionUserState.user_id)
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == today,
+                SessionUserState.poops_n > 0,
+            )
+        ).all()
+    }
+    yesterday = today - timedelta(days=1)
+
+    best_user_id = None
+    best_streak = 0
+    for row in streak_rows:
+        projected = int(row.current_streak or 0)
+        if int(row.user_id) in today_positive:
+            projected = projected + 1 if row.last_poop_date == yesterday else 1
+        if projected > best_streak:
+            best_streak = projected
+            best_user_id = int(row.user_id)
+
+    if best_user_id is None or best_streak <= 0:
+        return None
+    return db.get(User, best_user_id), best_streak, best_user_id
+
+
 def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, period: str) -> str:
     r = period_to_range(today, period)
     sessions = _sessions_in_range(db, chat_id, r)
@@ -206,6 +254,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
     streak_val = int(streak.current_streak) if streak else 0
+    leader = _chat_streak_leader(db, chat_id, today)
 
     lines = [
         "🙋‍♂️ Моя статистика",
@@ -217,6 +266,15 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         f"- Текущий стрик: {streak_val} дн.",
         "",
     ]
+    if leader is not None:
+        leader_user, leader_days, leader_user_id = leader
+        lines.extend(
+            [
+                "Лидер стрика в чате:",
+                f"- {_streak_nickname(leader_days)} — {_display_name(leader_user, leader_user_id)} ({leader_days} дн.)",
+                "",
+            ]
+        )
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
@@ -279,6 +337,16 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
         lines.append("- пока никто не участвовал")
 
     lines.append("")
+    leader = _chat_streak_leader(db, chat_id, today)
+    if leader is not None:
+        leader_user, leader_days, leader_user_id = leader
+        lines.extend(
+            [
+                "Лидер стрика:",
+                f"- {_streak_nickname(leader_days)} — {_display_name(leader_user, leader_user_id)} ({leader_days} дн.)",
+                "",
+            ]
+        )
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))

@@ -20,7 +20,7 @@ from app.services.repo_service import (
     set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
-from app.services.q1_service import render_q1
+from app.services.q1_service import mention, render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
 from app.services.stats_service import build_stats_text_chat
 from app.services.command_message_service import get_command_message_id, set_command_message_id
@@ -426,6 +426,9 @@ async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> 
         if _already_sent(kind):
             return
         text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period)
+        praise_block = _build_streak_praise_block(db, chat_id)
+        if praise_block:
+            text = text + "\n\n" + praise_block
         sent = await _safe_send_message(bot, chat_id=chat_id, text=text)
         set_command_message_id(db, chat_id, 0, kind, local_date, sent.message_id)
 
@@ -440,6 +443,45 @@ async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> 
     # РіРѕРґ
     if local_date.month == 12 and local_date.day == 31:
         await _send("yearly_stats", "year", "📉 Итоги года")
+
+
+def _streak_rank_label(days: int) -> str:
+    if days >= 365:
+        return "🌟 Легенда стрика"
+    if days >= 180:
+        return "👑 Полугодовой чемпион"
+    if days >= 90:
+        return "💪 Квартальный титан"
+    if days >= 30:
+        return "🏅 Месячный монолит"
+    if days >= 7:
+        return "🔥 Железная неделя"
+    return "👏 Держит ритм"
+
+
+def _build_streak_praise_block(db, chat_id: int) -> str | None:
+    rows = db.execute(
+        select(UserStreak.user_id, UserStreak.current_streak, User)
+        .join(
+            ChatMember,
+            (ChatMember.chat_id == UserStreak.chat_id) & (ChatMember.user_id == UserStreak.user_id),
+        )
+        .join(User, User.user_id == UserStreak.user_id)
+        .where(UserStreak.chat_id == chat_id, UserStreak.current_streak > 0)
+        .order_by(UserStreak.current_streak.desc(), UserStreak.user_id.asc())
+        .limit(10)
+    ).all()
+    if not rows:
+        return None
+
+    lines = ["👏 Кто держит стрик:"]
+    for user_id, streak_days, user in rows:
+        days = int(streak_days or 0)
+        if days <= 0:
+            continue
+        lines.append(f"- {_streak_rank_label(days)}: {mention(user)} — {days} дн.")
+
+    return "\n".join(lines) if len(lines) > 1 else None
 
 async def _send_holiday_notice_if_needed(bot: Bot, db, chat_id: int, session_id: int, local_date: date) -> None:
     holiday_text = None

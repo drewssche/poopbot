@@ -77,6 +77,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
             db.flush()
+            current_sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+
             sess = db.scalar(
                 select(DaySession)
                 .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
@@ -97,20 +99,24 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 if reminder_row is not None:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=reminder_row.session_date)
             if sess is None:
-                await cb.answer("Неактуально", show_alert=False)
-                return
+                if cb.data == "q1:plus_reminder":
+                    sess = current_sess
+                else:
+                    await cb.answer("Неактуально", show_alert=False)
+                    return
 
             if sess.status == "closed":
                 await cb.answer("Сессия закрыта", show_alert=False)
                 return
 
-            # Клик только по Q1/напоминалке именно этой сессии.
+            # Для reminder-кнопки допускаем fallback на текущую сессию, если mapping сообщения потерян.
             q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
             reminder_msg_id = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
-            allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
-            if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
-                await cb.answer("Неактуально", show_alert=False)
-                return
+            if cb.data != "q1:plus_reminder":
+                allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
+                if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
+                    await cb.answer("Неактуально", show_alert=False)
+                    return
 
             if cb.data == "q1:minus":
                 ok, popup = apply_minus(db, sess.session_id, user.id)

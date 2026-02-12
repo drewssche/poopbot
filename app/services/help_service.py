@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import time
 from sqlalchemy.orm import Session
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from app.db.models import Chat, ChatMember, UserStreak, SessionUserState, User
+from app.db.models import Chat, ChatMember, CommandMessage, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 
 
 def set_chat_post_time(db: Session, chat_id: int, hour: int) -> None:
@@ -36,3 +36,23 @@ def delete_user_everywhere(db: Session, chat_id: int, user_id: int) -> None:
     db.execute(delete(UserStreak).where(UserStreak.chat_id == chat_id, UserStreak.user_id == user_id))
     db.execute(delete(SessionUserState).where(SessionUserState.user_id == user_id))
     db.execute(delete(User).where(User.user_id == user_id))
+
+
+def delete_user_from_chat(db: Session, chat_id: int, user_id: int) -> None:
+    chat_session_ids = select(DaySession.session_id).where(DaySession.chat_id == chat_id)
+
+    db.execute(delete(ChatMember).where(ChatMember.chat_id == chat_id, ChatMember.user_id == user_id))
+    db.execute(delete(UserStreak).where(UserStreak.chat_id == chat_id, UserStreak.user_id == user_id))
+    db.execute(
+        delete(SessionUserState).where(
+            SessionUserState.user_id == user_id,
+            SessionUserState.session_id.in_(chat_session_ids),
+        )
+    )
+    db.execute(
+        delete(PoopEvent).where(
+            PoopEvent.user_id == user_id,
+            PoopEvent.session_id.in_(chat_session_ids),
+        )
+    )
+    db.execute(delete(CommandMessage).where(CommandMessage.chat_id == chat_id, CommandMessage.user_id == user_id))

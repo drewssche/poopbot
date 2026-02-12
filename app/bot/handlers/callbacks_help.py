@@ -7,14 +7,21 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
-from app.bot.keyboards.help import help_root_kb, help_settings_kb, help_time_kb, help_delete_confirm_kb
+from app.bot.keyboards.help import (
+    help_delete_chat_confirm_kb,
+    help_delete_confirm_kb,
+    help_root_kb,
+    help_settings_kb,
+    help_time_kb,
+)
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
-from app.services.help_service import set_chat_post_time, delete_user_everywhere
+from app.services.help_service import delete_user_everywhere, delete_user_from_chat, set_chat_post_time
 from app.services.repo_service import upsert_chat, get_or_create_session, get_session_message_id
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1
+from app.services.q2_q3_service import ensure_q2_q3_exist
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -48,6 +55,7 @@ def _root_text() -> str:
 SETTINGS_TEXT = (
     "⚙️ Настройки\n\n"
     "🗑️ Удалить меня — полностью убирает тебя из базы и статистики.\n"
+    "🧹 Удалить меня из этого чата — убирает тебя только из текущего чата.\n"
     "⏱️ Установить время — меняет время автопоста ежедневных вопросов для этого чата.\n"
     "⬅️ Назад — вернуться в меню помощи.\n"
 )
@@ -113,13 +121,26 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 )
                 await cb.answer()
 
-            elif data.startswith("help:delete_confirm:"):
+            elif data.startswith("help:delete_me_chat:"):
+                owner_id = actor_id
+                mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
+                await cb.message.edit_text(
+                    f"⚠️ {mention}, уверен(а), что хочешь удалить себя только из этого чата?",
+                    reply_markup=help_delete_chat_confirm_kb(owner_id),
+                )
+                await cb.answer()
+
+            elif data.startswith("help:delete_confirm_db:") or data.startswith("help:delete_confirm_chat:"):
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
-                    await cb.answer("Р­С‚Рѕ РЅРµ С‚РІРѕС‘ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ", show_alert=False)
+                    await cb.answer("Это не твоё подтверждение", show_alert=False)
                     return
 
-                delete_user_everywhere(db, chat_id, actor_id)
+                is_db_delete = data.startswith("help:delete_confirm_db:")
+                if is_db_delete:
+                    delete_user_everywhere(db, chat_id, actor_id)
+                else:
+                    delete_user_from_chat(db, chat_id, actor_id)
 
                 # обновить актуальный Q1 (если есть)
                 window = get_session_window(chat.timezone)
@@ -143,9 +164,18 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e).lower():
                                 logger.exception("Failed to edit Q1 after delete_me: %s", e)
+                        try:
+                            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+                        except Exception:
+                            logger.exception("Failed to refresh Q2/Q3 after delete action")
 
                 await cb.answer("Удалил", show_alert=False)
-                await cb.message.edit_text("✅ Готово. Ты удалён из базы.", reply_markup=help_root_kb(owner_id))
+                done_text = (
+                    "✅ Готово. Ты удалён из базы."
+                    if is_db_delete
+                    else "✅ Готово. Ты удалён из этого чата."
+                )
+                await cb.message.edit_text(done_text, reply_markup=help_root_kb(owner_id))
 
             elif data.startswith("help:back:"):
                 await cb.message.edit_text(_root_text(), reply_markup=help_root_kb(owner_id))

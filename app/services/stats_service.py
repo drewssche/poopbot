@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import PoopEvent
+from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
 from app.db.models import SessionUserState, User, UserStreak
 from app.services.q1_service import mention
@@ -176,16 +176,16 @@ TOP5_ROLES = [
 
 def _streak_nickname(days: int) -> str:
     if days >= 365:
-        return "Бессмертный керамики"
+        return "Легенда стрика"
     if days >= 180:
-        return "Владыка трона"
+        return "Полугодовой чемпион"
     if days >= 90:
-        return "Маршал унитаза"
+        return "Квартальный титан"
     if days >= 30:
-        return "Гранд-каколог"
+        return "Месячный монолит"
     if days >= 7:
-        return "Железный кишечник"
-    return "Разогревочный напор"
+        return "Железная неделя"
+    return "Держит ритм"
 
 
 def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | None, int, int] | None:
@@ -239,6 +239,38 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     total_poops = sum(int(s.poops_n or 0) for s in states)
     days_any = sum(1 for s in states if int(s.poops_n or 0) > 0)
     days_total = (r.end - r.start).days + 1
+    avg_per_day = (float(total_poops) / float(days_total)) if days_total > 0 else 0.0
+    avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
+
+    session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
+    active_dates = sorted(
+        session_date_by_id[int(s.session_id)]
+        for s in states
+        if int(s.poops_n or 0) > 0 and int(s.session_id) in session_date_by_id
+    )
+    last_mark_date = active_dates[-1] if active_dates else None
+    best_streak_period = 0
+    if active_dates:
+        run = 1
+        best_streak_period = 1
+        for i in range(1, len(active_dates)):
+            if active_dates[i] == active_dates[i - 1] + timedelta(days=1):
+                run += 1
+            else:
+                run = 1
+            if run > best_streak_period:
+                best_streak_period = run
+
+    daily_counts: dict[date, int] = {}
+    for s in states:
+        sid = int(s.session_id)
+        if sid not in session_date_by_id:
+            continue
+        d = session_date_by_id[sid]
+        daily_counts[d] = daily_counts.get(d, 0) + int(s.poops_n or 0)
+    best_day = None
+    if daily_counts:
+        best_day = max(daily_counts.items(), key=lambda x: (x[1], x[0]))
 
     events_map = _collect_events_map(db, session_ids, user_id=user_id)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
@@ -253,19 +285,69 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
                 fe[f] += 1
 
     streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
-    streak_val = int(streak.current_streak) if streak else 0
+    streak_val = int(streak.current_streak or 0) if streak else 0
+    if last_mark_date == today:
+        yesterday = today - timedelta(days=1)
+        if streak and streak.last_poop_date == yesterday:
+            streak_val = int(streak.current_streak or 0) + 1
+        else:
+            streak_val = 1
+
+    rank_rows = db.execute(
+        select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
+        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+        .where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date >= r.start,
+            DaySession.session_date <= r.end,
+        )
+        .group_by(SessionUserState.user_id)
+        .order_by(func.sum(SessionUserState.poops_n).desc())
+    ).all()
+    rank = None
+    totals = []
+    my_total = 0
+    for idx, row in enumerate(rank_rows, start=1):
+        poops = int(row.poops or 0)
+        totals.append(poops)
+        if int(row.user_id) == user_id:
+            rank = idx
+            my_total = poops
+    above_pct = _calc_above_percent(my_total, totals) if rank is not None else None
+
     leader = _chat_streak_leader(db, chat_id, today)
 
     lines = [
         "🙋‍♂️ Моя статистика",
         f"Период: {_format_period(r)}",
         "",
-        "Итоги:",
+        "Твои итоги:",
         f"- Всего: 💩({total_poops})",
         f"- Дней с 💩: {days_any}/{days_total}",
         f"- Текущий стрик: {streak_val} дн.",
+        f"- Лучший стрик за период: {best_streak_period} дн.",
         "",
     ]
+    lines.extend(
+        [
+            "Твоя динамика:",
+            f"- В среднем в день: {avg_per_day:.2f}",
+            f"- В среднем в активный день: {avg_per_active_day:.2f}",
+            f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))" if best_day else "- Самый активный день: нет данных",
+            f"- Последняя отметка: {last_mark_date.strftime('%d.%m.%y')}" if last_mark_date else "- Последняя отметка: нет данных",
+            "",
+        ]
+    )
+    if rank is not None:
+        lines.extend(
+            [
+                "Твоя позиция в чате:",
+                f"- Место по количеству: #{rank} из {len(rank_rows)}",
+                f"- Выше {above_pct}% участников" if above_pct is not None else "- Выше: нет данных",
+                "",
+            ]
+        )
+
     if leader is not None:
         leader_user, leader_days, leader_user_id = leader
         lines.extend(
@@ -283,6 +365,19 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
 def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -> str:
     r = period_to_range(today, period)
+    first_active_date = None
+    if period == "all":
+        first_active_date = db.scalar(
+            select(func.min(DaySession.session_date))
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                SessionUserState.poops_n > 0,
+            )
+        )
+        if first_active_date is not None:
+            r = Range(first_active_date, today)
+
     sessions = _sessions_in_range(db, chat_id, r)
     if not sessions:
         return f"👥 В этом чате\nПериод: {_format_period(r)}\n\nПока пусто."
@@ -296,6 +391,21 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
         .order_by(func.sum(SessionUserState.poops_n).desc())
     ).all()
     total_poops = sum(int(row.poops or 0) for row in rows)
+    active_participants = sum(1 for row in rows if int(row.poops or 0) > 0)
+    avg_per_participant = (float(total_poops) / float(active_participants)) if active_participants > 0 else 0.0
+
+    day_rows = db.execute(
+        select(DaySession.session_date, func.sum(SessionUserState.poops_n).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.chat_id == chat_id, DaySession.session_id.in_(session_ids))
+        .group_by(DaySession.session_date)
+        .order_by(DaySession.session_date.asc())
+    ).all()
+    active_days = [(d, int(p or 0)) for d, p in day_rows if int(p or 0) > 0]
+    active_days_count = len(active_days)
+    period_days = (r.end - r.start).days + 1
+    avg_per_active_day = (float(total_poops) / float(active_days_count)) if active_days_count > 0 else 0.0
+    peak_day = max(active_days, key=lambda x: (x[1], x[0])) if active_days else None
 
     states_pos = db.scalars(
         select(SessionUserState).where(
@@ -316,37 +426,72 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
             if f:
                 fe[f] += 1
 
-    user_ids = [int(row.user_id) for row in rows]
-    users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()}
+    top_rows = rows[:5]
+    top_user_ids = [int(row.user_id) for row in top_rows]
+
+    streak_rows = db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
+    today_positive = {
+        int(uid)
+        for uid in db.scalars(
+            select(SessionUserState.user_id)
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == today,
+                SessionUserState.poops_n > 0,
+            )
+        ).all()
+    }
+    yesterday = today - timedelta(days=1)
+    streak_rank: list[tuple[int, int]] = []
+    for row in streak_rows:
+        projected = int(row.current_streak or 0)
+        if int(row.user_id) in today_positive:
+            projected = projected + 1 if row.last_poop_date == yesterday else 1
+        if projected > 0:
+            streak_rank.append((int(row.user_id), projected))
+    streak_rank.sort(key=lambda x: (-x[1], x[0]))
+    streak_top3 = streak_rank[:3]
+
+    user_ids = sorted({uid for uid in top_user_ids + [uid for uid, _ in streak_top3]})
+    users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()} if user_ids else {}
 
     lines = [
         "👥 В этом чате",
-        f"Период: {_format_period(r)}",
+        f"Период: {_format_period(r)}" + (" (с первого дня активности)" if first_active_date else ""),
         "",
-        "Итоги:",
+        "Сводка:",
         f"- Всего: 💩({total_poops})",
+        f"- Активных участников: {active_participants}",
+        f"- Среднее на участника: {avg_per_participant:.2f}",
+        f"- Дней с активностью: {active_days_count}/{period_days}",
+        f"- Среднее в активный день: {avg_per_active_day:.2f}",
+        (
+            f"- Пиковый день: {peak_day[0].strftime('%d.%m.%y')} (💩({peak_day[1]}))"
+            if peak_day is not None
+            else "- Пиковый день: нет данных"
+        ),
         "",
-        "Топ участников:",
+        "Топ-5 по количеству:",
     ]
 
-    if rows:
-        for idx, row in enumerate(rows[:10], start=1):
+    if top_rows:
+        for idx, row in enumerate(top_rows, start=1):
             user = users.get(int(row.user_id))
             lines.append(f"- {idx}) {_display_name(user, int(row.user_id))} — 💩({int(row.poops or 0)})")
     else:
         lines.append("- пока никто не участвовал")
 
     lines.append("")
-    leader = _chat_streak_leader(db, chat_id, today)
-    if leader is not None:
-        leader_user, leader_days, leader_user_id = leader
-        lines.extend(
-            [
-                "Лидер стрика:",
-                f"- {_streak_nickname(leader_days)} — {_display_name(leader_user, leader_user_id)} ({leader_days} дн.)",
-                "",
-            ]
-        )
+    lines.append("Топ-3 по стрику:")
+    if streak_top3:
+        for idx, (uid, days) in enumerate(streak_top3, start=1):
+            user = users.get(uid)
+            lines.append(f"- {idx}) {_streak_nickname(days)} — {_display_name(user, uid)} ({days} дн.)")
+    else:
+        lines.append("- пока нет активных стриков")
+
+    lines.append("")
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
@@ -402,12 +547,13 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         ).all()
     )
     yesterday = today - timedelta(days=1)
-    max_streak = 0
+    projected_streaks: list[tuple[int, int]] = []
     for row in streak_rows:
         projected = int(row.current_streak or 0)
         if (row.chat_id, row.user_id) in today_positive:
             projected = projected + 1 if row.last_poop_date == yesterday else 1
-        max_streak = max(max_streak, projected)
+        if projected > 0:
+            projected_streaks.append((int(row.user_id), projected))
 
     states_pos = db.scalars(
         select(SessionUserState).where(
@@ -479,10 +625,12 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("- пока нет данных")
 
     lines.extend(["", "Легенда стрика:"])
-    if max_streak <= 0:
+    top_streaks = sorted(projected_streaks, key=lambda x: (-x[1], x[0]))[:3]
+    if not top_streaks:
         lines.append("- пока нет данных")
     else:
-        lines.append(f"- Железный кишечник — {int(max_streak)} дн.")
+        for idx, (_, days) in enumerate(top_streaks, start=1):
+            lines.append(f"- #{idx} {_streak_nickname(int(days))} — {int(days)} дн.")
 
     lines.extend(["", "Твое место в топе:", f"- {me_name}"])
     if my_rank is None:
@@ -510,3 +658,94 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append(f"- Ощущения: {my_fe_icon} (выше {my_fe_pct}%)")
 
     return "\n".join(lines)
+
+
+def collect_among_chats_snapshot(db: Session, today: date) -> dict:
+    chat_ids = db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all()  # noqa: E712
+    if not chat_ids:
+        return {
+            "top_total": [],
+            "top_avg": [],
+            "top_streak": [],
+            "record_day": None,
+        }
+
+    sessions = db.scalars(select(DaySession).where(DaySession.chat_id.in_(chat_ids))).all()
+    if not sessions:
+        return {
+            "top_total": [],
+            "top_avg": [],
+            "top_streak": [],
+            "record_day": None,
+        }
+
+    session_ids = [int(s.session_id) for s in sessions]
+
+    by_chat_total = db.execute(
+        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids))
+        .group_by(DaySession.chat_id)
+    ).all()
+
+    by_chat_participants = db.execute(
+        select(DaySession.chat_id, func.count(func.distinct(SessionUserState.user_id)).label("participants"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), SessionUserState.poops_n > 0)
+        .group_by(DaySession.chat_id)
+    ).all()
+
+    participants_map = {int(r.chat_id): int(r.participants or 0) for r in by_chat_participants}
+    totals = [(int(r.chat_id), int(r.poops or 0)) for r in by_chat_total]
+    top_total = sorted(totals, key=lambda x: (-x[1], x[0]))[:5]
+
+    avg_rows: list[tuple[int, float, int, int]] = []
+    for chat_id, total in totals:
+        participants = participants_map.get(chat_id, 0)
+        if participants <= 0:
+            continue
+        avg_rows.append((chat_id, float(total) / float(participants), total, participants))
+    top_avg = sorted(avg_rows, key=lambda x: (-x[1], x[0]))[:5]
+
+    today_positive = set(
+        db.execute(
+            select(DaySession.chat_id, SessionUserState.user_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(DaySession.session_date == today, SessionUserState.poops_n > 0)
+        ).all()
+    )
+    yesterday = today - timedelta(days=1)
+    streak_rows = db.execute(
+        select(UserStreak.chat_id, UserStreak.user_id, UserStreak.current_streak, UserStreak.last_poop_date)
+        .where(UserStreak.chat_id.in_(chat_ids))
+    ).all()
+    best_streak_by_chat: dict[int, int] = {}
+    for row in streak_rows:
+        projected = int(row.current_streak or 0)
+        if (row.chat_id, row.user_id) in today_positive:
+            projected = projected + 1 if row.last_poop_date == yesterday else 1
+        if projected > best_streak_by_chat.get(int(row.chat_id), 0):
+            best_streak_by_chat[int(row.chat_id)] = projected
+    top_streak = sorted(
+        [(chat_id, days) for chat_id, days in best_streak_by_chat.items() if days > 0],
+        key=lambda x: (-x[1], x[0]),
+    )[:5]
+
+    day_rows = db.execute(
+        select(DaySession.chat_id, DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.chat_id.in_(chat_ids))
+        .group_by(DaySession.chat_id, DaySession.session_date)
+    ).all()
+    record_day = None
+    if day_rows:
+        best = max(day_rows, key=lambda r: (int(r.poops or 0), r.session_date, int(r.chat_id)))
+        if int(best.poops or 0) > 0:
+            record_day = (int(best.chat_id), best.session_date, int(best.poops or 0))
+
+    return {
+        "top_total": top_total,
+        "top_avg": top_avg,
+        "top_streak": top_streak,
+        "record_day": record_day,
+    }

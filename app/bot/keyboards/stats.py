@@ -5,6 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 SCOPE_MY = "my"
 SCOPE_CHAT = "chat"
+SCOPE_AMONG = "among"
 SCOPE_GLOBAL = "global"
 
 PERIOD_TODAY = "today"
@@ -22,6 +23,7 @@ def stats_root_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🙋‍♂️ Моя", callback_data=f"stats:open:{SCOPE_MY}"))
     kb.row(InlineKeyboardButton(text="👥 В этом чате", callback_data=f"stats:open:{SCOPE_CHAT}"))
+    kb.row(InlineKeyboardButton(text="🏟️ Среди чатов", callback_data=f"stats:open:{SCOPE_AMONG}"))
     kb.row(InlineKeyboardButton(text="🌍 Глобальная", callback_data=f"stats:open:{SCOPE_GLOBAL}"))
     return kb.as_markup()
 
@@ -40,5 +42,11 @@ def stats_period_kb(scope: str, active_period: str) -> InlineKeyboardMarkup:
 def stats_global_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="👤 Показать меня", callback_data="stats:global:me"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
+    return kb.as_markup()
+
+
+def stats_among_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
     return kb.as_markup()

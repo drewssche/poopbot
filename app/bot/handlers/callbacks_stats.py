@@ -9,9 +9,11 @@ from aiogram.types import CallbackQuery
 from app.bot.keyboards.stats import (
     PERIOD_ALL,
     PERIOD_TODAY,
+    SCOPE_AMONG,
     SCOPE_CHAT,
     SCOPE_GLOBAL,
     SCOPE_MY,
+    stats_among_kb,
     stats_global_kb,
     stats_period_kb,
     stats_root_kb,
@@ -23,6 +25,7 @@ from app.services.stats_service import (
     build_stats_text_chat,
     build_stats_text_global,
     build_stats_text_my,
+    collect_among_chats_snapshot,
 )
 from app.services.time_service import now_in_tz
 
@@ -77,8 +80,13 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
         # stats:open:{scope}
         if len(parts) == 3 and parts[1] == "open":
             scope = parts[2]
-            if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_GLOBAL):
+            if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_AMONG, SCOPE_GLOBAL):
                 await cb.answer()
+                return
+
+            if scope == SCOPE_AMONG:
+                text = await _render_among_chats(cb, db)
+                await _edit(cb, text, stats_among_kb())
                 return
 
             if scope == SCOPE_GLOBAL:
@@ -114,6 +122,70 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             return
 
     await cb.answer()
+
+
+async def _render_among_chats(cb: CallbackQuery, db) -> str:
+    from app.db.models import Chat
+
+    cur_chat = db.get(Chat, cb.message.chat.id)
+    tz = cur_chat.timezone if cur_chat else "Europe/Minsk"
+    today = now_in_tz(tz).date()
+    snap = collect_among_chats_snapshot(db, today)
+
+    ids = set()
+    ids.update(chat_id for chat_id, _ in snap["top_total"])
+    ids.update(chat_id for chat_id, _, _, _ in snap["top_avg"])
+    ids.update(chat_id for chat_id, _ in snap["top_streak"])
+    if snap["record_day"] is not None:
+        ids.add(snap["record_day"][0])
+
+    names: dict[int, str] = {}
+    for cid in ids:
+        try:
+            chat_obj = await cb.bot.get_chat(cid)
+            title = getattr(chat_obj, "title", None) or getattr(chat_obj, "full_name", None)
+            names[cid] = (title or f"Чат {cid}").strip()
+        except Exception:
+            names[cid] = f"Чат {cid}"
+
+    def chat_name(cid: int) -> str:
+        return names.get(cid, f"Чат {cid}")
+
+    lines = [
+        "🏟️ Среди чатов",
+        "Период: за всё время",
+        "",
+        "Топ-5 по общему количеству 💩:",
+    ]
+
+    if snap["top_total"]:
+        for idx, (cid, total) in enumerate(snap["top_total"], start=1):
+            lines.append(f"- {idx}) {chat_name(cid)} — 💩({total})")
+    else:
+        lines.append("- пока нет данных")
+
+    lines.extend(["", "Топ-5 по среднему на участника:"])
+    if snap["top_avg"]:
+        for idx, (cid, avg, total, participants) in enumerate(snap["top_avg"], start=1):
+            lines.append(f"- {idx}) {chat_name(cid)} — {avg:.2f} (💩({total}), участников: {participants})")
+    else:
+        lines.append("- пока нет данных")
+
+    lines.extend(["", "Топ-5 по лучшему стрику чата:"])
+    if snap["top_streak"]:
+        for idx, (cid, days) in enumerate(snap["top_streak"], start=1):
+            lines.append(f"- {idx}) {chat_name(cid)} — {days} дн.")
+    else:
+        lines.append("- пока нет данных")
+
+    lines.extend(["", "Рекорд дня:"])
+    if snap["record_day"] is not None:
+        cid, d, poops = snap["record_day"]
+        lines.append(f"- {chat_name(cid)} — {d.strftime('%d.%m.%y')} (💩({poops}))")
+    else:
+        lines.append("- пока нет данных")
+
+    return "\n".join(lines)
 
 
 async def _edit(cb: CallbackQuery, text: str, kb) -> None:

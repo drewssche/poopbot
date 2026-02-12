@@ -101,7 +101,13 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
             elif data.startswith("help:set_time:"):
-                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id, chat.post_time.hour))
+                await cb.message.edit_text(
+                    "⏱️ Настройка времени публикации\n\n"
+                    "Это время, когда бот будет отправлять ежедневный основной вопрос.\n"
+                    "Влияет только на текущий чат.\n\n"
+                    f"Текущее: {chat.post_time.strftime('%H:%M')}",
+                    reply_markup=help_time_kb(owner_id, chat.post_time.hour),
+                )
                 await cb.answer()
 
             elif data.startswith("help:time:"):
@@ -116,7 +122,12 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(
-                    f"⚠️ {mention}, уверен(а), что хочешь удалить себя из базы?",
+                    f"⚠️ {mention}, удалить тебя из базы полностью?\n\n"
+                    "Что это значит:\n"
+                    "• Удаление из всех чатов, где ты участвовал(а).\n"
+                    "• Сброс твоей статистики и стриков.\n"
+                    "• Вернуться можно в любой момент: нажми +💩 или включи напоминание.\n"
+                    "• Статистика начнется заново.",
                     reply_markup=help_delete_confirm_kb(owner_id),
                 )
                 await cb.answer()
@@ -125,7 +136,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(
-                    f"⚠️ {mention}, уверен(а), что хочешь удалить себя только из этого чата?",
+                    f"⚠️ {mention}, удалить тебя только из этого чата?\n\n"
+                    "Что это значит:\n"
+                    "• Удалишься только из текущего чата.\n"
+                    "• Данные в других чатах останутся.\n"
+                    "• В этом чате можно вернуться позже и начать заново.",
                     reply_markup=help_delete_chat_confirm_kb(owner_id),
                 )
                 await cb.answer()

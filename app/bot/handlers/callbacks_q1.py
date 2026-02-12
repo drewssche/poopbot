@@ -166,6 +166,10 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 poops_n=int(state.poops_n) if state else 0,
             )
 
+            # Persist business changes before any Telegram API calls.
+            # This prevents losing +/− actions if message edits fail.
+            db.commit()
+
         # обновляем Q1 (всегда)
             text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
             has_any_members = "Участники:" in text

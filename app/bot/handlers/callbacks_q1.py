@@ -126,6 +126,13 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 ok, popup = apply_plus(db, sess.session_id, user.id)
                 if cb.data == "q1:plus_reminder":
+                    # If user clicks from reminder message, keep them in reminder audience for that session
+                    # even if they were not subscribed before.
+                    st = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
+                    if st is not None:
+                        st.remind_22 = True
+
+                    # Ack is sticky per (chat, user, session_date): once clicked in reminder, always ✅.
                     mark_reminder_ack(
                         db,
                         chat_id=chat_id,

@@ -27,8 +27,8 @@ from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1, apply_plus, apply_minus, toggle_remind
 from app.services.q2_q3_service import ensure_q2_q3_exist
-from app.services.command_message_service import get_command_message_id
-from app.services.reminder_service import REMINDER22_COMMAND, build_reminder_22_text
+from app.services.command_message_service import get_command_message_id, set_command_message_id
+from app.services.reminder_service import REMINDER22_COMMAND, build_reminder_22_text, mark_reminder_ack
 from app.services.poop_event_service import reconcile_events_count
 from app.bot.keyboards.reminder import reminder_keyboard
 
@@ -125,6 +125,14 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             elif cb.data in ("q1:plus", "q1:plus_reminder"):
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 ok, popup = apply_plus(db, sess.session_id, user.id)
+                if cb.data == "q1:plus_reminder":
+                    mark_reminder_ack(
+                        db,
+                        chat_id=chat_id,
+                        user_id=user.id,
+                        session_date=sess.session_date,
+                        message_id=cb.message.message_id,
+                    )
                 if ok and now_in_tz(chat.timezone).time().hour < 11:
                     popup = "Кофейку и цигарку бахнул? Красава"
                 await cb.answer(popup, show_alert=False)
@@ -181,6 +189,10 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     logger.exception("Failed to refresh Q2/Q3 after Q1 action")
 
         # если есть напоминалка — обновляем в ней статус и счетчики
+            if cb.data == "q1:plus_reminder" and not reminder_msg_id:
+                # self-heal mapping if message id record was lost
+                reminder_msg_id = cb.message.message_id
+                set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, reminder_msg_id)
             if reminder_msg_id:
                 reminder_text = build_reminder_22_text(db, sess.session_id)
                 if reminder_text:

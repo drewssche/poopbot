@@ -232,6 +232,11 @@ async def _send_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None
     q1_id = get_session_message_id(db, session_id, "Q1")
     if not q1_id:
         return
+    sess = db.get(DaySession, session_id)
+    if sess is None:
+        return
+    if get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date) is not None:
+        return
 
     text = build_reminder_22_text(db, session_id)
     if not text:
@@ -245,9 +250,7 @@ async def _send_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None
         reply_to_message_id=q1_id,
         reply_markup=reminder_keyboard(),
     )
-    sess = db.get(DaySession, session_id)
-    if sess is not None:
-        set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, sent.message_id)
+    set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, sent.message_id)
     logger.info("Sent 22:00 reminder chat_id=%s session_id=%s", chat_id, session_id)
 
 

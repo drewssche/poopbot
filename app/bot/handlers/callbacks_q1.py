@@ -78,30 +78,31 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
             db.flush()
             current_sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
-
-            sess = db.scalar(
-                select(DaySession)
-                .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
-                .where(
-                    DaySession.chat_id == chat_id,
-                    SessionMessage.kind == "Q1",
-                    SessionMessage.message_id == cb.message.message_id,
+            reminder_row_by_msg = db.scalar(
+                select(CommandMessage).where(
+                    CommandMessage.chat_id == chat_id,
+                    CommandMessage.command == REMINDER22_COMMAND,
+                    CommandMessage.message_id == cb.message.message_id,
                 )
             )
-            if sess is None:
-                reminder_row = db.scalar(
-                    select(CommandMessage).where(
-                        CommandMessage.chat_id == chat_id,
-                        CommandMessage.command == REMINDER22_COMMAND,
-                        CommandMessage.message_id == cb.message.message_id,
+
+            if cb.data == "q1:plus_reminder":
+                # Reminder button always applies to current active session.
+                sess = current_sess
+                set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, cb.message.message_id)
+            else:
+                sess = db.scalar(
+                    select(DaySession)
+                    .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+                    .where(
+                        DaySession.chat_id == chat_id,
+                        SessionMessage.kind == "Q1",
+                        SessionMessage.message_id == cb.message.message_id,
                     )
                 )
-                if reminder_row is not None:
-                    sess = get_or_create_session(db, chat_id=chat_id, session_date=reminder_row.session_date)
-            if sess is None:
-                if cb.data == "q1:plus_reminder":
-                    sess = current_sess
-                else:
+                if sess is None and reminder_row_by_msg is not None:
+                    sess = get_or_create_session(db, chat_id=chat_id, session_date=reminder_row_by_msg.session_date)
+                if sess is None:
                     await cb.answer("Неактуально", show_alert=False)
                     return
 
@@ -111,7 +112,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             # Для reminder-кнопки допускаем fallback на текущую сессию, если mapping сообщения потерян.
             q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-            reminder_msg_id = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+            reminder_msg_id = cb.message.message_id if cb.data == "q1:plus_reminder" else get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
             if cb.data != "q1:plus_reminder":
                 allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
                 if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
@@ -166,7 +167,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             )
 
         # обновляем Q1 (всегда)
-            text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+            text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
             has_any_members = "Участники:" in text
             show_remind = now_in_tz(chat.timezone).time().hour < 22
             try:
@@ -196,10 +197,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     logger.exception("Failed to refresh Q2/Q3 after Q1 action")
 
         # если есть напоминалка — обновляем в ней статус и счетчики
-            if cb.data == "q1:plus_reminder" and not reminder_msg_id:
-                # self-heal mapping if message id record was lost
-                reminder_msg_id = cb.message.message_id
-                set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, reminder_msg_id)
             if reminder_msg_id:
                 reminder_text = build_reminder_22_text(db, sess.session_id)
                 if reminder_text:

@@ -21,6 +21,7 @@ from app.services.repo_service import (
     ensure_chat_member,
     get_or_create_session,
     get_session_message_id,
+    set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
@@ -76,8 +77,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
             db.flush()
-            current_sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
-
             sess = db.scalar(
                 select(DaySession)
                 .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
@@ -98,7 +97,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 if reminder_row is not None:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=reminder_row.session_date)
             if sess is None:
-                sess = current_sess
+                await cb.answer("Неактуально", show_alert=False)
+                return
 
             if sess.status == "closed":
                 await cb.answer("Сессия закрыта", show_alert=False)
@@ -156,6 +156,14 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
                     )
+                else:
+                    sent = await cb.bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+                    )
+                    set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
+                    q1_msg_id = sent.message_id
             except TelegramBadRequest as e:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)

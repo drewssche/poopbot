@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.models import PoopEvent
@@ -26,7 +27,7 @@ def ensure_events_count(db: Session, session_id: int, user_id: int, poops_n: int
     }
     for n in range(1, int(poops_n) + 1):
         if n not in existing:
-            db.add(PoopEvent(session_id=session_id, user_id=user_id, event_n=n))
+            create_event(db, session_id=session_id, user_id=user_id, event_n=n)
 
 
 def reconcile_events_count(db: Session, session_id: int, user_id: int, poops_n: int) -> None:
@@ -49,19 +50,17 @@ def reconcile_events_count(db: Session, session_id: int, user_id: int, poops_n: 
     # Create missing events inside [1..poops_n].
     for n in range(1, target + 1):
         if n not in existing:
-            db.add(PoopEvent(session_id=session_id, user_id=user_id, event_n=n))
+            create_event(db, session_id=session_id, user_id=user_id, event_n=n)
 
 
 def create_event(db: Session, session_id: int, user_id: int, event_n: int) -> None:
-    evt = db.scalar(
-        select(PoopEvent).where(
-            PoopEvent.session_id == session_id,
-            PoopEvent.user_id == user_id,
-            PoopEvent.event_n == event_n,
+    db.execute(
+        pg_insert(PoopEvent)
+        .values(session_id=session_id, user_id=user_id, event_n=event_n)
+        .on_conflict_do_nothing(
+            index_elements=["session_id", "user_id", "event_n"]
         )
     )
-    if evt is None:
-        db.add(PoopEvent(session_id=session_id, user_id=user_id, event_n=event_n))
 
 
 def delete_event(db: Session, session_id: int, user_id: int, event_n: int) -> None:

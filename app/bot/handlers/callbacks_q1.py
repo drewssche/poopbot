@@ -27,7 +27,11 @@ from app.services.time_service import get_session_window, now_in_tz
 from app.services.rate_limit_service import check_rate_limit
 from app.services.q1_service import render_q1, apply_plus, apply_minus, toggle_remind
 from app.services.q2_q3_service import ensure_q2_q3_exist
-from app.services.command_message_service import get_command_message_id, set_command_message_id
+from app.services.command_message_service import (
+    get_any_command_message_id,
+    get_command_message_id,
+    set_command_message_id,
+)
 from app.services.reminder_service import REMINDER22_COMMAND, build_reminder_22_text, mark_reminder_ack
 from app.services.poop_event_service import reconcile_events_count
 from app.bot.keyboards.reminder import reminder_keyboard
@@ -87,15 +91,36 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             )
 
             if cb.data == "q1:plus_reminder":
-                # Reminder button always works only for the current active session reminder.
-                # This prevents cross-day drift when old reminder messages are clicked.
+                # Reminder + always writes to current active session.
+                # Accept only if callback is from today's reminder context.
+                current_q1_msg_id = get_session_message_id(db, current_sess.session_id, "Q1")
                 current_reminder_msg_id = get_command_message_id(
                     db, chat_id, 0, REMINDER22_COMMAND, current_sess.session_date
+                ) or get_any_command_message_id(db, chat_id, REMINDER22_COMMAND, current_sess.session_date)
+
+                is_current_by_msg_id = (
+                    current_reminder_msg_id is not None
+                    and cb.message.message_id == current_reminder_msg_id
                 )
-                if current_reminder_msg_id is None or cb.message.message_id != current_reminder_msg_id:
+                is_current_by_reply = (
+                    cb.message.reply_to_message is not None
+                    and current_q1_msg_id is not None
+                    and cb.message.reply_to_message.message_id == current_q1_msg_id
+                )
+                is_current_by_mapping = (
+                    reminder_row_by_msg is not None
+                    and reminder_row_by_msg.session_date == current_sess.session_date
+                )
+
+                if not (is_current_by_msg_id or is_current_by_reply or is_current_by_mapping):
                     await cb.answer("Неактуально", show_alert=False)
                     return
+
                 sess = current_sess
+                # Keep canonical mapping for today's reminder message id.
+                set_command_message_id(
+                    db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, cb.message.message_id
+                )
             else:
                 sess = db.scalar(
                     select(DaySession)
@@ -120,7 +145,10 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             reminder_msg_id = (
                 cb.message.message_id
                 if cb.data == "q1:plus_reminder"
-                else get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+                else (
+                    get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+                    or get_any_command_message_id(db, chat_id, REMINDER22_COMMAND, sess.session_date)
+                )
             )
             if cb.data != "q1:plus_reminder":
                 allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
@@ -134,7 +162,21 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             elif cb.data in ("q1:plus", "q1:plus_reminder"):
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
+                before_state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
+                before_poops = int(before_state.poops_n) if before_state else 0
                 ok, popup = apply_plus(db, sess.session_id, user.id)
+                after_state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
+                after_poops = int(after_state.poops_n) if after_state else 0
+                logger.info(
+                    "q1_plus action=%s chat_id=%s user_id=%s session_id=%s before=%s after=%s ok=%s",
+                    cb.data,
+                    chat_id,
+                    user.id,
+                    sess.session_id,
+                    before_poops,
+                    after_poops,
+                    ok,
+                )
                 if cb.data == "q1:plus_reminder":
                     # If user clicks from reminder message, keep them in reminder audience for that session
                     # even if they were not subscribed before.
@@ -178,6 +220,20 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             # Persist business changes before any Telegram API calls.
             # This prevents losing +/− actions if message edits fail.
             db.commit()
+            persisted_poops = db.scalar(
+                select(SessionUserState.poops_n).where(
+                    SessionUserState.session_id == sess.session_id,
+                    SessionUserState.user_id == user.id,
+                )
+            )
+            logger.info(
+                "q1_post_commit action=%s chat_id=%s user_id=%s session_id=%s persisted=%s",
+                cb.data,
+                chat_id,
+                user.id,
+                sess.session_id,
+                int(persisted_poops or 0),
+            )
 
         # обновляем Q1 (всегда)
             text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)

@@ -289,6 +289,7 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
     await _lock_q1(bot, db, chat_id, session_id)
     await _lock_simple(bot, db, chat_id, session_id, "Q2", Q2_TEXT)
     await _lock_simple(bot, db, chat_id, session_id, "Q3", Q3_TEXT)
+    await _lock_reminder_22(bot, db, chat_id, session_id)
 
     logger.info("Closed session chat_id=%s session_id=%s", chat_id, session_id)
 
@@ -310,6 +311,26 @@ async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, b
         return
     text = f"{LOCK_LINE}\n\n{body_text}"
     await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+
+
+async def _lock_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None:
+    sess = db.get(DaySession, session_id)
+    if sess is None:
+        return
+    mid = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
+    if not mid:
+        return
+
+    body = build_reminder_22_text(db, session_id) or "⏰ Напоминалка неактуальна."
+    text = f"{LOCK_LINE}\n\n{body}"
+    await _safe_edit_message_text(
+        bot,
+        chat_id=chat_id,
+        message_id=mid,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=None,
+    )
 
 
 async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: date) -> None:

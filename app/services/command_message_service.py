@@ -4,7 +4,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from app.db.models import CommandMessage
+from app.db.models import CommandMessage, User
 
 
 def get_command_message_id(db: Session, chat_id: int, user_id: int, command: str, session_date: date) -> int | None:
@@ -30,6 +30,12 @@ def get_any_command_message_id(db: Session, chat_id: int, command: str, session_
 
 
 def set_command_message_id(db: Session, chat_id: int, user_id: int, command: str, session_date: date, message_id: int) -> None:
+    # Some command messages are system-level and use user_id=0.
+    # Ensure FK target exists to avoid transaction rollback.
+    if user_id == 0 and db.get(User, 0) is None:
+        db.add(User(user_id=0, username=None, first_name="system", last_name=None))
+        db.flush()
+
     row = db.get(
         CommandMessage,
         {"chat_id": chat_id, "user_id": user_id, "command": command, "session_date": session_date},

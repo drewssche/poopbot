@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q3 import q3_keyboard
 from app.db.engine import make_engine, make_session_factory
-from app.db.models import ChatMember, SessionUserState
+from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
 from app.services.poop_event_service import ensure_events_count, list_events
 from app.services.q1_service import render_q1
@@ -93,7 +93,17 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
             return
 
         upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
-        sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+        sess = db.scalar(
+            select(DaySession)
+            .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                SessionMessage.kind == "Q3",
+                SessionMessage.message_id == cb.message.message_id,
+            )
+        )
+        if sess is None:
+            sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
         if sess.status == "closed":
             await cb.answer("\u0421\u0435\u0441\u0441\u0438\u044f \u0437\u0430\u043a\u0440\u044b\u0442\u0430", show_alert=False)

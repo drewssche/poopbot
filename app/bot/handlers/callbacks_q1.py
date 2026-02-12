@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
-from app.db.models import SessionUserState
+from app.db.models import CommandMessage, Session as DaySession, SessionMessage, SessionUserState
 
 from app.bot.keyboards.q1 import q1_keyboard
 
@@ -76,24 +76,41 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
             db.flush()
-            sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+            current_sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+
+            sess = db.scalar(
+                select(DaySession)
+                .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+                .where(
+                    DaySession.chat_id == chat_id,
+                    SessionMessage.kind == "Q1",
+                    SessionMessage.message_id == cb.message.message_id,
+                )
+            )
+            if sess is None:
+                reminder_row = db.scalar(
+                    select(CommandMessage).where(
+                        CommandMessage.chat_id == chat_id,
+                        CommandMessage.command == REMINDER22_COMMAND,
+                        CommandMessage.message_id == cb.message.message_id,
+                    )
+                )
+                if reminder_row is not None:
+                    sess = get_or_create_session(db, chat_id=chat_id, session_date=reminder_row.session_date)
+            if sess is None:
+                sess = current_sess
 
             if sess.status == "closed":
                 await cb.answer("Сессия закрыта", show_alert=False)
                 return
 
-        # клик только по актуальному Q1 или по напоминалке текущей сессии
+            # Клик только по Q1/напоминалке именно этой сессии.
             q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-            reminder_msg_id = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, window.session_date)
+            reminder_msg_id = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
             allowed_msg_ids = {mid for mid in (q1_msg_id, reminder_msg_id) if mid}
             if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
                 await cb.answer("Неактуально", show_alert=False)
                 return
-
-        # totalPoops до обработки (чтобы понять 0->1)
-            total_before = db.scalar(
-                select(func.coalesce(func.sum(SessionUserState.poops_n), 0)).where(SessionUserState.session_id == sess.session_id)
-            ) or 0
 
             if cb.data == "q1:minus":
                 ok, popup = apply_minus(db, sess.session_id, user.id)
@@ -107,17 +124,9 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer(popup, show_alert=False)
 
                 if ok:
-                    total_after = total_before + 1  # гарантированно +1 к сумме
-                    # Q2/Q3 должны уже существовать (создаются при появлении Q1),
-                    # здесь оставляем self-heal на случай удаления сообщений.
-                    if total_before == 0 and total_after > 0:
-                        await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-                    else:
-                        # self-heal только если их реально нет/удалены
-                        q2_id = get_session_message_id(db, sess.session_id, "Q2")
-                        q3_id = get_session_message_id(db, sess.session_id, "Q3")
-                        if not q2_id or not q3_id:
-                            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+                    # Q2/Q3 обновляем ниже единым best-effort блоком.
+                    # Здесь не дергаем сеть, чтобы не откатывать poops_n из-за edit/send ошибки.
+                    pass
 
             else:  # q1:remind
                 if now_in_tz(chat.timezone).time().hour >= 22:

@@ -224,6 +224,19 @@ def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | 
 
 def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, period: str) -> str:
     r = period_to_range(today, period)
+    first_active_date = None
+    if period == "all":
+        first_active_date = db.scalar(
+            select(func.min(DaySession.session_date))
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
+            )
+        )
+        if first_active_date is not None:
+            r = Range(first_active_date, today)
     sessions = _sessions_in_range(db, chat_id, r)
     if not sessions:
         return f"🙋‍♂️ Моя статистика\nПериод: {_format_period(r)}\n\nПока пусто."
@@ -319,7 +332,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     lines = [
         "🙋‍♂️ Моя статистика",
-        f"Период: {_format_period(r)}",
+        f"Период: {_format_period(r)}" + (" (с первого дня активности)" if first_active_date else ""),
         "",
         "Твои итоги:",
         f"- Всего: 💩({total_poops})",
@@ -661,7 +674,10 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
 
 def collect_among_chats_snapshot(db: Session, today: date) -> dict:
-    chat_ids = db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all()  # noqa: E712
+    # Exclude private dialogs (chat_id > 0), keep only group/supergroup chats.
+    chat_ids = db.scalars(
+        select(Chat.chat_id).where(Chat.is_enabled == True, Chat.chat_id < 0)  # noqa: E712
+    ).all()
     if not chat_ids:
         return {
             "top_total": [],

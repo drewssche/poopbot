@@ -397,7 +397,7 @@ async def recap_chat_next(cb: CallbackQuery) -> None:
     if cb.message.chat.type == "private" and owner:
         with db_session(_session_factory) as db:
             allowed = list_user_member_chat_ids(db, cb.from_user.id)
-        if source_chat_id not in allowed:
+        if source_chat_id != 0 and source_chat_id not in allowed:
             await cb.answer("Неактуально", show_alert=False)
             return
     else:

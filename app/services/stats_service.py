@@ -248,20 +248,28 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         )
     ).all()
 
-    total_poops = sum(int(s.poops_n or 0) for s in states)
-    days_any = sum(1 for s in states if int(s.poops_n or 0) > 0)
+    session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
+    states_by_day: dict[date, list[SessionUserState]] = {}
+    for st in states:
+        sid = int(st.session_id)
+        if sid not in session_date_by_id:
+            continue
+        d = session_date_by_id[sid]
+        states_by_day.setdefault(d, []).append(st)
+
+    # Deduplicate cross-chat marks in "My" stats:
+    # for each day, use max poops_n among chats instead of sum across chats.
+    daily_poops: dict[date, int] = {}
+    for d, day_states in states_by_day.items():
+        daily_poops[d] = max(int(s.poops_n or 0) for s in day_states)
+
+    total_poops = sum(daily_poops.values())
     days_total = (r.end - r.start).days + 1
     avg_per_day = (float(total_poops) / float(days_total)) if days_total > 0 else 0.0
-    avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
 
-    session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
-    active_dates = sorted(
-        {
-            session_date_by_id[int(s.session_id)]
-            for s in states
-            if int(s.poops_n or 0) > 0 and int(s.session_id) in session_date_by_id
-        }
-    )
+    active_dates = sorted([d for d, n in daily_poops.items() if n > 0])
+    days_any = len(active_dates)
+    avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
     last_mark_date = active_dates[-1] if active_dates else None
 
     best_streak_period = 0
@@ -275,19 +283,20 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
                 run = 1
             best_streak_period = max(best_streak_period, run)
 
-    daily_counts: dict[date, int] = {}
-    for st in states:
-        sid = int(st.session_id)
-        if sid not in session_date_by_id:
-            continue
-        d = session_date_by_id[sid]
-        daily_counts[d] = daily_counts.get(d, 0) + int(st.poops_n or 0)
-    best_day = max(daily_counts.items(), key=lambda x: (x[1], x[0])) if daily_counts else None
+    best_day = max(daily_poops.items(), key=lambda x: (x[1], x[0])) if daily_poops else None
 
     events_map = _collect_events_map(db, session_ids, user_id=user_id)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
-    for st in states:
+    # For per-day distributions in "My", take one canonical day state
+    # (highest poops_n, then latest session_id) to avoid cross-chat duplicates.
+    canonical_states: list[SessionUserState] = []
+    for day_states in states_by_day.values():
+        canonical_states.append(
+            max(day_states, key=lambda s: (int(s.poops_n or 0), int(s.session_id)))
+        )
+
+    for st in canonical_states:
         for bristol, feeling in _iter_effective_events(st, events_map):
             b = _bristol_bucket(bristol)
             if b:

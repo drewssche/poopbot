@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, date, time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
@@ -56,12 +56,12 @@ Q3_TEXT = (
 )
 
 
-def start_scheduler(bot: Bot, session_factory: sessionmaker) -> AsyncIOScheduler:
+def start_scheduler(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         func=_tick,
         trigger=IntervalTrigger(seconds=30),
-        args=[bot, session_factory],
+        args=[bot, session_factory, chat_throttle_sec],
         max_instances=1,
         coalesce=True,
         misfire_grace_time=30,
@@ -72,14 +72,14 @@ def start_scheduler(bot: Bot, session_factory: sessionmaker) -> AsyncIOScheduler
 
 
 async def _safe_sleep_on_retry(exc: Exception) -> bool:
-    retry_after = getattr(exc, "retry_after", None)
-    if retry_after is None:
+    if not isinstance(exc, TelegramRetryAfter):
         return False
+    retry_after = exc.retry_after
     try:
-        delay = float(retry_after)
+        delay = float(retry_after) + 0.5
     except Exception:
         return False
-    delay = max(0.5, min(delay, 30.0))
+    delay = max(0.5, min(delay, 60.0))
     logger.warning("Telegram rate limit hit. Sleeping %.1fs", delay)
     await asyncio.sleep(delay)
     return True
@@ -117,7 +117,7 @@ async def _safe_edit_message_text(bot: Bot, **kwargs):
             raise
 
 
-async def _tick(bot: Bot, session_factory: sessionmaker) -> None:
+async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> None:
     with db_session(session_factory) as db:
         chats = db.scalars(select(Chat).where(Chat.is_enabled == True)).all()
 
@@ -133,6 +133,8 @@ async def _tick(bot: Bot, session_factory: sessionmaker) -> None:
             logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat.chat_id)
         except Exception:
             logger.exception("Scheduler chat processing failed chat_id=%s", chat.chat_id)
+        if chat_throttle_sec > 0:
+            await asyncio.sleep(chat_throttle_sec)
 
 
 async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -> None:

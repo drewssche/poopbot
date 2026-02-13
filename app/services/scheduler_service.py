@@ -148,6 +148,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         local_time = now_local.time()
         local_date = now_local.date()
         close_cutoff = time(23, 55)
+        notifications_enabled = bool(chat.notifications_enabled)
 
         # Recalculate once per day in a narrow low-traffic window,
         # so daytime polling is not impacted by heavy DB work.
@@ -189,7 +190,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
 
         # РђРІС‚РѕРїРѕСЃС‚ Q1 РІ chat.post_time (СЂР°Р±РѕС‚Р°РµС‚ С‚РѕР»СЊРєРѕ РїРѕСЃР»Рµ РїРµСЂРІРѕРіРѕ /start,
         # РїРѕС‚РѕРјСѓ С‡С‚Рѕ Chat РїРѕСЏРІР»СЏРµС‚СЃСЏ РІ Р‘Р” С‚РѕР»СЊРєРѕ РєРѕРіРґР° РµРіРѕ СЃРѕР·РґР°Р»Рё РєРѕРјР°РЅРґРѕР№ /start РёР»Рё /help /stats)
-        if local_time.hour == chat.post_time.hour and local_time.minute == chat.post_time.minute:
+        if notifications_enabled and local_time.hour == chat.post_time.hour and local_time.minute == chat.post_time.minute:
             q1_id = get_session_message_id(db, sess.session_id, "Q1")
             if not q1_id:
                 await _post_q1(
@@ -202,18 +203,19 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
                 )
 
         # 22:00 РЅР°РїРѕРјРёРЅР°Р»РєР° (РѕРґРёРЅ СЂР°Р·)
-        if local_time.hour == 22 and local_time.minute == 0 and not sess.reminded_22_sent:
+        if notifications_enabled and local_time.hour == 22 and local_time.minute == 0 and not sess.reminded_22_sent:
             await _send_reminder_22(bot, db, chat_id, sess.session_id)
             sess.reminded_22_sent = True
 
-        if local_time.hour == 23 and local_time.minute == 30:
+        if notifications_enabled and local_time.hour == 23 and local_time.minute == 30:
             await _send_late_reminder(bot, db, chat_id, sess.session_id)
 
         # 23:00 РїРµСЂРёРѕРґРёС‡РµСЃРєР°СЏ СЃС‚Р°С‚РёСЃС‚РёРєР° (РЅРµРґРµР»СЏ/РјРµСЃСЏС†/РіРѕРґ)
-        if local_time.hour == 23 and local_time.minute == 0:
+        if notifications_enabled and local_time.hour == 23 and local_time.minute == 0:
             await _send_periodic_stats(bot, db, chat_id, local_date)
 
-        await _send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
+        if notifications_enabled:
+            await _send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
 
 
 async def _post_q1(

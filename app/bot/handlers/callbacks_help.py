@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import time as dtime
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -11,9 +10,9 @@ from app.bot.keyboards.help import (
     help_delete_chat_confirm_kb,
     help_delete_confirm_kb,
     help_global_visibility_kb,
+    help_notifications_kb,
     help_root_kb,
     help_settings_kb,
-    help_time_kb,
 )
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.engine import make_engine, make_session_factory
@@ -22,6 +21,7 @@ from app.services.help_service import (
     delete_user_everywhere,
     delete_user_from_chat,
     set_chat_global_visibility,
+    set_chat_notifications_enabled,
     set_chat_post_time,
 )
 from app.services.q1_service import render_q1
@@ -57,9 +57,8 @@ def _root_text(tz_name: str) -> str:
         "• В уточняющих вопросах выбор применяется к твоему последнему походу.\n\n"
         "Где что смотреть:\n"
         "• `/stats` — личная, чатовая, глобальная и межчатовая статистика.\n"
-        "• `⚙️ Настройки` — время публикации, удаление данных, видимость чата в рейтингах.\n"
-        "• `🤖 О боте` — кратко о проекте и ссылка на репозиторий.\n"
-        "\n"
+        "• `⚙️ Настройки` — уведомления, удаление данных, видимость чата в рейтингах.\n"
+        "• `🤖 О боте` — кратко о проекте и ссылка на репозиторий.\n\n"
         "Как работает сессия:\n"
         f"• Таймзона этого чата: `{tz_name}`.\n"
         "• Активная сессия: `00:05–23:55` по локальному времени чата.\n"
@@ -82,10 +81,25 @@ def _settings_text(is_private_chat: bool) -> str:
             "• `👁️ Видимость чата в рейтингах` — скрывает/показывает этот чат в межчатовых топах.\n"
         )
     base += (
-        "• `⏱️ Установить время` — время ежедневного поста вопросов именно для этого чата.\n"
+        "• `🔔 Уведомления` — включить/выключить автопосты и напоминания, плюс выбрать время публикации.\n"
+        "  Если выключить — бот не отправляет плановые сообщения в этот чат, но команды остаются рабочими.\n"
         "• `⬅️ Назад` — вернуться в главное меню помощи.\n"
     )
     return base
+
+
+def _notifications_text(enabled: bool, post_time_text: str) -> str:
+    state = "включены" if enabled else "выключены"
+    return (
+        "🔔 Уведомления\n\n"
+        f"Текущий статус: {state}.\n"
+        f"Текущее время публикации: {post_time_text}.\n\n"
+        "Что включает этот раздел:\n"
+        "• Автопост ежедневного вопроса.\n"
+        "• Напоминание в 22:00 и позднее напоминание.\n"
+        "• Плановые итоговые сообщения по расписанию.\n\n"
+        "Команды `/start`, `/help`, `/stats` работают независимо от этого переключателя."
+    )
 
 
 def _global_visibility_text(enabled: bool) -> str:
@@ -119,16 +133,6 @@ ABOUT_TEXT = (
 )
 
 
-def _time_text(current_time: dtime) -> str:
-    return (
-        "⏱️ Установить время публикации\n\n"
-        "Это время ежедневного старта сессии для текущего чата.\n"
-        "Для всех участников чата время общее.\n"
-        "Активный вариант в кнопках отмечается точкой.\n\n"
-        f"Текущее время: {current_time.strftime('%H:%M')}"
-    )
-
-
 @router.callback_query(F.data.startswith("help:"))
 async def help_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
@@ -143,8 +147,6 @@ async def help_callbacks(cb: CallbackQuery) -> None:
     chat_id = cb.message.chat.id
     actor_id = cb.from_user.id
     is_private_chat = cb.message.chat.type == "private"
-
-    # owner всегда тот, кто нажал
     owner_id = actor_id
 
     with db_session(_session_factory) as db:
@@ -162,16 +164,44 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.message.edit_text(ABOUT_TEXT, reply_markup=help_root_kb(owner_id))
                 await cb.answer()
 
-            elif data.startswith("help:set_time:"):
+            elif data.startswith("help:notifications:") or data.startswith("help:set_time:"):
                 await cb.message.edit_text(
-                    "⏱️ Настройка времени публикации\n\n"
-                    "Выбери час, когда бот будет публиковать новый ежедневный вопрос в этом чате.\n"
-                    "Для всех участников чата время общее.\n"
-                    "Активный вариант отмечен точкой в кнопке.\n\n"
-                    f"Текущее: {chat.post_time.strftime('%H:%M')}",
-                    reply_markup=help_time_kb(owner_id, chat.post_time.hour),
+                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                    ),
                 )
                 await cb.answer()
+
+            elif data.startswith("help:notifications_on:"):
+                set_chat_notifications_enabled(db, chat_id, True)
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+                await cb.message.edit_text(
+                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                    ),
+                )
+                await cb.answer("Готово", show_alert=False)
+
+            elif data.startswith("help:notifications_off:"):
+                set_chat_notifications_enabled(db, chat_id, False)
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+                await cb.message.edit_text(
+                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                    ),
+                )
+                await cb.answer("Готово", show_alert=False)
 
             elif data.startswith("help:global_vis:"):
                 if is_private_chat:
@@ -215,7 +245,14 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 db.flush()
                 chat = upsert_chat(db, chat_id)
                 await cb.answer("Готово", show_alert=False)
-                await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id, chat.post_time.hour))
+                await cb.message.edit_text(
+                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                    ),
+                )
 
             elif data.startswith("help:delete_me:"):
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
@@ -257,7 +294,6 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 else:
                     delete_user_from_chat(db, chat_id, actor_id)
 
-                # обновить актуальный Q1 (если есть)
                 window = get_session_window(chat.timezone)
                 if not window.is_blocked_window:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)

@@ -23,6 +23,14 @@ def set_chat_global_visibility(db: Session, chat_id: int, enabled: bool) -> None
     chat.show_in_global = bool(enabled)
 
 
+def set_chat_notifications_enabled(db: Session, chat_id: int, enabled: bool) -> None:
+    chat = db.get(Chat, chat_id)
+    if chat is None:
+        chat = Chat(chat_id=chat_id)
+        db.add(chat)
+    chat.notifications_enabled = bool(enabled)
+
+
 def set_help_message(db: Session, chat_id: int, message_id: int, owner_id: int) -> None:
     chat = db.get(Chat, chat_id)
     if chat is None:

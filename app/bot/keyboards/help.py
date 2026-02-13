@@ -21,13 +21,29 @@ def help_settings_kb(owner_id: int, is_private_chat: bool = False) -> InlineKeyb
     if not is_private_chat:
         kb.row(InlineKeyboardButton(text="🧹 Удалить меня из этого чата", callback_data=f"help:delete_me_chat:{owner_id}"))
         kb.row(InlineKeyboardButton(text="👁️ Видимость чата в рейтингах", callback_data=f"help:global_vis:{owner_id}"))
-    kb.row(InlineKeyboardButton(text="⏱️ Установить время", callback_data=f"help:set_time:{owner_id}"))
+    kb.row(InlineKeyboardButton(text="🔔 Уведомления", callback_data=f"help:notifications:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
     return kb.as_markup()
 
 
-def help_time_kb(owner_id: int, current_hour: int | None = None) -> InlineKeyboardMarkup:
+def help_notifications_kb(
+    owner_id: int,
+    current_hour: int | None = None,
+    notifications_enabled: bool = True,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("✅ Уведомления включены", notifications_enabled),
+            callback_data=f"help:notifications_on:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("🚫 Уведомления выключены", not notifications_enabled),
+            callback_data=f"help:notifications_off:{owner_id}",
+        )
+    )
     kb.row(
         InlineKeyboardButton(
             text=_mark("🌅 Утро (10:00)", current_hour == 10),

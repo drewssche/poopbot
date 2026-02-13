@@ -75,7 +75,7 @@ def _render(db, chat_id: int, user_id: int, scope: str) -> str:
     if scope == SCOPE_MY:
         return build_stats_text_my(db, chat_id, user_id, today, PERIOD_ALL)
     if scope == SCOPE_CHAT:
-        return build_stats_text_chat(db, chat_id, today, PERIOD_ALL)
+        return build_stats_text_chat(db, chat_id, today, PERIOD_ALL, user_id=user_id)
     return build_stats_text_global(db, user_id, today, PERIOD_ALL)
 
 

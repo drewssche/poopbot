@@ -358,8 +358,123 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     return "\n".join(lines)
 
 
-def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -> str:
+def build_stats_text_chat(
+    db: Session, chat_id: int, today: date, period: str, user_id: int | None = None
+) -> str:
     _ = period
+    if chat_id > 0 and user_id is not None:
+        first_active_date = db.scalar(
+            select(func.min(DaySession.session_date))
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
+            )
+        )
+        if first_active_date is None:
+            return "💬 В этой личке\nПериод: за всё время\n\nПока нет данных."
+
+        r = Range(first_active_date, today)
+        sessions = _sessions_in_range(db, chat_id, r)
+        if not sessions:
+            return "💬 В этой личке\nПериод: за всё время\n\nПока нет данных."
+
+        session_ids = [s.session_id for s in sessions]
+        states = db.scalars(
+            select(SessionUserState).where(
+                SessionUserState.session_id.in_(session_ids),
+                SessionUserState.user_id == user_id,
+            )
+        ).all()
+
+        total_poops = sum(int(s.poops_n or 0) for s in states)
+        days_total = (r.end - r.start).days + 1
+        avg_per_day = (float(total_poops) / float(days_total)) if days_total > 0 else 0.0
+
+        session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
+        active_dates = sorted(
+            {
+                session_date_by_id[int(s.session_id)]
+                for s in states
+                if int(s.poops_n or 0) > 0 and int(s.session_id) in session_date_by_id
+            }
+        )
+        days_any = len(active_dates)
+        avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
+        last_mark_date = active_dates[-1] if active_dates else None
+
+        best_streak_period = 0
+        if active_dates:
+            run = 1
+            best_streak_period = 1
+            for i in range(1, len(active_dates)):
+                if active_dates[i] == active_dates[i - 1] + timedelta(days=1):
+                    run += 1
+                else:
+                    run = 1
+                best_streak_period = max(best_streak_period, run)
+
+        daily_counts: dict[date, int] = {}
+        for st in states:
+            sid = int(st.session_id)
+            if sid not in session_date_by_id:
+                continue
+            d = session_date_by_id[sid]
+            daily_counts[d] = daily_counts.get(d, 0) + int(st.poops_n or 0)
+        best_day = max(daily_counts.items(), key=lambda x: (x[1], x[0])) if daily_counts else None
+
+        events_map = _collect_events_map(db, session_ids, user_id=user_id)
+        br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+        fe = {"😇": 0, "😐": 0, "😫": 0}
+        for st in states:
+            for bristol, feeling in _iter_effective_events(st, events_map):
+                b = _bristol_bucket(bristol)
+                if b:
+                    br[b] += 1
+                f = _feeling_emoji(feeling)
+                if f:
+                    fe[f] += 1
+
+        streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
+        streak_val = int(streak.current_streak or 0) if streak else 0
+        if last_mark_date == today:
+            yesterday = today - timedelta(days=1)
+            if streak and streak.last_poop_date == yesterday:
+                streak_val = int(streak.current_streak or 0) + 1
+            else:
+                streak_val = 1
+
+        lines = [
+            "💬 В этой личке",
+            f"Период: за всё время ({_format_period(r)})",
+            "",
+            "Твои итоги:",
+            f"- Всего: 💩({total_poops})",
+            f"- Дней с 💩: {days_any}/{days_total}",
+            f"- Текущий стрик: {streak_val} дн.",
+            f"- Лучший стрик за период: {best_streak_period} дн.",
+            "",
+            "Твоя динамика:",
+            f"- В среднем в день: {avg_per_day:.2f}",
+            f"- В среднем в активный день: {avg_per_active_day:.2f}",
+            (
+                f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))"
+                if best_day
+                else "- Самый активный день: нет данных"
+            ),
+            (
+                f"- Последняя отметка: {last_mark_date.strftime('%d.%m.%y')}"
+                if last_mark_date
+                else "- Последняя отметка: нет данных"
+            ),
+            "",
+        ]
+        lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
+        lines.append("")
+        lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
+        return "\n".join(lines)
+
     r = Range(date(1970, 1, 1), today)
     first_active_date = db.scalar(
         select(func.min(DaySession.session_date))

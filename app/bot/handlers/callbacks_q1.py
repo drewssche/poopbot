@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -8,26 +8,18 @@ from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
 from app.bot.keyboards.q1 import q1_keyboard
-from app.bot.keyboards.reminder import reminder_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.models import CommandMessage, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
 from app.services.command_message_service import (
     get_any_command_message_id,
     get_command_message_id,
-    set_command_message_id,
 )
 from app.services.poop_event_service import reconcile_events_count
-from app.services.q1_service import apply_minus, apply_plus, render_q1, toggle_remind
+from app.services.q1_service import apply_minus, apply_plus, render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
 from app.services.rate_limit_service import check_rate_limit
-from app.services.reminder_service import (
-    LATE_REMINDER_COMMAND,
-    REMINDER22_COMMAND,
-    build_late_reminder_text,
-    build_reminder_22_text,
-    mark_reminder_ack,
-)
+from app.services.reminder_service import LATE_REMINDER_COMMAND, REMINDER22_COMMAND
 from app.services.repo_service import (
     ensure_chat_member,
     get_or_create_session,
@@ -77,7 +69,7 @@ def _resolve_reminder_context(db, chat_id: int, current_sess, cb: CallbackQuery,
     return is_current_by_msg_id or is_current_by_reply or is_current_by_mapping
 
 
-@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:remind", "q1:plus_reminder", "q1:plus_late"}))
+@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:plus_reminder", "q1:plus_late"}))
 async def q1_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
         return
@@ -113,7 +105,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     await cb.answer("Неактуально", show_alert=False)
                     return
                 sess = current_sess
-                set_command_message_id(db, chat_id, 0, reminder_command, sess.session_date, cb.message.message_id)
             else:
                 sess = db.scalar(
                     select(DaySession)
@@ -159,34 +150,12 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             if cb.data == "q1:minus":
                 _, popup = apply_minus(db, sess.session_id, user.id)
                 await cb.answer(popup, show_alert=False)
-
-            elif cb.data in {"q1:plus", "q1:plus_reminder", "q1:plus_late"}:
+            else:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 ok, popup = apply_plus(db, sess.session_id, user.id)
-
-                if cb.data == "q1:plus_reminder":
-                    st = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
-                    if st is not None:
-                        st.remind_22 = True
-                    mark_reminder_ack(
-                        db,
-                        chat_id=chat_id,
-                        user_id=user.id,
-                        session_date=sess.session_date,
-                        message_id=cb.message.message_id,
-                    )
-
                 if ok and now_in_tz(chat.timezone).time().hour < 11:
                     popup = "Кофейку и цигарку бахнул? Красава"
                 await cb.answer(popup, show_alert=False)
-
-            else:  # q1:remind
-                if now_in_tz(chat.timezone).time().hour >= 22:
-                    await cb.answer("После 22:00 напоминалка уже отправлена", show_alert=False)
-                else:
-                    ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
-                    _, popup = toggle_remind(db, sess.session_id, user.id)
-                    await cb.answer(popup, show_alert=False)
 
             state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
             reconcile_events_count(
@@ -200,69 +169,29 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
             has_any_members = "Участники:" in text
-            show_remind = now_in_tz(chat.timezone).time().hour < 22
             try:
                 if q1_msg_id:
                     await cb.bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=q1_msg_id,
                         text=text,
-                        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+                        reply_markup=q1_keyboard(has_any_members),
                     )
                 else:
                     sent = await cb.bot.send_message(
                         chat_id=chat_id,
                         text=text,
-                        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+                        reply_markup=q1_keyboard(has_any_members),
                     )
                     set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
-                    q1_msg_id = sent.message_id
             except TelegramBadRequest as e:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
 
-            if cb.data in {"q1:plus", "q1:plus_reminder", "q1:plus_late", "q1:minus"}:
-                try:
-                    await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-                except Exception:
-                    logger.exception("Failed to refresh Q2/Q3 after Q1 action")
-
-            if reminder22_msg_id:
-                reminder_text = build_reminder_22_text(db, sess.session_id)
-                if reminder_text:
-                    try:
-                        await cb.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=reminder22_msg_id,
-                            text=reminder_text,
-                            parse_mode="HTML",
-                            reply_markup=reminder_keyboard("q1:plus_reminder"),
-                        )
-                    except TelegramBadRequest as e:
-                        if "message is not modified" not in str(e).lower():
-                            logger.exception("Failed to edit reminder message: %s", e)
-
-            if late_msg_id:
-                late_text = build_late_reminder_text(db, sess.session_id)
-                try:
-                    if late_text:
-                        await cb.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=late_msg_id,
-                            text=late_text,
-                            parse_mode="HTML",
-                            reply_markup=reminder_keyboard("q1:plus_late"),
-                        )
-                    else:
-                        await cb.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=late_msg_id,
-                            text="✅ Все уже отметились. Хороший финиш дня.",
-                            reply_markup=None,
-                        )
-                except TelegramBadRequest as e:
-                    if "message is not modified" not in str(e).lower():
-                        logger.exception("Failed to edit late reminder message: %s", e)
+            try:
+                await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+            except Exception:
+                logger.exception("Failed to refresh Q2/Q3 after Q1 action")
     except Exception:
         logger.exception("Unhandled exception in q1_callbacks")
         try:

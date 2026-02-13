@@ -31,7 +31,6 @@ from app.services.reminder_service import (
     build_reminder_22_text,
 )
 from app.bot.keyboards.q1 import q1_keyboard
-from app.bot.keyboards.reminder import reminder_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
@@ -278,7 +277,6 @@ async def _send_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None
         text=text,
         parse_mode="HTML",
         reply_to_message_id=q1_id,
-        reply_markup=reminder_keyboard("q1:plus_reminder"),
     )
     set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, sent.message_id)
     logger.info("Sent 22:00 reminder chat_id=%s session_id=%s", chat_id, session_id)
@@ -304,7 +302,6 @@ async def _send_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> No
         text=text,
         parse_mode="HTML",
         reply_to_message_id=q1_id,
-        reply_markup=reminder_keyboard("q1:plus_late"),
     )
     set_command_message_id(db, chat_id, 0, LATE_REMINDER_COMMAND, sess.session_date, sent.message_id)
     logger.info("Sent late reminder chat_id=%s session_id=%s", chat_id, session_id)

@@ -8,14 +8,13 @@ from aiogram.types import CallbackQuery
 
 from app.bot.keyboards.stats import (
     PERIOD_ALL,
-    PERIOD_TODAY,
     SCOPE_AMONG,
     SCOPE_CHAT,
     SCOPE_GLOBAL,
     SCOPE_MY,
     stats_among_kb,
     stats_global_kb,
-    stats_period_kb,
+    stats_local_kb,
     stats_root_kb,
 )
 from app.db.engine import make_engine, make_session_factory
@@ -48,10 +47,12 @@ def _stats_root_text(show_recap: bool, is_owner_private: bool, is_private_chat: 
     text = (
         "📊 Статистика\n\n"
         "Разделы:\n"
-        "• 🙋 Моя — твоя личная статистика в контексте текущего чата.\n"
+        "• 🙋 Моя — твоя личная статистика по всем чатам (за всё время).\n"
     )
-    if not is_private_chat:
-        text += "• 👥 В этом чате — общая статистика участников текущего чата.\n"
+    if is_private_chat:
+        text += "• 💬 В этой личке — статистика только по этому личному чату (за всё время).\n"
+    else:
+        text += "• 👥 В этом чате — общая статистика участников текущего чата (за всё время).\n"
     text += (
         "• 🏟️ Среди чатов — межчатовые топы (только чаты, у которых включена видимость).\n"
         "• 🌍 Глобальная — обезличенные топы + твое место в глобальном рейтинге.\n"
@@ -64,7 +65,7 @@ def _stats_root_text(show_recap: bool, is_owner_private: bool, is_private_chat: 
     return text
 
 
-def _render(db, chat_id: int, user_id: int, scope: str, period: str) -> str:
+def _render(db, chat_id: int, user_id: int, scope: str) -> str:
     from app.db.models import Chat
 
     chat = db.get(Chat, chat_id)
@@ -72,9 +73,9 @@ def _render(db, chat_id: int, user_id: int, scope: str, period: str) -> str:
     today = now_in_tz(tz).date()
 
     if scope == SCOPE_MY:
-        return build_stats_text_my(db, chat_id, user_id, today, period)
+        return build_stats_text_my(db, chat_id, user_id, today, PERIOD_ALL)
     if scope == SCOPE_CHAT:
-        return build_stats_text_chat(db, chat_id, today, period)
+        return build_stats_text_chat(db, chat_id, today, PERIOD_ALL)
     return build_stats_text_global(db, user_id, today, PERIOD_ALL)
 
 
@@ -104,9 +105,6 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_AMONG, SCOPE_GLOBAL):
                 await cb.answer()
                 return
-            if cb.message.chat.type == "private" and scope == SCOPE_CHAT:
-                await cb.answer("В личке этот раздел скрыт", show_alert=False)
-                return
 
             if scope == SCOPE_AMONG:
                 text = await _render_among_chats(cb, db)
@@ -114,27 +112,16 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
                 return
 
             if scope == SCOPE_GLOBAL:
-                text = _render(db, chat_id, user.id, scope, PERIOD_ALL)
+                text = _render(db, chat_id, user.id, scope)
                 await _edit(cb, text, stats_global_kb(is_private_chat=(cb.message.chat.type == "private")))
                 return
 
-            text = _render(db, chat_id, user.id, scope, PERIOD_TODAY)
-            await _edit(cb, text, stats_period_kb(scope, PERIOD_TODAY))
-            return
-
-        if len(parts) == 4 and parts[1] == "period":
-            scope = parts[2]
-            period = parts[3]
-            if scope not in (SCOPE_MY, SCOPE_CHAT):
-                await cb.answer()
-                return
-
-            text = _render(db, chat_id, user.id, scope, period)
-            await _edit(cb, text, stats_period_kb(scope, period))
+            text = _render(db, chat_id, user.id, scope)
+            await _edit(cb, text, stats_local_kb())
             return
 
         if len(parts) == 3 and parts[1] == "global" and parts[2] == "me":
-            text = _render(db, chat_id, user.id, SCOPE_GLOBAL, PERIOD_ALL)
+            text = _render(db, chat_id, user.id, SCOPE_GLOBAL)
             await _edit(cb, text, stats_global_kb(is_private_chat=(cb.message.chat.type == "private")))
             return
 

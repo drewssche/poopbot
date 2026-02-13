@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from datetime import time as dtime
 
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery
 
 from app.bot.keyboards.help import (
     help_delete_chat_confirm_kb,
     help_delete_confirm_kb,
+    help_global_visibility_kb,
     help_root_kb,
     help_settings_kb,
     help_time_kb,
@@ -17,11 +18,16 @@ from app.bot.keyboards.help import (
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
-from app.services.help_service import delete_user_everywhere, delete_user_from_chat, set_chat_post_time
-from app.services.repo_service import upsert_chat, get_or_create_session, get_session_message_id
-from app.services.time_service import get_session_window, now_in_tz
+from app.services.help_service import (
+    delete_user_everywhere,
+    delete_user_from_chat,
+    set_chat_global_visibility,
+    set_chat_post_time,
+)
 from app.services.q1_service import render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
+from app.services.time_service import get_session_window, now_in_tz
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -44,37 +50,77 @@ def _parse_owner(data: str) -> int:
 def _root_text() -> str:
     return (
         "ℹ️ Помощь\n\n"
-        "💩 Основной вопрос дня:\n"
-        "• +💩 / -💩 — отметить, сколько раз сегодня сходили\n"
-        "• ⏰ — подписка/отписка на напоминалку в 22:00\n\n"
-        "🧻 Уточняющие вопросы:\n"
-        "• можно выбрать только если сегодня уже отмечали 💩 хотя бы 1 раз\n\n"
+        "Как пользоваться ботом:\n"
+        "• `+💩` / `-💩` — увеличить или уменьшить количество за текущую сессию.\n"
+        "• `⏳ Напомнить в 22:00` — включить/выключить вечернее напоминание.\n"
+        "• Уточняющие вопросы доступны, когда у тебя есть хотя бы одно `+💩` в текущей сессии.\n"
+        "• В уточняющих вопросах выбор применяется к твоему последнему походу.\n\n"
+        "Где что смотреть:\n"
+        "• `/stats` — личная, чатовая, глобальная и межчатовая статистика.\n"
+        "• `⚙️ Настройки` — время публикации, удаление данных, видимость чата в рейтингах.\n"
+        "• `🤖 О боте` — кратко о проекте и ссылка на репозиторий.\n"
     )
 
 
 def _settings_text(is_private_chat: bool) -> str:
     base = (
         "⚙️ Настройки\n\n"
-        "🗑️ Удалить меня — полностью убирает тебя из базы и статистики.\n"
+        "Что можно настроить:\n"
+        "• `🗑️ Удалить меня` — полное удаление твоего профиля и статистики из базы во всех чатах.\n"
+        "  После этого вернуться можно через `+💩` или включение напоминания, но уже с новой статистикой.\n"
     )
     if not is_private_chat:
-        base += "🧹 Удалить меня из этого чата — убирает тебя только из текущего чата.\n"
+        base += (
+            "• `🧹 Удалить меня из этого чата` — удаляет только участие в текущем чате.\n"
+            "  Данные в других чатах и личке остаются.\n"
+            "• `👁️ Видимость чата в рейтингах` — скрывает/показывает этот чат в межчатовых топах.\n"
+        )
     base += (
-        "⏱️ Установить время — меняет время автопоста ежедневных вопросов для этого чата.\n"
-        "⬅️ Назад — вернуться в меню помощи.\n"
+        "• `⏱️ Установить время` — время ежедневного поста вопросов именно для этого чата.\n"
+        "• `⬅️ Назад` — вернуться в главное меню помощи.\n"
     )
     return base
 
+
+def _global_visibility_text(enabled: bool) -> str:
+    state = "включена" if enabled else "выключена"
+    return (
+        "👁️ Видимость чата в рейтингах\n\n"
+        f"Текущий статус: {state}.\n\n"
+        "На что влияет:\n"
+        "• Раздел «Среди чатов» в /stats: этот чат будет скрыт.\n"
+        "• Межчатовые рейтинги (топы, рекорд дня, «самый жидкий/сухой чат»): чат исключается из расчета.\n\n"
+        "На что не влияет:\n"
+        "• Локальная статистика этого чата (Моя / В этом чате).\n"
+        "• Глобальная статистика пользователей внутри чата.\n"
+        "• Ежедневные вопросы и напоминания.\n"
+        "• Личный и чатовый рекапы.\n\n"
+        "Итог: переключатель скрывает чат только из межчатовой витрины, "
+        "но не отключает работу бота в самом чате."
+    )
+
+
 ABOUT_TEXT = (
     "🤖 О боте\n\n"
-    "Бот помогает вести ежедневный трекер привычки в чате: напоминает, задает вопросы и собирает статистику.\n\n"
+    "Бот ведет ежедневный трекер привычки в чате: задает вопросы, напоминает и собирает статистику.\n\n"
+    "Что умеет:\n"
+    "• ежедневная сессия с кнопками\n"
+    "• уточняющие ответы по последнему походу\n"
+    "• личная/чатовая/глобальная статистика\n"
+    "• годовые рекапы карточками\n\n"
     "Проект на GitHub:\n"
     "https://github.com/drewssche/poopbot"
 )
 
 
 def _time_text(current_time: dtime) -> str:
-    return f"⏱️ Установить время вопросов для этого чата:\n\nТекущее: {current_time.strftime('%H:%M')}"
+    return (
+        "⏱️ Установить время публикации\n\n"
+        "Это время ежедневного старта сессии для текущего чата.\n"
+        "Для всех участников чата время общее.\n"
+        "Активный вариант в кнопках отмечается точкой.\n\n"
+        f"Текущее время: {current_time.strftime('%H:%M')}"
+    )
 
 
 @router.callback_query(F.data.startswith("help:"))
@@ -83,6 +129,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
         return
 
     from app.core.config import load_settings
+
     settings = load_settings()
     init_db(settings.database_url)
 
@@ -112,23 +159,59 @@ async def help_callbacks(cb: CallbackQuery) -> None:
             elif data.startswith("help:set_time:"):
                 await cb.message.edit_text(
                     "⏱️ Настройка времени публикации\n\n"
-                    "Это время, когда бот будет отправлять ежедневный основной вопрос.\n"
-                    "Влияет только на текущий чат.\n\n"
+                    "Выбери час, когда бот будет публиковать новый ежедневный вопрос в этом чате.\n"
+                    "Для всех участников чата время общее.\n"
+                    "Активный вариант отмечен точкой в кнопке.\n\n"
                     f"Текущее: {chat.post_time.strftime('%H:%M')}",
                     reply_markup=help_time_kb(owner_id, chat.post_time.hour),
                 )
                 await cb.answer()
 
+            elif data.startswith("help:global_vis:"):
+                if is_private_chat:
+                    await cb.answer("В личке этот пункт недоступен", show_alert=False)
+                    return
+                await cb.message.edit_text(
+                    _global_visibility_text(bool(chat.show_in_global)),
+                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
+                )
+                await cb.answer()
+
+            elif data.startswith("help:global_vis_on:"):
+                if is_private_chat:
+                    await cb.answer("В личке этот пункт недоступен", show_alert=False)
+                    return
+                set_chat_global_visibility(db, chat_id, True)
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+                await cb.message.edit_text(
+                    _global_visibility_text(bool(chat.show_in_global)),
+                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
+                )
+                await cb.answer("Готово", show_alert=False)
+
+            elif data.startswith("help:global_vis_off:"):
+                if is_private_chat:
+                    await cb.answer("В личке этот пункт недоступен", show_alert=False)
+                    return
+                set_chat_global_visibility(db, chat_id, False)
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+                await cb.message.edit_text(
+                    _global_visibility_text(bool(chat.show_in_global)),
+                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
+                )
+                await cb.answer("Готово", show_alert=False)
+
             elif data.startswith("help:time:"):
                 hour = int(data.split(":")[2])
                 set_chat_post_time(db, chat_id, hour)
                 db.flush()
-                chat = upsert_chat(db, chat_id)  # заново читаем
+                chat = upsert_chat(db, chat_id)
                 await cb.answer("Готово", show_alert=False)
                 await cb.message.edit_text(_time_text(chat.post_time), reply_markup=help_time_kb(owner_id, chat.post_time.hour))
 
             elif data.startswith("help:delete_me:"):
-                owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(
                     f"⚠️ {mention}, удалить тебя из базы полностью?\n\n"
@@ -145,13 +228,12 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 if is_private_chat:
                     await cb.answer("В личке этот пункт недоступен", show_alert=False)
                     return
-                owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(
                     f"⚠️ {mention}, удалить тебя только из этого чата?\n\n"
                     "Что это значит:\n"
                     "• Удалишься только из текущего чата.\n"
-                    "• Данные в других чатах останутся.\n"
+                    "• Данные в других чатах и личке останутся.\n"
                     "• В этом чате можно вернуться позже и начать заново.",
                     reply_markup=help_delete_chat_confirm_kb(owner_id),
                 )
@@ -160,7 +242,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
             elif data.startswith("help:delete_confirm_db:") or data.startswith("help:delete_confirm_chat:"):
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
-                    await cb.answer("Это не твоё подтверждение", show_alert=False)
+                    await cb.answer("Это не твое подтверждение", show_alert=False)
                     return
 
                 is_db_delete = data.startswith("help:delete_confirm_db:")
@@ -198,9 +280,9 @@ async def help_callbacks(cb: CallbackQuery) -> None:
 
                 await cb.answer("Удалил", show_alert=False)
                 done_text = (
-                    "✅ Готово. Ты удалён из базы."
+                    "✅ Готово. Ты удален из базы."
                     if is_db_delete
-                    else "✅ Готово. Ты удалён из этого чата."
+                    else "✅ Готово. Ты удален из этого чата."
                 )
                 await cb.message.edit_text(done_text, reply_markup=help_root_kb(owner_id))
 

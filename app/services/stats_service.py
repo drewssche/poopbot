@@ -680,7 +680,7 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
     min_bristol_samples = 10
     # Exclude private dialogs (chat_id > 0), keep only group/supergroup chats.
     chat_ids = db.scalars(
-        select(Chat.chat_id).where(Chat.is_enabled == True, Chat.chat_id < 0)  # noqa: E712
+        select(Chat.chat_id).where(Chat.is_enabled == True, Chat.show_in_global == True, Chat.chat_id < 0)  # noqa: E712
     ).all()
     if not chat_ids:
         return {

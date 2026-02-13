@@ -44,6 +44,26 @@ def init_db(database_url: str) -> None:
         _session_factory = make_session_factory(_engine)
 
 
+def _stats_root_text(show_recap: bool, is_owner_private: bool, is_private_chat: bool) -> str:
+    text = (
+        "📊 Статистика\n\n"
+        "Разделы:\n"
+        "• 🙋 Моя — твоя личная статистика в контексте текущего чата.\n"
+    )
+    if not is_private_chat:
+        text += "• 👥 В этом чате — общая статистика участников текущего чата.\n"
+    text += (
+        "• 🏟️ Среди чатов — межчатовые топы (только чаты, у которых включена видимость).\n"
+        "• 🌍 Глобальная — обезличенные топы + твое место в глобальном рейтинге.\n"
+    )
+    if show_recap:
+        if is_owner_private:
+            text += "\n🎉 Рекап года доступен (для владельца всегда в личке)."
+        else:
+            text += "\n🎉 Рекап года доступен (обычно с 30 декабря по 3 января включительно)."
+    return text
+
+
 def _render(db, chat_id: int, user_id: int, scope: str, period: str) -> str:
     from app.db.models import Chat
 
@@ -95,7 +115,7 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
 
             if scope == SCOPE_GLOBAL:
                 text = _render(db, chat_id, user.id, scope, PERIOD_ALL)
-                await _edit(cb, text, stats_global_kb())
+                await _edit(cb, text, stats_global_kb(is_private_chat=(cb.message.chat.type == "private")))
                 return
 
             text = _render(db, chat_id, user.id, scope, PERIOD_TODAY)
@@ -115,7 +135,7 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
 
         if len(parts) == 3 and parts[1] == "global" and parts[2] == "me":
             text = _render(db, chat_id, user.id, SCOPE_GLOBAL, PERIOD_ALL)
-            await _edit(cb, text, stats_global_kb())
+            await _edit(cb, text, stats_global_kb(is_private_chat=(cb.message.chat.type == "private")))
             return
 
         if len(parts) == 3 and parts[1] == "back" and parts[2] == "root":
@@ -123,11 +143,14 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             tz = chat.timezone if chat else "Europe/Minsk"
             today = now_in_tz(tz).date()
             show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
+            is_owner_private = settings.bot_owner_id is not None and user.id == settings.bot_owner_id and cb.message.chat.type == "private"
             if settings.bot_owner_id is not None and user.id == settings.bot_owner_id:
                 show_recap = cb.message.chat.type == "private"
-            text = "📊 Статистика\n\nВыбери раздел:"
-            if show_recap:
-                text += "\n\n🎉 Доступен Рекап года"
+            text = _stats_root_text(
+                show_recap=show_recap,
+                is_owner_private=is_owner_private,
+                is_private_chat=(cb.message.chat.type == "private"),
+            )
             await _edit(
                 cb,
                 text,

@@ -15,6 +15,14 @@ def set_chat_post_time(db: Session, chat_id: int, hour: int) -> None:
     chat.post_time = time(hour, 0)
 
 
+def set_chat_global_visibility(db: Session, chat_id: int, enabled: bool) -> None:
+    chat = db.get(Chat, chat_id)
+    if chat is None:
+        chat = Chat(chat_id=chat_id)
+        db.add(chat)
+    chat.show_in_global = bool(enabled)
+
+
 def set_help_message(db: Session, chat_id: int, message_id: int, owner_id: int) -> None:
     chat = db.get(Chat, chat_id)
     if chat is None:

@@ -20,6 +20,7 @@ def help_settings_kb(owner_id: int, is_private_chat: bool = False) -> InlineKeyb
     kb.row(InlineKeyboardButton(text="🗑️ Удалить меня", callback_data=f"help:delete_me:{owner_id}"))
     if not is_private_chat:
         kb.row(InlineKeyboardButton(text="🧹 Удалить меня из этого чата", callback_data=f"help:delete_me_chat:{owner_id}"))
+        kb.row(InlineKeyboardButton(text="👁️ Видимость чата в рейтингах", callback_data=f"help:global_vis:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⏱️ Установить время", callback_data=f"help:set_time:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
     return kb.as_markup()
@@ -45,7 +46,7 @@ def help_time_kb(owner_id: int, current_hour: int | None = None) -> InlineKeyboa
             callback_data=f"help:time:19:{owner_id}",
         )
     )
-    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:settings:{owner_id}"))
     return kb.as_markup()
 
 
@@ -59,5 +60,23 @@ def help_delete_confirm_kb(owner_id: int) -> InlineKeyboardMarkup:
 def help_delete_chat_confirm_kb(owner_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"help:delete_confirm_chat:{owner_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:settings:{owner_id}"))
+    return kb.as_markup()
+
+
+def help_global_visibility_kb(owner_id: int, enabled: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("✅ Показывать чат в рейтингах", enabled),
+            callback_data=f"help:global_vis_on:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=_mark("🚫 Скрыть чат из рейтингов", not enabled),
+            callback_data=f"help:global_vis_off:{owner_id}",
+        )
+    )
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:settings:{owner_id}"))
     return kb.as_markup()

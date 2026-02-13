@@ -41,6 +41,41 @@ def init_db(database_url: str) -> None:
         _session_factory = make_session_factory(_engine)
 
 
+def _help_root_text() -> str:
+    return (
+        "ℹ️ Помощь\n\n"
+        "Как пользоваться ботом:\n"
+        "• `+💩` / `-💩` — увеличить или уменьшить количество за текущую сессию.\n"
+        "• `⏳ Напомнить в 22:00` — включить/выключить вечернее напоминание.\n"
+        "• Уточняющие вопросы доступны, если у тебя уже есть хотя бы одно `+💩` за сессию.\n"
+        "• В уточняющих вопросах выбор применяется к твоему последнему походу.\n\n"
+        "Куда нажимать дальше:\n"
+        "• `⚙️ Настройки` — время публикации, удаление данных, видимость чата в рейтингах.\n"
+        "• `🤖 О боте` — что умеет бот и ссылка на репозиторий.\n"
+        "• `/stats` — подробная статистика (моя, чатовая, глобальная, между чатами).\n"
+    )
+
+
+def _stats_root_text(show_recap: bool, is_owner_private: bool, is_private_chat: bool) -> str:
+    text = (
+        "📊 Статистика\n\n"
+        "Разделы:\n"
+        "• 🙋 Моя — твоя личная статистика в контексте текущего чата.\n"
+    )
+    if not is_private_chat:
+        text += "• 👥 В этом чате — общая статистика участников текущего чата.\n"
+    text += (
+        "• 🏟️ Среди чатов — межчатовые топы (только чаты, у которых включена видимость).\n"
+        "• 🌍 Глобальная — обезличенные топы + твое место в глобальном рейтинге.\n"
+    )
+    if show_recap:
+        if is_owner_private:
+            text += "\n🎉 Рекап года доступен (для владельца всегда в личке)."
+        else:
+            text += "\n🎉 Рекап года доступен (обычно с 30 декабря по 3 января включительно)."
+    return text
+
+
 @router.message(Command("start"))
 async def start_cmd(message: Message) -> None:
     if message.chat is None or message.from_user is None:
@@ -59,7 +94,7 @@ async def start_cmd(message: Message) -> None:
 
         window = get_session_window(chat.timezone)
         if window.is_blocked_window:
-            await message.answer("Новая сессия начнётся в 00:05")
+            await message.answer("Новая сессия начнется в 00:05")
             return
 
         upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
@@ -113,14 +148,7 @@ async def help_cmd(message: Message) -> None:
     chat_id = message.chat.id
     user = message.from_user
 
-    root_text = (
-        "ℹ️ Помощь\n\n"
-        "💩 Основной вопрос дня:\n"
-        "• `+💩` / `-💩` — отметить, сколько раз сегодня сходили\n"
-        "• `⏳` — подписка/отписка на напоминалку в 22:00\n\n"
-        "🧻 Уточняющие вопросы:\n"
-        "• доступны, если сегодня уже есть хотя бы одно нажатие `+💩`\n\n"
-    )
+    root_text = _help_root_text()
 
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
@@ -184,12 +212,15 @@ async def stats_cmd(message: Message) -> None:
         existing_mid = get_command_message_id(db, chat_id, user.id, "stats", today)
         is_private_chat = message.chat.type == "private"
         show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
+        is_owner_private = settings.bot_owner_id is not None and user.id == settings.bot_owner_id and is_private_chat
         if settings.bot_owner_id is not None and user.id == settings.bot_owner_id:
             show_recap = is_private_chat
 
-    text = "📊 Статистика\n\nВыбери раздел:"
-    if show_recap:
-        text += "\n\n🎉 Доступен Рекап года"
+    text = _stats_root_text(
+        show_recap=show_recap,
+        is_owner_private=is_owner_private,
+        is_private_chat=is_private_chat,
+    )
 
     if existing_mid and not is_private_chat:
         try:

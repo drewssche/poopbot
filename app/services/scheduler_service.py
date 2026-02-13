@@ -202,11 +202,6 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
                     show_remind=(local_time < time(22, 0)),
                 )
 
-        # 22:00 РЅР°РїРѕРјРёРЅР°Р»РєР° (РѕРґРёРЅ СЂР°Р·)
-        if notifications_enabled and local_time.hour == 22 and local_time.minute == 0 and not sess.reminded_22_sent:
-            await _send_reminder_22(bot, db, chat_id, sess.session_id)
-            sess.reminded_22_sent = True
-
         if notifications_enabled and local_time.hour == 23 and local_time.minute == 30:
             await _send_late_reminder(bot, db, chat_id, sess.session_id)
 

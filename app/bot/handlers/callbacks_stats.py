@@ -84,6 +84,9 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_AMONG, SCOPE_GLOBAL):
                 await cb.answer()
                 return
+            if cb.message.chat.type == "private" and scope == SCOPE_CHAT:
+                await cb.answer("В личке этот раздел скрыт", show_alert=False)
+                return
 
             if scope == SCOPE_AMONG:
                 text = await _render_among_chats(cb, db)
@@ -125,7 +128,11 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             text = "📊 Статистика\n\nВыбери раздел:"
             if show_recap:
                 text += "\n\n🎉 Доступен Рекап года"
-            await _edit(cb, text, stats_root_kb(show_recap=show_recap))
+            await _edit(
+                cb,
+                text,
+                stats_root_kb(show_recap=show_recap, is_private_chat=(cb.message.chat.type == "private")),
+            )
             return
 
     await cb.answer()

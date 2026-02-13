@@ -197,7 +197,7 @@ async def stats_cmd(message: Message) -> None:
                 chat_id=chat_id,
                 message_id=existing_mid,
                 text=text,
-                reply_markup=stats_root_kb(show_recap=show_recap),
+                reply_markup=stats_root_kb(show_recap=show_recap, is_private_chat=is_private_chat),
             )
             await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
             return
@@ -217,7 +217,7 @@ async def stats_cmd(message: Message) -> None:
             ):
                 raise
 
-    sent = await message.answer(text, reply_markup=stats_root_kb(show_recap=show_recap))
+    sent = await message.answer(text, reply_markup=stats_root_kb(show_recap=show_recap, is_private_chat=is_private_chat))
 
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)

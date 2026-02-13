@@ -52,13 +52,18 @@ def _root_text() -> str:
     )
 
 
-SETTINGS_TEXT = (
-    "⚙️ Настройки\n\n"
-    "🗑️ Удалить меня — полностью убирает тебя из базы и статистики.\n"
-    "🧹 Удалить меня из этого чата — убирает тебя только из текущего чата.\n"
-    "⏱️ Установить время — меняет время автопоста ежедневных вопросов для этого чата.\n"
-    "⬅️ Назад — вернуться в меню помощи.\n"
-)
+def _settings_text(is_private_chat: bool) -> str:
+    base = (
+        "⚙️ Настройки\n\n"
+        "🗑️ Удалить меня — полностью убирает тебя из базы и статистики.\n"
+    )
+    if not is_private_chat:
+        base += "🧹 Удалить меня из этого чата — убирает тебя только из текущего чата.\n"
+    base += (
+        "⏱️ Установить время — меняет время автопоста ежедневных вопросов для этого чата.\n"
+        "⬅️ Назад — вернуться в меню помощи.\n"
+    )
+    return base
 
 ABOUT_TEXT = (
     "🤖 О боте\n\n"
@@ -84,6 +89,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
     data = cb.data
     chat_id = cb.message.chat.id
     actor_id = cb.from_user.id
+    is_private_chat = cb.message.chat.type == "private"
 
     # owner всегда тот, кто нажал
     owner_id = actor_id
@@ -93,7 +99,10 @@ async def help_callbacks(cb: CallbackQuery) -> None:
 
         try:
             if data.startswith("help:settings:"):
-                await cb.message.edit_text(SETTINGS_TEXT, reply_markup=help_settings_kb(owner_id))
+                await cb.message.edit_text(
+                    _settings_text(is_private_chat),
+                    reply_markup=help_settings_kb(owner_id, is_private_chat=is_private_chat),
+                )
                 await cb.answer()
 
             elif data.startswith("help:about:"):
@@ -133,6 +142,9 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
             elif data.startswith("help:delete_me_chat:"):
+                if is_private_chat:
+                    await cb.answer("В личке этот пункт недоступен", show_alert=False)
+                    return
                 owner_id = actor_id
                 mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
                 await cb.message.edit_text(

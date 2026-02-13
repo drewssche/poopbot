@@ -15,10 +15,11 @@ def help_root_kb(owner_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def help_settings_kb(owner_id: int) -> InlineKeyboardMarkup:
+def help_settings_kb(owner_id: int, is_private_chat: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🗑️ Удалить меня", callback_data=f"help:delete_me:{owner_id}"))
-    kb.row(InlineKeyboardButton(text="🧹 Удалить меня из этого чата", callback_data=f"help:delete_me_chat:{owner_id}"))
+    if not is_private_chat:
+        kb.row(InlineKeyboardButton(text="🧹 Удалить меня из этого чата", callback_data=f"help:delete_me_chat:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⏱️ Установить время", callback_data=f"help:set_time:{owner_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:back:{owner_id}"))
     return kb.as_markup()

@@ -306,29 +306,32 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         else:
             streak_val = 1
 
-    rank_rows = db.execute(
-        select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
-        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
-        .where(
-            DaySession.chat_id == chat_id,
-            DaySession.session_date >= r.start,
-            DaySession.session_date <= r.end,
-        )
-        .group_by(SessionUserState.user_id)
-        .order_by(func.sum(SessionUserState.poops_n).desc())
-    ).all()
+    rank_rows = []
     rank = None
-    totals = []
-    my_total = 0
-    for idx, row in enumerate(rank_rows, start=1):
-        poops = int(row.poops or 0)
-        totals.append(poops)
-        if int(row.user_id) == user_id:
-            rank = idx
-            my_total = poops
-    above_pct = _calc_above_percent(my_total, totals) if rank is not None else None
-
-    leader = _chat_streak_leader(db, chat_id, today)
+    above_pct = None
+    leader = None
+    if chat_id < 0:
+        rank_rows = db.execute(
+            select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date >= r.start,
+                DaySession.session_date <= r.end,
+            )
+            .group_by(SessionUserState.user_id)
+            .order_by(func.sum(SessionUserState.poops_n).desc())
+        ).all()
+        totals = []
+        my_total = 0
+        for idx, row in enumerate(rank_rows, start=1):
+            poops = int(row.poops or 0)
+            totals.append(poops)
+            if int(row.user_id) == user_id:
+                rank = idx
+                my_total = poops
+        above_pct = _calc_above_percent(my_total, totals) if rank is not None else None
+        leader = _chat_streak_leader(db, chat_id, today)
 
     lines = [
         "🙋‍♂️ Моя статистика",
@@ -351,7 +354,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             "",
         ]
     )
-    if rank is not None:
+    if chat_id < 0 and rank is not None:
         lines.extend(
             [
                 "Твоя позиция в чате:",
@@ -361,7 +364,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             ]
         )
 
-    if leader is not None:
+    if chat_id < 0 and leader is not None:
         leader_user, leader_days, leader_user_id = leader
         lines.extend(
             [

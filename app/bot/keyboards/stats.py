@@ -20,10 +20,11 @@ def _mark(label: str, active: bool) -> str:
     return f"• {label}" if active else label
 
 
-def stats_root_kb(show_recap: bool = False) -> InlineKeyboardMarkup:
+def stats_root_kb(show_recap: bool = False, is_private_chat: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🙋‍♂️ Моя", callback_data=f"stats:open:{SCOPE_MY}"))
-    kb.row(InlineKeyboardButton(text="👥 В этом чате", callback_data=f"stats:open:{SCOPE_CHAT}"))
+    if not is_private_chat:
+        kb.row(InlineKeyboardButton(text="👥 В этом чате", callback_data=f"stats:open:{SCOPE_CHAT}"))
     kb.row(InlineKeyboardButton(text="🏟️ Среди чатов", callback_data=f"stats:open:{SCOPE_AMONG}"))
     kb.row(InlineKeyboardButton(text="🌍 Глобальная", callback_data=f"stats:open:{SCOPE_GLOBAL}"))
     if show_recap:

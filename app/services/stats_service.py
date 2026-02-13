@@ -617,34 +617,35 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
     session_ids = [s.session_id for s in sessions]
 
-    users_count = db.scalar(
-        select(func.count(func.distinct(SessionUserState.user_id))).where(SessionUserState.session_id.in_(session_ids))
-    ) or 0
-
-    total_poops = db.scalar(
-        select(func.coalesce(func.sum(SessionUserState.poops_n), 0)).where(SessionUserState.session_id.in_(session_ids))
-    ) or 0
-    avg_per_user = (float(total_poops) / float(users_count)) if int(users_count) > 0 else 0.0
-
-    agg = db.execute(
-        select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
-        .where(SessionUserState.session_id.in_(session_ids))
-        .group_by(SessionUserState.user_id)
-        .order_by(func.sum(SessionUserState.poops_n).desc())
+    # Deduplicate cross-chat marks for global totals:
+    # for each (user, date) keep max poops_n among chats.
+    day_user_rows = db.execute(
+        select(DaySession.session_date, SessionUserState.user_id, SessionUserState.poops_n, SessionUserState.session_id)
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids))
     ).all()
+    per_user_day_max: dict[tuple[int, date], int] = {}
+    for row in day_user_rows:
+        key = (int(row.user_id), row.session_date)
+        poops = int(row.poops_n or 0)
+        prev = per_user_day_max.get(key)
+        if prev is None or poops > prev:
+            per_user_day_max[key] = poops
 
-    my_total = 0
-    my_rank = None
-    totals: list[int] = []
-    for idx, row in enumerate(agg, start=1):
-        poops = int(row.poops or 0)
-        totals.append(poops)
-        if int(row.user_id) == user_id:
-            my_rank = idx
-            my_total = poops
+    per_user_total: dict[int, int] = {}
+    for (uid, _day), poops in per_user_day_max.items():
+        per_user_total[uid] = per_user_total.get(uid, 0) + poops
 
+    users_count = len(per_user_total)
+    total_poops = sum(per_user_total.values())
+    avg_per_user = (float(total_poops) / float(users_count)) if users_count > 0 else 0.0
+
+    ranking_rows = sorted(per_user_total.items(), key=lambda x: (-x[1], x[0]))
+    totals = [poops for _, poops in ranking_rows]
+    my_total = per_user_total.get(user_id, 0)
+    my_rank = next((idx for idx, (uid, _) in enumerate(ranking_rows, start=1) if uid == user_id), None)
     above_pct = _calc_above_percent(my_total, totals) if my_rank is not None else None
-    top5 = [(TOP5_ROLES[i], int(row.poops or 0)) for i, row in enumerate(agg[:5])]
+    top5 = [(TOP5_ROLES[i], poops) for i, (_uid, poops) in enumerate(ranking_rows[:5])]
 
     streak_rows = db.execute(
         select(UserStreak.chat_id, UserStreak.user_id, UserStreak.current_streak, UserStreak.last_poop_date)
@@ -657,20 +658,34 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         ).all()
     )
     yesterday = today - timedelta(days=1)
-    projected_streaks: list[tuple[int, int]] = []
+    projected_streaks_by_user: dict[int, int] = {}
     for row in streak_rows:
         projected = int(row.current_streak or 0)
         if (row.chat_id, row.user_id) in today_positive:
             projected = projected + 1 if row.last_poop_date == yesterday else 1
         if projected > 0:
-            projected_streaks.append((int(row.user_id), projected))
+            uid = int(row.user_id)
+            best = projected_streaks_by_user.get(uid, 0)
+            if projected > best:
+                projected_streaks_by_user[uid] = projected
 
-    states_pos = db.scalars(
-        select(SessionUserState).where(
-            SessionUserState.session_id.in_(session_ids),
-            SessionUserState.poops_n > 0,
-        )
-    ).all()
+    states_pos = db.scalars(select(SessionUserState).where(SessionUserState.session_id.in_(session_ids))).all()
+    session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
+    canonical_state_by_user_day: dict[tuple[int, date], SessionUserState] = {}
+    for st in states_pos:
+        sid = int(st.session_id)
+        d = session_date_by_id.get(sid)
+        if d is None:
+            continue
+        key = (int(st.user_id), d)
+        curr = canonical_state_by_user_day.get(key)
+        if curr is None:
+            canonical_state_by_user_day[key] = st
+            continue
+        curr_key = (int(curr.poops_n or 0), int(curr.session_id))
+        new_key = (int(st.poops_n or 0), int(st.session_id))
+        if new_key > curr_key:
+            canonical_state_by_user_day[key] = st
 
     events_map = _collect_events_map(db, session_ids)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
@@ -678,7 +693,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     user_br_scores: dict[int, list[int]] = {}
     user_fe_scores: dict[int, list[int]] = {}
 
-    for st in states_pos:
+    for st in canonical_state_by_user_day.values():
         uid = int(st.user_id)
         for bristol, feeling in _iter_effective_events(st, events_map):
             b = _bristol_bucket(bristol)
@@ -736,7 +751,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("- пока нет данных")
 
     lines.extend(["", "Лидеры стриков:"])
-    top_streaks = sorted(projected_streaks, key=lambda x: (-x[1], x[0]))[:3]
+    top_streaks = sorted(projected_streaks_by_user.items(), key=lambda x: (-x[1], x[0]))[:3]
     if not top_streaks:
         lines.append("- пока нет данных")
     else:
@@ -747,7 +762,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     if my_rank is None:
         lines.append("- пока не видно в глобальном рейтинге")
     else:
-        lines.append(f"- Место: #{my_rank} из {len(agg)}")
+        lines.append(f"- Место: #{my_rank} из {len(ranking_rows)}")
         lines.append(f"- Всего: 💩({my_total})")
         if above_pct is not None:
             lines.append(f"- Выше {above_pct}% участников")

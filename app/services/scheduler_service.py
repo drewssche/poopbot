@@ -96,9 +96,10 @@ async def _safe_send_message(bot: Bot, **kwargs):
 
 async def _safe_edit_message_text(bot: Bot, **kwargs):
     """
-    РџС‹С‚Р°РµРјСЃСЏ 3 СЂР°Р·Р°. РќРµ РІР°Р»РёРјСЃСЏ РЅР°:
+    Retry edit up to 3 times.
+    Do not fail hard on:
     - message is not modified
-    - message not found / to edit not found (РєРѕРіРґР° СѓРґР°Р»РёР»Рё СЂСѓРєР°РјРё)
+    - message not found / to edit not found (message removed manually)
     """
     for _ in range(3):
         try:
@@ -174,7 +175,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
 
         sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
-        # 23:55 вЂ” Р·Р°РєСЂС‹С‚СЊ
+        # 23:55 - close session
         if local_time >= close_cutoff:
             if sess.status != "closed":
                 await _close_session(bot, db, chat_id, sess.session_id, chat.timezone)
@@ -183,7 +184,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         if sess.status == "closed":
             return
 
-        # 23:55вЂ“00:05 (blocked window): РЅРёС‡РµРіРѕ РЅРµ РїРѕСЃС‚РёРј
+        # 23:55-00:05 blocked window: do not post anything
         if window.is_blocked_window:
             return
 
@@ -422,7 +423,7 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
         return
 
     text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=session_date)
-    has_any_members = "РЈС‡Р°СЃС‚РЅРёРєРё:" in text
+    has_any_members = "Участники:" in text
     chat = db.get(Chat, chat_id)
     show_remind = True
     if chat is not None:
@@ -578,4 +579,3 @@ async def _send_holiday_notice_if_needed(bot: Bot, db, chat_id: int, session_id:
 
     sent = await _safe_send_message(bot, chat_id=chat_id, text=holiday_text)
     set_command_message_id(db, chat_id, 0, "holiday_notice", local_date, sent.message_id)
-

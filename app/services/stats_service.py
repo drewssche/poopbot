@@ -233,13 +233,12 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         )
     )
     if first_active_date is None:
-        r = Range(today, today)
-    else:
-        r = Range(first_active_date, today)
+        return "🙋 Моя статистика\nПериод: за всё время (по всем чатам)\n\nПока нет данных."
 
+    r = Range(first_active_date, today)
     sessions = _sessions_in_range(db, None, r)
     if not sessions:
-        return f"?? ??? ??????????\n?????: ??? ????\n??????: {_format_period(r)}\n\n???? ?????."
+        return "🙋 Моя статистика\nПериод: за всё время (по всем чатам)\n\nПока нет данных."
 
     session_ids = [s.session_id for s in sessions]
     states = db.scalars(
@@ -286,8 +285,8 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     best_day = max(daily_counts.items(), key=lambda x: (x[1], x[0])) if daily_counts else None
 
     events_map = _collect_events_map(db, session_ids, user_id=user_id)
-    br = {"??": 0, "??": 0, "??": 0, "??": 0}
-    fe = {"??": 0, "??": 0, "??": 0}
+    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+    fe = {"😇": 0, "😐": 0, "😫": 0}
     for st in states:
         for bristol, feeling in _iter_effective_events(st, events_map):
             b = _bristol_bucket(bristol)
@@ -319,34 +318,34 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         streak_val = max(streak_val, projected)
 
     lines = [
-        "?? ??? ??????????",
-        "?????: ??? ????",
-        f"??????: {_format_period(r)}" + (" (? ??????? ??? ??????????)" if first_active_date else ""),
+        "🙋 Моя статистика",
+        "Период: за всё время (по всем чатам)",
+        f"Диапазон: {_format_period(r)}",
         "",
-        "???? ?????:",
-        f"- ?????: ??({total_poops})",
-        f"- ???? ? ??: {days_any}/{days_total}",
-        f"- ??????? ?????: {streak_val} ??.",
-        f"- ?????? ????? ?? ??????: {best_streak_period} ??.",
+        "Твои итоги:",
+        f"- Всего: 💩({total_poops})",
+        f"- Дней с 💩: {days_any}/{days_total}",
+        f"- Текущий стрик: {streak_val} дн.",
+        f"- Лучший стрик за период: {best_streak_period} дн.",
         "",
-        "???? ????????:",
-        f"- ? ??????? ? ????: {avg_per_day:.2f}",
-        f"- ? ??????? ? ???????? ????: {avg_per_active_day:.2f}",
+        "Твоя динамика:",
+        f"- В среднем в день: {avg_per_day:.2f}",
+        f"- В среднем в активный день: {avg_per_active_day:.2f}",
         (
-            f"- ????? ???????? ????: {best_day[0].strftime('%d.%m.%y')} (??({best_day[1]}))"
+            f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))"
             if best_day
-            else "- ????? ???????? ????: ??? ??????"
+            else "- Самый активный день: нет данных"
         ),
         (
-            f"- ????????? ???????: {last_mark_date.strftime('%d.%m.%y')}"
+            f"- Последняя отметка: {last_mark_date.strftime('%d.%m.%y')}"
             if last_mark_date
-            else "- ????????? ???????: ??? ??????"
+            else "- Последняя отметка: нет данных"
         ),
         "",
     ]
-    lines.extend(_format_dist_block("????????:", br, BRISTOL_LEGEND))
+    lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
-    lines.extend(_format_dist_block("????????:", fe, FEELING_LEGEND))
+    lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
     return "\n".join(lines)
 
 
@@ -366,7 +365,7 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
 
     sessions = _sessions_in_range(db, chat_id, r)
     if not sessions:
-        return f"?? ? ???? ????\n??????: {_format_period(r)}\n\n???? ?????."
+        return f"👥 В этом чате\nПериод: за всё время ({_format_period(r)})\n\nПока пусто."
 
     session_ids = [s.session_id for s in sessions]
 
@@ -401,8 +400,8 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
     ).all()
 
     events_map = _collect_events_map(db, session_ids)
-    br = {"??": 0, "??": 0, "??": 0, "??": 0}
-    fe = {"??": 0, "??": 0, "??": 0}
+    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+    fe = {"😇": 0, "😐": 0, "😫": 0}
     for st in states_pos:
         for bristol, feeling in _iter_effective_events(st, events_map):
             b = _bristol_bucket(bristol)
@@ -443,44 +442,44 @@ def build_stats_text_chat(db: Session, chat_id: int, today: date, period: str) -
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()} if user_ids else {}
 
     lines = [
-        "?? ? ???? ????",
-        f"??????: {_format_period(r)}" + (" (? ??????? ??? ??????????)" if first_active_date else ""),
+        "👥 В этом чате",
+        f"Период: за всё время ({_format_period(r)})",
         "",
-        "??????:",
-        f"- ?????: ??({total_poops})",
-        f"- ???????? ??????????: {active_participants}",
-        f"- ??????? ?? ?????????: {avg_per_participant:.2f}",
-        f"- ???? ? ???????????: {active_days_count}/{period_days}",
-        f"- ??????? ? ???????? ????: {avg_per_active_day:.2f}",
+        "Итоги:",
+        f"- Всего: 💩({total_poops})",
+        f"- Активных участников: {active_participants}",
+        f"- Среднее на участника: {avg_per_participant:.2f}",
+        f"- Дней с активностью: {active_days_count}/{period_days}",
+        f"- Среднее в активный день: {avg_per_active_day:.2f}",
         (
-            f"- ??????? ????: {peak_day[0].strftime('%d.%m.%y')} (??({peak_day[1]}))"
+            f"- Пиковый день: {peak_day[0].strftime('%d.%m.%y')} (💩({peak_day[1]}))"
             if peak_day is not None
-            else "- ??????? ????: ??? ??????"
+            else "- Пиковый день: нет данных"
         ),
         "",
-        "???-5 ?? ??????????:",
+        "Топ-5 по количеству:",
     ]
 
     if top_rows:
         for idx, row in enumerate(top_rows, start=1):
             user = users.get(int(row.user_id))
-            lines.append(f"- {idx}) {_display_name(user, int(row.user_id))} ? ??({int(row.poops or 0)})")
+            lines.append(f"- {idx}) {_display_name(user, int(row.user_id))} — 💩({int(row.poops or 0)})")
     else:
-        lines.append("- ???? ????? ?? ??????????")
+        lines.append("- пока никого в рейтинге")
 
     lines.append("")
-    lines.append("???-3 ?? ??????:")
+    lines.append("Топ-3 по стрику:")
     if streak_top3:
         for idx, (uid, days) in enumerate(streak_top3, start=1):
             user = users.get(uid)
-            lines.append(f"- {idx}) {_streak_nickname(days)} ? {_display_name(user, uid)} ({days} ??.)")
+            lines.append(f"- {idx}) {_streak_nickname(days)} — {_display_name(user, uid)} ({days} дн.)")
     else:
-        lines.append("- ???? ??? ???????? ???????")
+        lines.append("- пока нет активных стриков")
 
     lines.append("")
-    lines.extend(_format_dist_block("????????:", br, BRISTOL_LEGEND))
+    lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
-    lines.extend(_format_dist_block("????????:", fe, FEELING_LEGEND))
+    lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
     return "\n".join(lines)
 
 
@@ -490,7 +489,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
     sessions = _sessions_in_range(db, None, all_time)
     if not sessions:
-        return "?? ?????????? ??????????\n??????: ?? ??? ?????\n\n???? ?????."
+        return "🌍 Глобальная статистика\nПериод: за всё время\n\nПока пусто."
 
     session_ids = [s.session_id for s in sessions]
 
@@ -550,8 +549,8 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     ).all()
 
     events_map = _collect_events_map(db, session_ids)
-    br = {"??": 0, "??": 0, "??": 0, "??": 0}
-    fe = {"??": 0, "??": 0, "??": 0}
+    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+    fe = {"😇": 0, "😐": 0, "😫": 0}
     user_br_scores: dict[int, list[int]] = {}
     user_fe_scores: dict[int, list[int]] = {}
 
@@ -595,55 +594,55 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     me_name = _display_name(me, user_id)
 
     lines = [
-        "?? ?????????? ??????????",
-        "??????: ?? ??? ?????",
+        "🌍 Глобальная статистика",
+        "Период: за всё время",
         "",
-        "?????:",
-        f"- ??????????: {int(users_count)}",
-        f"- ?????: ??({int(total_poops)})",
-        f"- ?? 1 ?????????: {avg_per_user:.2f}",
+        "Итоги:",
+        f"- Участников: {int(users_count)}",
+        f"- Всего: 💩({int(total_poops)})",
+        f"- 💩 на 1 участника: {avg_per_user:.2f}",
         "",
-        "???-5:",
+        "Топ-5:",
     ]
 
     if top5:
         for role, poops in top5:
-            lines.append(f"- {role} ? ??({poops})")
+            lines.append(f"- {role} — 💩({poops})")
     else:
-        lines.append("- ???? ??? ??????")
+        lines.append("- пока нет данных")
 
-    lines.extend(["", "??????? ??????:"])
+    lines.extend(["", "Лидеры стриков:"])
     top_streaks = sorted(projected_streaks, key=lambda x: (-x[1], x[0]))[:3]
     if not top_streaks:
-        lines.append("- ???? ??? ??????")
+        lines.append("- пока нет данных")
     else:
         for idx, (_, days) in enumerate(top_streaks, start=1):
-            lines.append(f"- #{idx} {_streak_nickname(int(days))} ? {int(days)} ??.")
+            lines.append(f"- #{idx} {_streak_nickname(int(days))} — {int(days)} дн.")
 
-    lines.extend(["", "???? ????? ? ????:", f"- {me_name}"])
+    lines.extend(["", "Твоя позиция:", f"- {me_name}"])
     if my_rank is None:
-        lines.append("- ???? ??? ?????? ?? ??? ?????")
+        lines.append("- пока не видно в глобальном рейтинге")
     else:
-        lines.append(f"- ?????: #{my_rank} ?? {len(agg)}")
-        lines.append(f"- ?????: ??({my_total})")
+        lines.append(f"- Место: #{my_rank} из {len(agg)}")
+        lines.append(f"- Всего: 💩({my_total})")
         if above_pct is not None:
-            lines.append(f"- ???? {above_pct}% ??????????")
+            lines.append(f"- Выше {above_pct}% участников")
 
     lines.append("")
-    lines.extend(_format_dist_block("????????:", br, BRISTOL_LEGEND))
+    lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
-    lines.extend(_format_dist_block("????????:", fe, FEELING_LEGEND))
+    lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
 
-    lines.extend(["", "???? ????????:"])
+    lines.extend(["", "Твои распределения:"])
     if my_br_pct is None or my_br_icon is None:
-        lines.append("- ????????: ??? ??????")
+        lines.append("- Бристоль: нет данных")
     else:
-        lines.append(f"- ????????: {my_br_icon} (???? {my_br_pct}%)")
+        lines.append(f"- Бристоль: {my_br_icon} (выше {my_br_pct}%)")
 
     if my_fe_pct is None or my_fe_icon is None:
-        lines.append("- ????????: ??? ??????")
+        lines.append("- Ощущения: нет данных")
     else:
-        lines.append(f"- ????????: {my_fe_icon} (???? {my_fe_pct}%)")
+        lines.append(f"- Ощущения: {my_fe_icon} (выше {my_fe_pct}%)")
 
     return "\n".join(lines)
 

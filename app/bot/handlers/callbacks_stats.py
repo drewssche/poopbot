@@ -20,6 +20,7 @@ from app.bot.keyboards.stats import (
 )
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
+from app.services.recap_service import is_recap_available
 from app.services.repo_service import upsert_chat, upsert_user
 from app.services.stats_service import (
     build_stats_text_chat,
@@ -63,6 +64,7 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
         return
 
     from app.core.config import load_settings
+    from app.db.models import Chat
 
     settings = load_settings()
     init_db(settings.database_url)
@@ -77,7 +79,6 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
 
         parts = data.split(":")
 
-        # stats:open:{scope}
         if len(parts) == 3 and parts[1] == "open":
             scope = parts[2]
             if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_AMONG, SCOPE_GLOBAL):
@@ -98,7 +99,6 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             await _edit(cb, text, stats_period_kb(scope, PERIOD_TODAY))
             return
 
-        # stats:period:{scope}:{period}
         if len(parts) == 4 and parts[1] == "period":
             scope = parts[2]
             period = parts[3]
@@ -110,15 +110,22 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             await _edit(cb, text, stats_period_kb(scope, period))
             return
 
-        # stats:global:me
         if len(parts) == 3 and parts[1] == "global" and parts[2] == "me":
             text = _render(db, chat_id, user.id, SCOPE_GLOBAL, PERIOD_ALL)
             await _edit(cb, text, stats_global_kb())
             return
 
-        # stats:back:root
         if len(parts) == 3 and parts[1] == "back" and parts[2] == "root":
-            await _edit(cb, "📊 Статистика\n\nВыбери раздел:", stats_root_kb())
+            chat = db.get(Chat, chat_id)
+            tz = chat.timezone if chat else "Europe/Minsk"
+            today = now_in_tz(tz).date()
+            show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
+            if settings.bot_owner_id is not None and user.id == settings.bot_owner_id:
+                show_recap = cb.message.chat.type == "private"
+            text = "📊 Статистика\n\nВыбери раздел:"
+            if show_recap:
+                text += "\n\n🎉 Доступен Рекап года"
+            await _edit(cb, text, stats_root_kb(show_recap=show_recap))
             return
 
     await cb.answer()
@@ -138,6 +145,10 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
     ids.update(chat_id for chat_id, _ in snap["top_streak"])
     if snap["record_day"] is not None:
         ids.add(snap["record_day"][0])
+    if snap.get("most_liquid") is not None:
+        ids.add(snap["most_liquid"][0])
+    if snap.get("most_dry") is not None:
+        ids.add(snap["most_dry"][0])
 
     names: dict[int, str] = {}
     for cid in ids:
@@ -184,6 +195,23 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
         lines.append(f"- {chat_name(cid)} — {d.strftime('%d.%m.%y')} (💩({poops}))")
     else:
         lines.append("- пока нет данных")
+
+    lines.extend(["", "Бристоль-экстрим:"])
+    most_liquid = snap.get("most_liquid")
+    most_dry = snap.get("most_dry")
+    min_samples = int(snap.get("min_bristol_samples", 10))
+    if most_liquid is None:
+        lines.append(f"- 🥤 Самый жидкий чат: недостаточно данных (нужно минимум {min_samples} оценок)")
+    else:
+        cid, share, _liquid_n, total_n = most_liquid
+        pct = int(round(float(share) * 100))
+        lines.append(f"- 🥤 Самый жидкий чат: {chat_name(cid)} — {pct}% (6–7), оценок: {total_n}")
+    if most_dry is None:
+        lines.append(f"- 🥨 Самый сухой чат: недостаточно данных (нужно минимум {min_samples} оценок)")
+    else:
+        cid, share, _dry_n, total_n = most_dry
+        pct = int(round(float(share) * 100))
+        lines.append(f"- 🥨 Самый сухой чат: {chat_name(cid)} — {pct}% (1–2), оценок: {total_n}")
 
     return "\n".join(lines)
 

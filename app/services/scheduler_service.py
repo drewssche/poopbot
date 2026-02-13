@@ -32,6 +32,7 @@ from app.services.reminder_service import (
 )
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.reminder import reminder_keyboard
+from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
 _streak_recalc_date: dict[int, date] = {}
@@ -221,6 +222,23 @@ async def _post_q1(
     session_date,
     show_remind: bool = True,
 ) -> None:
+    if session_date.month == 12 and session_date.day == 30:
+        sent_recap_mid = get_command_message_id(db, chat_id, 0, "recap_announce", session_date)
+        if sent_recap_mid is None:
+            recap_text = (
+                "🎉 Доступен рекап года.\nЗапустить можно этой кнопкой или через `/stats`."
+                if chat_id > 0
+                else "🎉 Доступен рекап года. Забирай итоги!"
+            )
+            recap_sent = await _safe_send_message(
+                bot,
+                chat_id=chat_id,
+                text=recap_text,
+                reply_markup=recap_announce_kb(),
+            )
+            # System marker: sent once per chat/day
+            set_command_message_id(db, chat_id, 0, "recap_announce", session_date, recap_sent.message_id)
+
     member_count = db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id)) or 0
     has_any_members = member_count > 0
 

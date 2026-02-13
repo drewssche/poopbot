@@ -8,6 +8,7 @@ class Settings:
     database_url: str
     log_level: str = "INFO"
     app_env: str = "dev"
+    bot_owner_id: int | None = None
 
 
 def load_settings() -> Settings:
@@ -24,4 +25,5 @@ def load_settings() -> Settings:
         database_url=database_url,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
         app_env=os.getenv("APP_ENV", "dev").strip(),
+        bot_owner_id=int(owner) if (owner := os.getenv("BOT_OWNER_ID", "").strip()).isdigit() else None,
     )

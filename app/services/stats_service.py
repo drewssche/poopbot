@@ -674,6 +674,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
 
 def collect_among_chats_snapshot(db: Session, today: date) -> dict:
+    min_bristol_samples = 10
     # Exclude private dialogs (chat_id > 0), keep only group/supergroup chats.
     chat_ids = db.scalars(
         select(Chat.chat_id).where(Chat.is_enabled == True, Chat.chat_id < 0)  # noqa: E712
@@ -684,6 +685,8 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
             "top_avg": [],
             "top_streak": [],
             "record_day": None,
+            "most_liquid": None,
+            "most_dry": None,
         }
 
     sessions = db.scalars(select(DaySession).where(DaySession.chat_id.in_(chat_ids))).all()
@@ -693,6 +696,8 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
             "top_avg": [],
             "top_streak": [],
             "record_day": None,
+            "most_liquid": None,
+            "most_dry": None,
         }
 
     session_ids = [int(s.session_id) for s in sessions]
@@ -759,9 +764,50 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
         if int(best.poops or 0) > 0:
             record_day = (int(best.chat_id), best.session_date, int(best.poops or 0))
 
+    bristol_rows = db.execute(
+        select(DaySession.chat_id, PoopEvent.bristol)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id.in_(chat_ids),
+            PoopEvent.bristol.is_not(None),
+        )
+    ).all()
+    bristol_by_chat: dict[int, dict[str, int]] = {}
+    for chat_id, bristol in bristol_rows:
+        cid = int(chat_id)
+        b = int(bristol)
+        bucket = bristol_by_chat.setdefault(cid, {"total": 0, "liquid": 0, "dry": 0})
+        bucket["total"] += 1
+        if b >= 6:
+            bucket["liquid"] += 1
+        if b <= 2:
+            bucket["dry"] += 1
+
+    most_liquid = None
+    most_dry = None
+    liquid_candidates: list[tuple[int, float, int, int]] = []
+    dry_candidates: list[tuple[int, float, int, int]] = []
+    for cid, v in bristol_by_chat.items():
+        total = int(v["total"])
+        if total < min_bristol_samples:
+            continue
+        liquid = int(v["liquid"])
+        dry = int(v["dry"])
+        liquid_share = (float(liquid) / float(total)) if total > 0 else 0.0
+        dry_share = (float(dry) / float(total)) if total > 0 else 0.0
+        liquid_candidates.append((cid, liquid_share, liquid, total))
+        dry_candidates.append((cid, dry_share, dry, total))
+    if liquid_candidates:
+        most_liquid = max(liquid_candidates, key=lambda x: (x[1], x[2], -x[0]))
+    if dry_candidates:
+        most_dry = max(dry_candidates, key=lambda x: (x[1], x[2], -x[0]))
+
     return {
         "top_total": top_total,
         "top_avg": top_avg,
         "top_streak": top_streak,
         "record_day": record_day,
+        "most_liquid": most_liquid,
+        "most_dry": most_dry,
+        "min_bristol_samples": min_bristol_samples,
     }

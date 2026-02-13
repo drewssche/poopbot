@@ -41,7 +41,7 @@ def init_db(database_url: str) -> None:
         _session_factory = make_session_factory(_engine)
 
 
-def _help_root_text() -> str:
+def _help_root_text(tz_name: str) -> str:
     return (
         "ℹ️ Помощь\n\n"
         "Как пользоваться ботом:\n"
@@ -53,6 +53,12 @@ def _help_root_text() -> str:
         "• `⚙️ Настройки` — время публикации, удаление данных, видимость чата в рейтингах.\n"
         "• `🤖 О боте` — что умеет бот и ссылка на репозиторий.\n"
         "• `/stats` — подробная статистика (моя, чатовая, глобальная, между чатами).\n"
+        "\n"
+        "Как работает сессия:\n"
+        f"• Таймзона этого чата: `{tz_name}`.\n"
+        "• Активная сессия: `00:05–23:55` по локальному времени чата.\n"
+        "• Техническое окно: `23:55–00:05` — сессия закрывается/открывается, кнопки могут быть недоступны.\n"
+        "• Напоминание в 22:00 и автопост вопросов работают в таймзоне чата.\n"
     )
 
 
@@ -148,14 +154,13 @@ async def help_cmd(message: Message) -> None:
     chat_id = message.chat.id
     user = message.from_user
 
-    root_text = _help_root_text()
-
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         window = get_session_window(chat.timezone)
         session_date = window.session_date
         existing_mid = get_any_command_message_id(db, chat_id, "help", session_date)
         is_private_chat = message.chat.type == "private"
+        root_text = _help_root_text(chat.timezone)
 
     if existing_mid and not is_private_chat:
         try:

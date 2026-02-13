@@ -34,14 +34,8 @@ def help_notifications_kb(
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(
-            text=_mark("✅ Уведомления включены", notifications_enabled),
-            callback_data=f"help:notifications_on:{owner_id}",
-        )
-    )
-    kb.row(
-        InlineKeyboardButton(
-            text=_mark("🚫 Уведомления выключены", not notifications_enabled),
-            callback_data=f"help:notifications_off:{owner_id}",
+            text="🔔 Уведомления: Вкл" if notifications_enabled else "🔕 Уведомления: Выкл",
+            callback_data=f"help:notifications_toggle:{owner_id}",
         )
     )
     kb.row(
@@ -84,14 +78,8 @@ def help_global_visibility_kb(owner_id: int, enabled: bool) -> InlineKeyboardMar
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(
-            text=_mark("✅ Показывать чат в рейтингах", enabled),
-            callback_data=f"help:global_vis_on:{owner_id}",
-        )
-    )
-    kb.row(
-        InlineKeyboardButton(
-            text=_mark("🚫 Скрыть чат из рейтингов", not enabled),
-            callback_data=f"help:global_vis_off:{owner_id}",
+            text="👁️ Видимость в рейтингах: Вкл" if enabled else "🙈 Видимость в рейтингах: Выкл",
+            callback_data=f"help:global_vis_toggle:{owner_id}",
         )
     )
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"help:settings:{owner_id}"))

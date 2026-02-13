@@ -90,9 +90,9 @@ def _settings_text(is_private_chat: bool) -> str:
 
 def _notifications_text(enabled: bool, post_time_text: str) -> str:
     status_line = (
-        f"Текущий статус: включены (время публикации: {post_time_text})."
+        f"Текущий статус: <b>включены</b> (время публикации: <b>{post_time_text}</b>)."
         if enabled
-        else "Текущий статус: выключены."
+        else "Текущий статус: <b>выключены</b>."
     )
     return (
         "🔔 Уведомления\n\n"
@@ -109,7 +109,7 @@ def _global_visibility_text(enabled: bool) -> str:
     state = "включена" if enabled else "выключена"
     return (
         "👁️ Видимость чата в рейтингах\n\n"
-        f"Текущий статус: {state}.\n\n"
+        f"Текущий статус: <b>{state}</b>.\n\n"
         "На что влияет:\n"
         "• Раздел «Среди чатов» в /stats: этот чат будет скрыт.\n"
         "• Межчатовые рейтинги (топы, рекорд дня, «самый жидкий/сухой чат»): чат исключается из расчета.\n\n"
@@ -170,6 +170,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
             elif data.startswith("help:notifications:") or data.startswith("help:set_time:"):
                 await cb.message.edit_text(
                     _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,
@@ -178,26 +179,17 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 )
                 await cb.answer()
 
-            elif data.startswith("help:notifications_on:"):
-                set_chat_notifications_enabled(db, chat_id, True)
+            elif (
+                data.startswith("help:notifications_toggle:")
+                or data.startswith("help:notifications_on:")
+                or data.startswith("help:notifications_off:")
+            ):
+                set_chat_notifications_enabled(db, chat_id, not bool(chat.notifications_enabled))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
                 await cb.message.edit_text(
                     _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                    ),
-                )
-                await cb.answer("Готово", show_alert=False)
-
-            elif data.startswith("help:notifications_off:"):
-                set_chat_notifications_enabled(db, chat_id, False)
-                db.flush()
-                chat = upsert_chat(db, chat_id)
-                await cb.message.edit_text(
-                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,
@@ -212,32 +204,25 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                     return
                 await cb.message.edit_text(
                     _global_visibility_text(bool(chat.show_in_global)),
+                    parse_mode="HTML",
                     reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
                 )
                 await cb.answer()
 
-            elif data.startswith("help:global_vis_on:"):
+            elif (
+                data.startswith("help:global_vis_toggle:")
+                or data.startswith("help:global_vis_on:")
+                or data.startswith("help:global_vis_off:")
+            ):
                 if is_private_chat:
                     await cb.answer("В личке этот пункт недоступен", show_alert=False)
                     return
-                set_chat_global_visibility(db, chat_id, True)
+                set_chat_global_visibility(db, chat_id, not bool(chat.show_in_global))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
                 await cb.message.edit_text(
                     _global_visibility_text(bool(chat.show_in_global)),
-                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
-                )
-                await cb.answer("Готово", show_alert=False)
-
-            elif data.startswith("help:global_vis_off:"):
-                if is_private_chat:
-                    await cb.answer("В личке этот пункт недоступен", show_alert=False)
-                    return
-                set_chat_global_visibility(db, chat_id, False)
-                db.flush()
-                chat = upsert_chat(db, chat_id)
-                await cb.message.edit_text(
-                    _global_visibility_text(bool(chat.show_in_global)),
+                    parse_mode="HTML",
                     reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
                 )
                 await cb.answer("Готово", show_alert=False)
@@ -250,6 +235,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer("Готово", show_alert=False)
                 await cb.message.edit_text(
                     _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,

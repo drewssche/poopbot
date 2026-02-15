@@ -321,28 +321,16 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             if f:
                 fe[f] += 1
 
-    streak_rows = db.scalars(select(UserStreak).where(UserStreak.user_id == user_id)).all()
-    today_positive_chats = {
-        int(ch_id)
-        for ch_id in db.scalars(
-            select(DaySession.chat_id)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(
-                DaySession.session_date == today,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
-            )
-        ).all()
-    }
     streak_val = 0
-    for row in streak_rows:
-        projected = _project_streak_for_day(
-            current_streak=int(row.current_streak or 0),
-            last_poop_date=row.last_poop_date,
-            day=today,
-            has_positive_today=int(row.chat_id) in today_positive_chats,
-        )
-        streak_val = max(streak_val, projected)
+    if active_dates:
+        last_active = active_dates[-1]
+        if last_active in {today, today - timedelta(days=1)}:
+            run = 1
+            idx = len(active_dates) - 2
+            while idx >= 0 and active_dates[idx] == (active_dates[idx + 1] - timedelta(days=1)):
+                run += 1
+                idx -= 1
+            streak_val = run
 
     lines = [
         "🙋 Моя статистика",

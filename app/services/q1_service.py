@@ -27,6 +27,21 @@ FEELING_EMOJI = {
 }
 
 
+def _project_streak_for_day(
+    current_streak: int,
+    last_poop_date: date | None,
+    day: date,
+    has_positive_today: bool,
+) -> int:
+    if not has_positive_today:
+        return current_streak
+    if last_poop_date == day:
+        return current_streak
+    if last_poop_date == (day - timedelta(days=1)):
+        return current_streak + 1
+    return 1
+
+
 def mention(u: User) -> str:
     if u.username:
         return f"@{u.username}"
@@ -131,13 +146,12 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         status_bits: list[str] = [f"💩({poops})"]
 
         streak_row = streaks.get(uid)
-        streak_val = int(streak_row.current_streak) if streak_row else 0
-        if poops > 0:
-            yesterday = session_date - timedelta(days=1)
-            if streak_row and streak_row.last_poop_date == yesterday:
-                streak_val = int(streak_row.current_streak) + 1
-            else:
-                streak_val = 1
+        streak_val = _project_streak_for_day(
+            current_streak=int(streak_row.current_streak) if streak_row else 0,
+            last_poop_date=streak_row.last_poop_date if streak_row else None,
+            day=session_date,
+            has_positive_today=poops > 0,
+        )
         status_bits.append(f"стрик {streak_val} дн.")
 
         lines.append(f"{mention(u)} — {' • '.join(status_bits)}")

@@ -213,7 +213,8 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
     if snap["top_streak"]:
         for idx, (cid, days) in enumerate(snap["top_streak"], start=1):
             lines.append(f"- {idx}) {chat_name(cid)} — {days} дн.")
-        lines.append("- Примечание: чатовый стрик считается по дневной активности в сессиях чата (включая синхронизированные отметки).")
+        lines.append("")
+        lines.append("Примечание: чатовый стрик считается по дневной активности в сессиях чата (включая синхронизированные отметки).")
     else:
         lines.append("- пока нет данных")
 

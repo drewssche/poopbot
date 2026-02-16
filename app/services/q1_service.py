@@ -235,12 +235,12 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date < session_date,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -248,13 +248,13 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
     ]
     chat_today_positive = bool(
         db.scalar(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(PoopEvent.id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == session_date,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
             )
             .limit(1)
         )

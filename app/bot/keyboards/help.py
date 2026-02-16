@@ -30,12 +30,26 @@ def help_notifications_kb(
     owner_id: int,
     current_hour: int | None = None,
     notifications_enabled: bool = True,
+    late_reminder_enabled: bool = True,
+    q2_q3_enabled: bool = False,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(
             text="🔔 Уведомления: Вкл" if notifications_enabled else "🔕 Уведомления: Выкл",
             callback_data=f"help:notifications_toggle:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text="⏳ Финалка 23:30: Вкл" if late_reminder_enabled else "⏳ Финалка 23:30: Выкл",
+            callback_data=f"help:late_reminder_toggle:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text="🧻 Q2-Q3: Вкл" if q2_q3_enabled else "🧻 Q2-Q3: Выкл",
+            callback_data=f"help:q2_q3_toggle:{owner_id}",
         )
     )
     kb.row(

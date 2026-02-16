@@ -17,6 +17,8 @@ class Chat(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Minsk")
     post_time: Mapped[time] = mapped_column(Time, default=time(10, 0))
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    late_reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    q2_q3_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_global: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -117,7 +117,7 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
 
     header = (
         f"💩 Кто сегодня какал? ({date_str})\n"
-        f"Чтобы попасть в список участников — нажми +1💩.\n"
+        "Чтобы попасть в список участников — нажми +1💩."
     )
 
     if not members:

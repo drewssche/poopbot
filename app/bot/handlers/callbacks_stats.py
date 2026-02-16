@@ -132,7 +132,7 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
             show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
             is_owner_private = settings.bot_owner_id is not None and user.id == settings.bot_owner_id and cb.message.chat.type == "private"
             if settings.bot_owner_id is not None and user.id == settings.bot_owner_id:
-                show_recap = cb.message.chat.type == "private"
+                show_recap = False
             text = _stats_root_text(
                 show_recap=show_recap,
                 is_owner_private=is_owner_private,

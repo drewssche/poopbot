@@ -19,6 +19,7 @@ from app.bot.handlers.callbacks_q3 import router as callbacks_q3_router
 from app.bot.handlers.callbacks_help import router as callbacks_help_router
 from app.bot.handlers.callbacks_recap import router as callbacks_recap_router
 from app.bot.handlers.callbacks_stats import router as callbacks_stats_router
+from app.bot.handlers.callbacks_debug import router as callbacks_debug_router
 
 
 class _UpdateActivityMiddleware(BaseMiddleware):
@@ -70,6 +71,7 @@ async def run_bot(settings: Settings) -> None:
     dp.include_router(callbacks_help_router)
     dp.include_router(callbacks_recap_router)
     dp.include_router(callbacks_stats_router)
+    dp.include_router(callbacks_debug_router)
 
     if settings.startup_delete_webhook:
         await bot.delete_webhook(drop_pending_updates=settings.drop_pending_updates_on_start)

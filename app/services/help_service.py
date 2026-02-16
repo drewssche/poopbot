@@ -31,6 +31,22 @@ def set_chat_notifications_enabled(db: Session, chat_id: int, enabled: bool) -> 
     chat.notifications_enabled = bool(enabled)
 
 
+def set_chat_late_reminder_enabled(db: Session, chat_id: int, enabled: bool) -> None:
+    chat = db.get(Chat, chat_id)
+    if chat is None:
+        chat = Chat(chat_id=chat_id)
+        db.add(chat)
+    chat.late_reminder_enabled = bool(enabled)
+
+
+def set_chat_q2_q3_enabled(db: Session, chat_id: int, enabled: bool) -> None:
+    chat = db.get(Chat, chat_id)
+    if chat is None:
+        chat = Chat(chat_id=chat_id)
+        db.add(chat)
+    chat.q2_q3_enabled = bool(enabled)
+
+
 def set_help_message(db: Session, chat_id: int, message_id: int, owner_id: int) -> None:
     chat = db.get(Chat, chat_id)
     if chat is None:

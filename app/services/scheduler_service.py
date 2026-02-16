@@ -22,7 +22,13 @@ from app.services.repo_service import (
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import mention, render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
-from app.services.stats_service import build_stats_text_chat
+from app.services.stats_service import (
+    build_stats_text_chat,
+    compute_chat_period_metrics,
+    period_to_range,
+    previous_period_range,
+    rank_chat_among_groups_by_total,
+)
 from app.services.command_message_service import get_command_message_id, set_command_message_id
 from app.services.reminder_service import (
     LATE_REMINDER_COMMAND,
@@ -149,6 +155,8 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         local_date = now_local.date()
         close_cutoff = time(23, 55)
         notifications_enabled = bool(chat.notifications_enabled)
+        late_reminder_enabled = bool(chat.late_reminder_enabled)
+        q2_q3_enabled = bool(chat.q2_q3_enabled)
 
         # Recalculate once per day in a narrow low-traffic window,
         # so daytime polling is not impacted by heavy DB work.
@@ -199,14 +207,15 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
                     chat_id,
                     sess.session_id,
                     window.session_date,
+                    q2_q3_enabled=q2_q3_enabled,
                     show_remind=(local_time < time(22, 0)),
                 )
 
-        if notifications_enabled and local_time.hour == 23 and local_time.minute == 30:
+        if notifications_enabled and late_reminder_enabled and local_time.hour == 23 and local_time.minute == 30:
             await _send_late_reminder(bot, db, chat_id, sess.session_id)
 
-        # 23:00 РїРµСЂРёРѕРґРёС‡РµСЃРєР°СЏ СЃС‚Р°С‚РёСЃС‚РёРєР° (РЅРµРґРµР»СЏ/РјРµСЃСЏС†/РіРѕРґ)
-        if notifications_enabled and local_time.hour == 23 and local_time.minute == 0:
+        # 23:50 периодическая статистика (неделя/месяц/год), чтобы успеть учесть вечерние отметки.
+        if notifications_enabled and local_time.hour == 23 and local_time.minute == 50:
             await _send_periodic_stats(bot, db, chat_id, local_date)
 
         if notifications_enabled:
@@ -219,6 +228,7 @@ async def _post_q1(
     chat_id: int,
     session_id: int,
     session_date,
+    q2_q3_enabled: bool,
     show_remind: bool = True,
 ) -> None:
     if session_date.month == 12 and session_date.day == 30:
@@ -246,10 +256,15 @@ async def _post_q1(
         bot,
         chat_id=chat_id,
         text=text,
-        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+        reply_markup=q1_keyboard(
+            has_any_members,
+            show_remind=show_remind,
+            show_q2_q3_button=not q2_q3_enabled,
+        ),
     )
     set_session_message_id(db, session_id, "Q1", sent.message_id)
-    await ensure_q2_q3_exist(bot, db, chat_id, session_id)
+    if q2_q3_enabled:
+        await ensure_q2_q3_exist(bot, db, chat_id, session_id)
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
 
 
@@ -421,14 +436,20 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
     has_any_members = "Участники:" in text
     chat = db.get(Chat, chat_id)
     show_remind = True
+    show_q2_q3_button = False
     if chat is not None:
         show_remind = now_in_tz(chat.timezone).time() < time(22, 0)
+        show_q2_q3_button = not bool(chat.q2_q3_enabled)
     await _safe_edit_message_text(
         bot,
         chat_id=chat_id,
         message_id=q1_id,
         text=text,
-        reply_markup=q1_keyboard(has_any_members, show_remind=show_remind),
+        reply_markup=q1_keyboard(
+            has_any_members,
+            show_remind=show_remind,
+            show_q2_q3_button=show_q2_q3_button,
+        ),
     )
 
 
@@ -487,18 +508,94 @@ def _is_last_day_of_month(d: date) -> bool:
     return (d + timedelta(days=1)).month != d.month
 
 
+def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, title: str) -> str:
+    def _trend_line(label: str, curr: int, prev: int) -> str:
+        delta = curr - prev
+        if delta > 0:
+            sign = "📈"
+        elif delta < 0:
+            sign = "📉"
+        else:
+            sign = "➖"
+        if prev > 0:
+            pct = (float(delta) / float(prev)) * 100.0
+            return f"- {label}: {curr} ({sign} {delta:+d}, {pct:+.1f}% к прошлому периоду)"
+        if curr > 0:
+            return f"- {label}: {curr} (🆕 в прошлом периоде было 0)"
+        return f"- {label}: {curr} (➖ без изменений)"
+
+    def _rank_line(curr_rank: int | None, prev_rank: int | None, total_chats: int) -> str:
+        if curr_rank is None or total_chats <= 0:
+            return "- Место чата среди чатов: нет данных за период"
+        if prev_rank is None:
+            return f"- Место чата среди чатов: #{curr_rank} из {total_chats}"
+        delta = prev_rank - curr_rank
+        if delta > 0:
+            trend = f"📈 +{delta}"
+        elif delta < 0:
+            trend = f"📉 {delta}"
+        else:
+            trend = "➖ 0"
+        return f"- Место чата среди чатов: #{curr_rank} из {total_chats} ({trend} к прошлому периоду)"
+
+    is_private = chat_id > 0
+    report_user_id = None
+    if is_private:
+        report_user_id = db.scalar(
+            select(ChatMember.user_id)
+            .where(ChatMember.chat_id == chat_id)
+            .order_by(ChatMember.joined_at.asc())
+            .limit(1)
+        )
+        if report_user_id is None:
+            report_user_id = chat_id
+    curr_r = period_to_range(local_date, period)
+    prev_r = previous_period_range(local_date, period)
+
+    text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period, user_id=report_user_id)
+
+    curr_metrics = compute_chat_period_metrics(db, chat_id, curr_r, user_id=report_user_id)
+    prev_metrics = compute_chat_period_metrics(db, chat_id, prev_r, user_id=report_user_id)
+
+    trend_lines = ["Тенденция к прошлому периоду:"]
+    trend_lines.append(_trend_line("Всего 💩", curr_metrics.total_poops, prev_metrics.total_poops))
+    trend_lines.append(
+        _trend_line(
+            "Активных дней",
+            curr_metrics.active_days_count,
+            prev_metrics.active_days_count,
+        )
+    )
+    if not is_private:
+        trend_lines.append(
+            _trend_line(
+                "Активных участников",
+                curr_metrics.active_participants,
+                prev_metrics.active_participants,
+            )
+        )
+        curr_rank, total_chats = rank_chat_among_groups_by_total(db, chat_id, curr_r)
+        prev_rank, _ = rank_chat_among_groups_by_total(db, chat_id, prev_r)
+        trend_lines.append(_rank_line(curr_rank, prev_rank, total_chats))
+
+    text = text + "\n\n" + "\n".join(trend_lines)
+
+    if not is_private:
+        praise_block = _build_streak_praise_block(db, chat_id)
+        if praise_block:
+            text = text + "\n\n" + praise_block
+    return text
+
+
 async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> None:
-    # РёСЃРїРѕР»СЊР·СѓРµРј user_id=0 РєР°Рє СЃРёСЃС‚РµРјРЅСѓСЋ РјРµС‚РєСѓ, С‡С‚РѕР±С‹ РЅРµ РґСѓР±Р»РёСЂРѕРІР°С‚СЊ РѕС‚РїСЂР°РІРєРё
+    # используем user_id=0 как системную метку, чтобы не дублировать отправки
     def _already_sent(kind: str) -> bool:
         return get_command_message_id(db, chat_id, 0, kind, local_date) is not None
 
     async def _send(kind: str, period: str, title: str) -> None:
         if _already_sent(kind):
             return
-        text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period)
-        praise_block = _build_streak_praise_block(db, chat_id)
-        if praise_block:
-            text = text + "\n\n" + praise_block
+        text = build_periodic_report_text(db, chat_id=chat_id, local_date=local_date, period=period, title=title)
         sent = await _safe_send_message(bot, chat_id=chat_id, text=text)
         set_command_message_id(db, chat_id, 0, kind, local_date, sent.message_id)
 

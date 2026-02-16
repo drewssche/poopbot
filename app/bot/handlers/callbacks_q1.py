@@ -175,25 +175,75 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         chat_id=chat_id,
                         message_id=q1_msg_id,
                         text=text,
-                        reply_markup=q1_keyboard(has_any_members),
+                        reply_markup=q1_keyboard(
+                            has_any_members,
+                            show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                        ),
                     )
                 else:
                     sent = await cb.bot.send_message(
                         chat_id=chat_id,
                         text=text,
-                        reply_markup=q1_keyboard(has_any_members),
+                        reply_markup=q1_keyboard(
+                            has_any_members,
+                            show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                        ),
                     )
                     set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
             except TelegramBadRequest as e:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
 
-            try:
-                await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-            except Exception:
-                logger.exception("Failed to refresh Q2/Q3 after Q1 action")
+            if bool(chat.q2_q3_enabled):
+                try:
+                    await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+                except Exception:
+                    logger.exception("Failed to refresh Q2/Q3 after Q1 action")
     except Exception:
         logger.exception("Unhandled exception in q1_callbacks")
+        try:
+            await cb.answer("Ошибка, попробуй ещё раз", show_alert=False)
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data == "q1:q2q3")
+async def q1_open_q2_q3(cb: CallbackQuery) -> None:
+    if cb.message is None or cb.from_user is None:
+        return
+
+    from app.core.config import load_settings
+
+    settings = load_settings()
+    init_db(settings.database_url)
+
+    chat_id = cb.message.chat.id
+
+    try:
+        with db_session(_session_factory) as db:
+            chat = upsert_chat(db, chat_id=chat_id)
+            window = get_session_window(chat.timezone)
+            if window.is_blocked_window:
+                await cb.answer("Новая сессия начнётся в 00:05", show_alert=False)
+                return
+
+            sess = db.scalar(
+                select(DaySession)
+                .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+                .where(
+                    DaySession.chat_id == chat_id,
+                    SessionMessage.kind == "Q1",
+                    SessionMessage.message_id == cb.message.message_id,
+                )
+            )
+            if sess is None or sess.status == "closed":
+                await cb.answer("Неактуально", show_alert=False)
+                return
+
+            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+            await cb.answer("Уточняющие вопросы опубликованы", show_alert=False)
+    except Exception:
+        logger.exception("Unhandled exception in q1_open_q2_q3")
         try:
             await cb.answer("Ошибка, попробуй ещё раз", show_alert=False)
         except Exception:

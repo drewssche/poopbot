@@ -34,11 +34,101 @@ def period_to_range(today: date, period: str) -> Range:
     return Range(date(1970, 1, 1), today)
 
 
+def previous_period_range(today: date, period: str) -> Range:
+    curr = period_to_range(today, period)
+    if period == "week":
+        end = curr.start - timedelta(days=1)
+        return Range(end - timedelta(days=6), end)
+    if period == "month":
+        prev_month_last = curr.start - timedelta(days=1)
+        start = prev_month_last.replace(day=1)
+        end = prev_month_last.replace(day=calendar.monthrange(prev_month_last.year, prev_month_last.month)[1])
+        return Range(start, end)
+    if period == "year":
+        y = today.year - 1
+        return Range(date(y, 1, 1), date(y, 12, 31))
+    if period == "today":
+        prev = today - timedelta(days=1)
+        return Range(prev, prev)
+    prev = curr.start - timedelta(days=1)
+    return Range(date(1970, 1, 1), prev)
+
+
+def period_label(period: str) -> str:
+    if period == "week":
+        return "за неделю"
+    if period == "month":
+        return "за месяц"
+    if period == "year":
+        return "за год"
+    if period == "today":
+        return "за день"
+    return "за всё время"
+
+
+@dataclass(frozen=True)
+class ChatPeriodMetrics:
+    total_poops: int
+    active_participants: int
+    active_days_count: int
+    period_days: int
+
+
 def _sessions_in_range(db: Session, chat_id: int | None, r: Range) -> list[DaySession]:
     stmt = select(DaySession).where(DaySession.session_date >= r.start, DaySession.session_date <= r.end)
     if chat_id is not None:
         stmt = stmt.where(DaySession.chat_id == chat_id)
     return list(db.scalars(stmt).all())
+
+
+def compute_chat_period_metrics(db: Session, chat_id: int, r: Range, user_id: int | None = None) -> ChatPeriodMetrics:
+    sessions = _sessions_in_range(db, chat_id, r)
+    if not sessions:
+        return ChatPeriodMetrics(total_poops=0, active_participants=0, active_days_count=0, period_days=(r.end - r.start).days + 1)
+
+    session_ids = [int(s.session_id) for s in sessions]
+    if user_id is None:
+        rows = db.execute(
+            select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
+            .where(SessionUserState.session_id.in_(session_ids))
+            .group_by(SessionUserState.user_id)
+        ).all()
+        total_poops = sum(int(row.poops or 0) for row in rows)
+        active_participants = sum(1 for row in rows if int(row.poops or 0) > 0)
+    else:
+        total_poops = int(
+            db.scalar(
+                select(func.coalesce(func.sum(SessionUserState.poops_n), 0))
+                .where(
+                    SessionUserState.session_id.in_(session_ids),
+                    SessionUserState.user_id == user_id,
+                )
+            )
+            or 0
+        )
+        active_participants = 1 if total_poops > 0 else 0
+
+    day_stmt = (
+        select(DaySession.session_date, func.sum(SessionUserState.poops_n).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_id.in_(session_ids),
+        )
+    )
+    if user_id is not None:
+        day_stmt = day_stmt.where(SessionUserState.user_id == user_id)
+    day_rows = db.execute(
+        day_stmt.group_by(DaySession.session_date).order_by(DaySession.session_date.asc())
+    ).all()
+    active_days_count = sum(1 for _d, poops in day_rows if int(poops or 0) > 0)
+
+    return ChatPeriodMetrics(
+        total_poops=int(total_poops),
+        active_participants=int(active_participants),
+        active_days_count=int(active_days_count),
+        period_days=(r.end - r.start).days + 1,
+    )
 
 
 def _bristol_bucket(bristol: int | None) -> str | None:
@@ -239,7 +329,7 @@ def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | 
 
 
 def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, period: str) -> str:
-    _ = (chat_id, period)
+    _ = chat_id
     first_active_date = db.scalar(
         select(func.min(DaySession.session_date))
         .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
@@ -249,12 +339,24 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         )
     )
     if first_active_date is None:
-        return "🙋 Моя статистика\nПериод: за всё время (по всем чатам)\n\nПока нет данных."
+        empty_range = period_to_range(today, period) if period in {"today", "week", "month", "year"} else Range(today, today)
+        return (
+            "🙋 Моя статистика\n"
+            f"Период: {period_label(period)} (по всем чатам, {_format_period(empty_range)})\n\n"
+            "Пока нет данных."
+        )
 
-    r = Range(first_active_date, today)
+    if period in {"today", "week", "month", "year"}:
+        r = period_to_range(today, period)
+    else:
+        r = Range(first_active_date, today)
     sessions = _sessions_in_range(db, None, r)
     if not sessions:
-        return "🙋 Моя статистика\nПериод: за всё время (по всем чатам)\n\nПока нет данных."
+        return (
+            "🙋 Моя статистика\n"
+            f"Период: {period_label(period)} (по всем чатам, {_format_period(r)})\n\n"
+            "Пока нет данных."
+        )
 
     session_ids = [s.session_id for s in sessions]
     states = db.scalars(
@@ -334,8 +436,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     lines = [
         "🙋 Моя статистика",
-        "Период: за всё время (по всем чатам)",
-        f"Диапазон: {_format_period(r)}",
+        f"Период: {period_label(period)} (по всем чатам, {_format_period(r)})",
         "",
         "Твои итоги:",
         f"- Всего: 💩({total_poops})",
@@ -344,8 +445,8 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         f"- Лучший стрик: {best_streak_period} дн.",
         "",
         "Твоя динамика:",
-        f"- В среднем в день: {avg_per_day:.2f}",
-        f"- В среднем в активный день: {avg_per_active_day:.2f}",
+        f"- Среднее за календарный день: {avg_per_day:.2f}",
+        f"- Среднее за день с отметкой: {avg_per_active_day:.2f}",
         (
             f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))"
             if best_day
@@ -367,7 +468,9 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 def build_stats_text_chat(
     db: Session, chat_id: int, today: date, period: str, user_id: int | None = None
 ) -> str:
-    _ = period
+    is_bounded_period = period in {"today", "week", "month", "year"}
+    bounded_range = period_to_range(today, period) if is_bounded_period else None
+
     if chat_id > 0 and user_id is not None:
         first_active_date = db.scalar(
             select(func.min(DaySession.session_date))
@@ -379,12 +482,13 @@ def build_stats_text_chat(
             )
         )
         if first_active_date is None:
-            return "💬 В этой личке\nПериод: за всё время\n\nПока нет данных."
+            empty_r = bounded_range if bounded_range is not None else Range(today, today)
+            return f"💬 В этой личке\nПериод: {period_label(period)} ({_format_period(empty_r)})\n\nПока нет данных."
 
-        r = Range(first_active_date, today)
+        r = bounded_range if bounded_range is not None else Range(first_active_date, today)
         sessions = _sessions_in_range(db, chat_id, r)
         if not sessions:
-            return "💬 В этой личке\nПериод: за всё время\n\nПока нет данных."
+            return f"💬 В этой личке\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока нет данных."
 
         session_ids = [s.session_id for s in sessions]
         states = db.scalars(
@@ -452,7 +556,7 @@ def build_stats_text_chat(
 
         lines = [
             "💬 В этой личке",
-            f"Период: за всё время ({_format_period(r)})",
+            f"Период: {period_label(period)} ({_format_period(r)})",
             "",
             "Твои итоги:",
             f"- Всего: 💩({total_poops})",
@@ -461,8 +565,8 @@ def build_stats_text_chat(
             f"- Лучший стрик: {best_streak_period} дн.",
             "",
             "Твоя динамика:",
-            f"- В среднем в день: {avg_per_day:.2f}",
-            f"- В среднем в активный день: {avg_per_active_day:.2f}",
+            f"- Среднее за календарный день: {avg_per_day:.2f}",
+            f"- Среднее за день с отметкой: {avg_per_active_day:.2f}",
             (
                 f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))"
                 if best_day
@@ -480,21 +584,24 @@ def build_stats_text_chat(
         lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
         return "\n".join(lines)
 
-    r = Range(date(1970, 1, 1), today)
-    first_active_date = db.scalar(
-        select(func.min(DaySession.session_date))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(
-            DaySession.chat_id == chat_id,
-            SessionUserState.poops_n > 0,
+    if bounded_range is not None:
+        r = bounded_range
+    else:
+        r = Range(date(1970, 1, 1), today)
+        first_active_date = db.scalar(
+            select(func.min(DaySession.session_date))
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                SessionUserState.poops_n > 0,
+            )
         )
-    )
-    if first_active_date is not None:
-        r = Range(first_active_date, today)
+        if first_active_date is not None:
+            r = Range(first_active_date, today)
 
     sessions = _sessions_in_range(db, chat_id, r)
     if not sessions:
-        return f"👥 В этом чате\nПериод: за всё время ({_format_period(r)})\n\nПока пусто."
+        return f"👥 В этом чате\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока пусто."
 
     session_ids = [s.session_id for s in sessions]
 
@@ -574,7 +681,7 @@ def build_stats_text_chat(
 
     lines = [
         "👥 В этом чате",
-        f"Период: за всё время ({_format_period(r)})",
+        f"Период: {period_label(period)} ({_format_period(r)})",
         "",
         "Итоги:",
         f"- Всего: 💩({total_poops})",
@@ -615,12 +722,11 @@ def build_stats_text_chat(
 
 
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
-    _ = period
-    all_time = Range(date(1970, 1, 1), today)
+    r = period_to_range(today, period) if period in {"today", "week", "month", "year"} else Range(date(1970, 1, 1), today)
 
-    sessions = _sessions_in_range(db, None, all_time)
+    sessions = _sessions_in_range(db, None, r)
     if not sessions:
-        return "🌍 Глобальная статистика\nПериод: за всё время\n\nПока пусто."
+        return f"🌍 Глобальная статистика\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока пусто."
 
     session_ids = [s.session_id for s in sessions]
 
@@ -743,7 +849,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
     lines = [
         "🌍 Глобальная статистика",
-        "Период: за всё время",
+        f"Период: {period_label(period)} ({_format_period(r)})",
         "",
         "Итоги:",
         f"- Участников: {int(users_count)}",
@@ -795,12 +901,38 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     return "\n".join(lines)
 
 
-def collect_among_chats_snapshot(db: Session, today: date) -> dict:
-    min_bristol_samples = 10
-    # Exclude private dialogs (chat_id > 0), keep only group/supergroup chats.
-    chat_ids = db.scalars(
+def _visible_group_chat_ids(db: Session) -> list[int]:
+    return db.scalars(
         select(Chat.chat_id).where(Chat.is_enabled == True, Chat.show_in_global == True, Chat.chat_id < 0)  # noqa: E712
     ).all()
+
+
+def rank_chat_among_groups_by_total(db: Session, chat_id: int, r: Range) -> tuple[int | None, int]:
+    chat_ids = _visible_group_chat_ids(db)
+    if not chat_ids:
+        return None, 0
+
+    rows = db.execute(
+        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id.in_(chat_ids),
+            DaySession.session_date >= r.start,
+            DaySession.session_date <= r.end,
+        )
+        .group_by(DaySession.chat_id)
+    ).all()
+    ranking = sorted([(int(row.chat_id), int(row.poops or 0)) for row in rows], key=lambda x: (-x[1], x[0]))
+    if not ranking:
+        return None, 0
+    rank = next((idx for idx, (cid, _total) in enumerate(ranking, start=1) if cid == chat_id), None)
+    return rank, len(ranking)
+
+
+def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = None) -> dict:
+    min_bristol_samples = 10
+    # Exclude private dialogs (chat_id > 0), keep only group/supergroup chats.
+    chat_ids = _visible_group_chat_ids(db)
     if not chat_ids:
         return {
             "top_total": [],
@@ -811,7 +943,10 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
             "most_dry": None,
         }
 
-    sessions = db.scalars(select(DaySession).where(DaySession.chat_id.in_(chat_ids))).all()
+    sessions_stmt = select(DaySession).where(DaySession.chat_id.in_(chat_ids))
+    if r is not None:
+        sessions_stmt = sessions_stmt.where(DaySession.session_date >= r.start, DaySession.session_date <= r.end)
+    sessions = db.scalars(sessions_stmt).all()
     if not sessions:
         return {
             "top_total": [],
@@ -879,7 +1014,7 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
     day_rows = db.execute(
         select(DaySession.chat_id, DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
         .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.chat_id.in_(chat_ids))
+        .where(DaySession.session_id.in_(session_ids))
         .group_by(DaySession.chat_id, DaySession.session_date)
     ).all()
     record_day = None
@@ -892,7 +1027,7 @@ def collect_among_chats_snapshot(db: Session, today: date) -> dict:
         select(DaySession.chat_id, PoopEvent.bristol)
         .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
-            DaySession.chat_id.in_(chat_ids),
+            DaySession.session_id.in_(session_ids),
             PoopEvent.bristol.is_not(None),
         )
     ).all()

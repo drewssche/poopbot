@@ -21,8 +21,10 @@ from app.services.help_service import (
     delete_user_everywhere,
     delete_user_from_chat,
     set_chat_global_visibility,
+    set_chat_late_reminder_enabled,
     set_chat_notifications_enabled,
     set_chat_post_time,
+    set_chat_q2_q3_enabled,
 )
 from app.services.q1_service import render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
@@ -87,18 +89,30 @@ def _settings_text(is_private_chat: bool) -> str:
     return base
 
 
-def _notifications_text(enabled: bool, post_time_text: str) -> str:
-    status_line = (
-        f"Текущий статус: <b>включены</b> (время публикации: <b>{post_time_text}</b>)."
-        if enabled
-        else "Текущий статус: <b>выключены</b>."
+def _notifications_text(
+    enabled: bool,
+    post_time_text: str,
+    late_reminder_enabled: bool,
+    q2_q3_enabled: bool,
+) -> str:
+    notifications_status = "включены" if enabled else "выключены"
+    late_status = "включена" if late_reminder_enabled else "выключена"
+    q2_q3_status = "включены" if q2_q3_enabled else "выключены"
+    q2_q3_extra = (
+        "Q2/Q3 публикуются автоматически."
+        if q2_q3_enabled
+        else "Q2/Q3 можно открыть вручную кнопкой «🧻 Уточняющие вопросы» в Q1."
     )
     return (
         "🔔 Уведомления\n\n"
-        f"{status_line}\n\n"
+        f"Текущий статус уведомлений: <b>{notifications_status}</b> "
+        f"(время автопоста Q1: <b>{post_time_text}</b>).\n"
+        f"Финальная напоминалка в 23:30: <b>{late_status}</b>.\n"
+        f"Уточняющие вопросы Q2-Q3: <b>{q2_q3_status}</b>.\n\n"
         "Что включает этот раздел:\n"
         "• Автопост ежедневного вопроса.\n"
-        "• Автоматическое напоминание должникам в 23:30.\n"
+        "• Финальную напоминалку должникам в 23:30 (отдельный переключатель).\n"
+        f"• {q2_q3_extra}\n"
         "• Плановые итоговые сообщения по расписанию.\n\n"
         "Команды `/start`, `/help`, `/stats` работают независимо от этого переключателя."
     )
@@ -168,12 +182,19 @@ async def help_callbacks(cb: CallbackQuery) -> None:
 
             elif data.startswith("help:notifications:") or data.startswith("help:set_time:"):
                 await cb.message.edit_text(
-                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,
                         notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
                     ),
                 )
                 await cb.answer()
@@ -187,12 +208,91 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 db.flush()
                 chat = upsert_chat(db, chat_id)
                 await cb.message.edit_text(
-                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,
                         notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
+                )
+                await cb.answer("Готово", show_alert=False)
+
+            elif data.startswith("help:late_reminder_toggle:"):
+                set_chat_late_reminder_enabled(db, chat_id, not bool(chat.late_reminder_enabled))
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+                await cb.message.edit_text(
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
+                )
+                await cb.answer("Готово", show_alert=False)
+
+            elif data.startswith("help:q2_q3_toggle:"):
+                set_chat_q2_q3_enabled(db, chat_id, not bool(chat.q2_q3_enabled))
+                db.flush()
+                chat = upsert_chat(db, chat_id)
+
+                window = get_session_window(chat.timezone)
+                if not window.is_blocked_window:
+                    sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+                    q1_id = get_session_message_id(db, sess.session_id, "Q1")
+                    if q1_id and sess.status != "closed":
+                        q1_text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+                        has_any_members = "Участники:" in q1_text
+                        try:
+                            await cb.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=q1_id,
+                                text=q1_text,
+                                reply_markup=q1_keyboard(
+                                    has_any_members,
+                                    show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                                    show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                                ),
+                            )
+                        except TelegramBadRequest as e:
+                            if "message is not modified" not in str(e).lower():
+                                logger.exception("Failed to edit Q1 after q2_q3 toggle: %s", e)
+                    if bool(chat.q2_q3_enabled):
+                        try:
+                            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+                        except Exception:
+                            logger.exception("Failed to refresh Q2/Q3 after toggle")
+
+                await cb.message.edit_text(
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
                     ),
                 )
                 await cb.answer("Готово", show_alert=False)
@@ -233,12 +333,19 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 chat = upsert_chat(db, chat_id)
                 await cb.answer("Готово", show_alert=False)
                 await cb.message.edit_text(
-                    _notifications_text(bool(chat.notifications_enabled), chat.post_time.strftime("%H:%M")),
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
                         owner_id,
                         current_hour=chat.post_time.hour,
                         notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
                     ),
                 )
 
@@ -298,15 +405,17 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                     has_any_members,
                                     show_remind=get_session_window(chat.timezone).is_blocked_window is False
                                     and now_in_tz(chat.timezone).time().hour < 22,
+                                    show_q2_q3_button=not bool(chat.q2_q3_enabled),
                                 ),
                             )
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e).lower():
                                 logger.exception("Failed to edit Q1 after delete_me: %s", e)
-                        try:
-                            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-                        except Exception:
-                            logger.exception("Failed to refresh Q2/Q3 after delete action")
+                        if bool(chat.q2_q3_enabled):
+                            try:
+                                await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+                            except Exception:
+                                logger.exception("Failed to refresh Q2/Q3 after delete action")
 
                 await cb.answer("Удалил", show_alert=False)
                 done_text = (

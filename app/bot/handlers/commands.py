@@ -111,7 +111,8 @@ async def start_cmd(message: Message) -> None:
         if q1_msg_id:
             try:
                 await message.answer("Актуальный вопрос за сессию выше 👆", reply_to_message_id=q1_msg_id)
-                await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
+                if bool(chat.q2_q3_enabled):
+                    await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
                 return
             except TelegramBadRequest as e:
                 if "message to be replied not found" not in str(e).lower():
@@ -132,9 +133,13 @@ async def start_cmd(message: Message) -> None:
                 recap_sent = await message.answer(recap_text, reply_markup=recap_announce_kb())
                 set_command_message_id(db, chat_id, 0, "recap_announce", window.session_date, recap_sent.message_id)
 
-        sent = await message.answer(text, reply_markup=q1_keyboard(has_any_members))
+        sent = await message.answer(
+            text,
+            reply_markup=q1_keyboard(has_any_members, show_q2_q3_button=not bool(chat.q2_q3_enabled)),
+        )
         set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
-        await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
+        if bool(chat.q2_q3_enabled):
+            await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
 
 
 @router.message(Command("help"))
@@ -215,7 +220,7 @@ async def stats_cmd(message: Message) -> None:
         show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
         is_owner_private = settings.bot_owner_id is not None and user.id == settings.bot_owner_id and is_private_chat
         if settings.bot_owner_id is not None and user.id == settings.bot_owner_id:
-            show_recap = is_private_chat
+            show_recap = False
 
     text = _stats_root_text(
         show_recap=show_recap,

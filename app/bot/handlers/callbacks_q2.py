@@ -190,6 +190,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                     reply_markup=q1_keyboard(
                         has_any_members,
                         show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                        show_q2_q3_button=not bool(chat.q2_q3_enabled),
                     ),
                 )
             except TelegramBadRequest as e:

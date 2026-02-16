@@ -168,6 +168,8 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
     ids.update(chat_id for chat_id, _ in snap["top_total"])
     ids.update(chat_id for chat_id, _, _, _ in snap["top_avg"])
     ids.update(chat_id for chat_id, _ in snap["top_streak"])
+    for cid, _d, _poops in snap.get("record_days", []):
+        ids.add(cid)
     if snap["record_day"] is not None:
         ids.add(snap["record_day"][0])
     if snap.get("most_liquid") is not None:
@@ -216,7 +218,11 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
         lines.append("- пока нет данных")
 
     lines.extend(["", "Рекорд дня:"])
-    if snap["record_day"] is not None:
+    record_days = snap.get("record_days", [])
+    if record_days:
+        for cid, d, poops in record_days:
+            lines.append(f"- {chat_name(cid)} — {d.strftime('%d.%m.%y')} (💩({poops}))")
+    elif snap["record_day"] is not None:
         cid, d, poops = snap["record_day"]
         lines.append(f"- {chat_name(cid)} — {d.strftime('%d.%m.%y')} (💩({poops}))")
     else:

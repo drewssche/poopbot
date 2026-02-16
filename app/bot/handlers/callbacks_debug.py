@@ -12,6 +12,7 @@ from app.db.session import db_session
 from app.services.reminder_service import build_late_reminder_text
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
 from app.services.scheduler_service import build_periodic_report_text
+from app.services.stats_service import build_stats_raw_debug_text
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1
 from app.services.q2_q3_service import render_q2_text, render_q3_text
@@ -87,6 +88,12 @@ def _explain_text(action: str) -> str:
             "Период: 01.01–31.12 текущего года.\n"
             "Включает: сравнение с прошлым годом и место чата среди чатов (для групп)."
         ),
+        "stats_raw": (
+            "ℹ️ Сырые метрики\n\n"
+            "Что это: технический дамп дат и рассчитанных стриков.\n"
+            "Показывает: origin-дни, chat-state дни, global-state дни.\n"
+            "Назначение: быстро найти источник расхождения в /stats и Q1."
+        ),
         "holiday:feb9": (
             "ℹ️ Holiday 9 Feb\n\n"
             "Когда: 9 февраля.\n"
@@ -137,6 +144,7 @@ def _action_label(action: str) -> str:
         "week": "Итоги недели",
         "month": "Итоги месяца",
         "year": "Итоги года",
+        "stats_raw": "Сырые метрики",
         "recap_announce": "Анонс рекапа",
         "recap_chat": "Рекап чата",
         "recap_my_chat": "Рекап личный (текущий чат)",
@@ -284,6 +292,11 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             await _send_output(cb, mode, text, explain_action=action)
             return True
 
+        if action == "stats_raw":
+            text = build_stats_raw_debug_text(db, chat_id=chat_id, user_id=cb.from_user.id, today=window.session_date)
+            await _send_output(cb, mode, text, explain_action=action)
+            return True
+
         if action == "recap_announce":
             recap_text = (
                 "🎉 Доступен рекап года.\nЗапустить можно этой кнопкой или через `/stats`."
@@ -334,7 +347,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             return True
 
         if action == "all":
-            sub_actions = ("q1", "q2q3", "late", "week", "month", "year", "holiday:feb9", "holiday:nov19", "recap_announce")
+            sub_actions = ("q1", "q2q3", "late", "week", "month", "year", "stats_raw", "holiday:feb9", "holiday:nov19", "recap_announce")
             done: list[str] = []
             for sub_action in sub_actions:
                 ok = await _send_debug_action(cb, sub_action, mode)

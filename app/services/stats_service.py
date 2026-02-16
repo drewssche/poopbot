@@ -960,6 +960,7 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
             "top_avg": [],
             "top_streak": [],
             "record_day": None,
+            "record_days": [],
             "most_liquid": None,
             "most_dry": None,
         }
@@ -974,6 +975,7 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
             "top_avg": [],
             "top_streak": [],
             "record_day": None,
+            "record_days": [],
             "most_liquid": None,
             "most_dry": None,
         }
@@ -1040,10 +1042,18 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         .group_by(DaySession.chat_id, DaySession.session_date)
     ).all()
     record_day = None
+    record_days: list[tuple[int, date, int]] = []
     if day_rows:
-        best = max(day_rows, key=lambda r: (int(r.poops or 0), r.session_date, int(r.chat_id)))
-        if int(best.poops or 0) > 0:
-            record_day = (int(best.chat_id), best.session_date, int(best.poops or 0))
+        max_poops = max(int(r.poops or 0) for r in day_rows)
+        if max_poops > 0:
+            winners = [
+                (int(r.chat_id), r.session_date, int(r.poops or 0))
+                for r in day_rows
+                if int(r.poops or 0) == max_poops
+            ]
+            winners.sort(key=lambda x: (x[1], x[0]))
+            record_days = winners
+            record_day = winners[0]
 
     bristol_rows = db.execute(
         select(DaySession.chat_id, PoopEvent.bristol)
@@ -1089,7 +1099,146 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         "top_avg": top_avg,
         "top_streak": top_streak,
         "record_day": record_day,
+        "record_days": record_days,
         "most_liquid": most_liquid,
         "most_dry": most_dry,
         "min_bristol_samples": min_bristol_samples,
     }
+
+
+def build_stats_raw_debug_text(db: Session, chat_id: int, user_id: int, today: date) -> str:
+    def _fmt_days(days: list[date], *, limit: int = 20) -> str:
+        if not days:
+            return "нет"
+        if len(days) <= limit:
+            return ", ".join(d.strftime("%d.%m") for d in days)
+        head = ", ".join(d.strftime("%d.%m") for d in days[:10])
+        tail = ", ".join(d.strftime("%d.%m") for d in days[-10:])
+        return f"{head} ... {tail}"
+
+    def _breakdown(days: list[date], day: date) -> list[str]:
+        if not days:
+            return [
+                "- сегодня: нет",
+                "- вчера: нет",
+                "- причина: нет активных дней",
+            ]
+
+        has_today = days[-1] == day
+        yesterday = day - timedelta(days=1)
+        has_yesterday = yesterday in set(days)
+        lines = [
+            f"- сегодня: {'да' if has_today else 'нет'}",
+            f"- вчера: {'да' if has_yesterday else 'нет'}",
+        ]
+
+        if has_today:
+            prev = day
+            i = len(days) - 2
+            while i >= 0 and days[i] == (prev - timedelta(days=1)):
+                prev = days[i]
+                i -= 1
+            if i < 0:
+                lines.append("- причина: разрывов нет, цепочка от первого дня")
+            else:
+                lines.append(
+                    f"- причина: разрыв между {days[i].strftime('%d.%m')} и {(days[i] + timedelta(days=1)).strftime('%d.%m')}"
+                )
+            return lines
+
+        if days[-1] == yesterday:
+            prev = yesterday
+            i = len(days) - 2
+            while i >= 0 and days[i] == (prev - timedelta(days=1)):
+                prev = days[i]
+                i -= 1
+            if i < 0:
+                lines.append("- причина: сегодня нет отметки, но вчерашняя цепочка цельная от первого дня")
+            else:
+                lines.append(
+                    f"- причина: сегодня нет отметки; внутри цепочки разрыв между {days[i].strftime('%d.%m')} и {(days[i] + timedelta(days=1)).strftime('%d.%m')}"
+                )
+            return lines
+
+        lines.append("- причина: нет отметки вчера/сегодня, текущий стрик обнулен")
+        return lines
+
+    chat_start = _chat_start_date(db, chat_id)
+    bot_start = _bot_start_date(db)
+
+    origin_days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date <= today,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+
+    chat_state_days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date <= today,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+
+    global_state_days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .where(
+                DaySession.session_date <= today,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+
+    origin_curr = _current_streak_from_days(origin_days, today)
+    origin_best = _best_streak_from_days(origin_days)
+    chat_curr = _current_streak_from_days(chat_state_days, today)
+    chat_best = _best_streak_from_days(chat_state_days)
+    global_curr = _current_streak_from_days(global_state_days, today)
+    global_best = _best_streak_from_days(global_state_days)
+
+    return "\n".join(
+        [
+            "🧪 Сырые метрики",
+            f"today={today.strftime('%d.%m.%Y')} chat_id={chat_id} user_id={user_id}",
+            f"chat_start={(chat_start.strftime('%d.%m.%Y') if chat_start else '-')}, bot_start={(bot_start.strftime('%d.%m.%Y') if bot_start else '-')}",
+            "",
+            "1) Chat origin days (PoopEvent origin_chat_id == chat_id)",
+            f"- count={len(origin_days)} curr={origin_curr} best={origin_best}",
+            f"- days: {_fmt_days(origin_days)}",
+            *_breakdown(origin_days, today),
+            "",
+            "2) Chat state days (SessionUserState in this chat, poops_n>0)",
+            f"- count={len(chat_state_days)} curr={chat_curr} best={chat_best}",
+            f"- days: {_fmt_days(chat_state_days)}",
+            *_breakdown(chat_state_days, today),
+            "",
+            "3) Global state days (SessionUserState all chats, poops_n>0)",
+            f"- count={len(global_state_days)} curr={global_curr} best={global_best}",
+            f"- days: {_fmt_days(global_state_days)}",
+            *_breakdown(global_state_days, today),
+        ]
+    )

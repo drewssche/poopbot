@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
-from app.db.models import SessionUserState, User, UserStreak
+from app.db.models import SessionUserState, User
 from app.services.q1_service import mention
 
 
@@ -214,19 +214,105 @@ def _calc_above_percent(value: int, all_values: list[int]) -> int | None:
     return int(round(100.0 * (less + 0.5 * eq) / len(all_values)))
 
 
-def _project_streak_for_day(
-    current_streak: int,
-    last_poop_date: date | None,
-    day: date,
-    has_positive_today: bool,
-) -> int:
-    if not has_positive_today:
-        return current_streak
-    if last_poop_date == day:
-        return current_streak
-    if last_poop_date == (day - timedelta(days=1)):
-        return current_streak + 1
-    return 1
+def _best_streak_from_days(days: list[date]) -> int:
+    if not days:
+        return 0
+    run = 1
+    best = 1
+    for i in range(1, len(days)):
+        if days[i] == (days[i - 1] + timedelta(days=1)):
+            run += 1
+        else:
+            run = 1
+        if run > best:
+            best = run
+    return best
+
+
+def _streak_until_yesterday(days: list[date], today: date) -> int:
+    if not days:
+        return 0
+    yesterday = today - timedelta(days=1)
+    if days[-1] != yesterday:
+        return 0
+    run = 1
+    idx = len(days) - 2
+    while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+        run += 1
+        idx -= 1
+    return run
+
+
+def _current_streak_from_days(days: list[date], today: date) -> int:
+    if not days:
+        return 0
+    has_today = days[-1] == today
+    hist_days = days[:-1] if has_today else days
+    streak_yesterday = _streak_until_yesterday(hist_days, today)
+    if not has_today:
+        return streak_yesterday
+    return streak_yesterday + 1 if streak_yesterday > 0 else 1
+
+
+def _compute_user_chat_streak_live(db: Session, chat_id: int, user_id: int, today: date) -> int:
+    days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date <= today,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+    return _current_streak_from_days(days, today)
+
+
+def _compute_user_chat_best_streak_live(db: Session, chat_id: int, user_id: int, today: date) -> int:
+    days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date <= today,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+    return _best_streak_from_days(days)
+
+
+def _compute_chat_user_streaks_live(db: Session, chat_ids: list[int], today: date) -> dict[tuple[int, int], int]:
+    if not chat_ids:
+        return {}
+    rows = db.execute(
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id.in_(chat_ids),
+            DaySession.session_date <= today,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
+        )
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+    ).all()
+
+    days_by_user_chat: dict[tuple[int, int], list[date]] = {}
+    for chat_id, user_id, d in rows:
+        key = (int(chat_id), int(user_id))
+        days_by_user_chat.setdefault(key, []).append(d)
+
+    return {key: _current_streak_from_days(days, today) for key, days in days_by_user_chat.items()}
 
 
 def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> int:
@@ -268,6 +354,24 @@ def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> 
     if not has_today:
         return streak_yesterday
     return streak_yesterday + 1 if streak_yesterday > 0 else 1
+
+
+def _compute_user_global_best_streak_live(db: Session, user_id: int, today: date) -> int:
+    days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                PoopEvent.user_id == user_id,
+                DaySession.session_date <= today,
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+    return _best_streak_from_days(days)
 
 
 def _collect_events_map(db: Session, session_ids: list[int], user_id: int | None = None) -> dict[tuple[int, int], list[PoopEvent]]:
@@ -330,34 +434,18 @@ def _streak_nickname(days: int) -> str:
 
 
 def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | None, int, int] | None:
-    streak_rows = db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
-    if not streak_rows:
+    streaks_by_user = _compute_chat_user_streaks_live(db, [chat_id], today)
+    if not streaks_by_user:
         return None
 
-    today_positive = {
-        int(uid)
-        for uid in db.scalars(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                DaySession.session_date == today,
-                SessionUserState.poops_n > 0,
-            )
-        ).all()
-    }
     best_user_id = None
     best_streak = 0
-    for row in streak_rows:
-        projected = _project_streak_for_day(
-            current_streak=int(row.current_streak or 0),
-            last_poop_date=row.last_poop_date,
-            day=today,
-            has_positive_today=int(row.user_id) in today_positive,
-        )
-        if projected > best_streak:
-            best_streak = projected
-            best_user_id = int(row.user_id)
+    for (cid, uid), days in streaks_by_user.items():
+        if cid != chat_id:
+            continue
+        if days > best_streak:
+            best_streak = days
+            best_user_id = uid
 
     if best_user_id is None or best_streak <= 0:
         return None
@@ -426,16 +514,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
     last_mark_date = active_dates[-1] if active_dates else None
 
-    best_streak_period = 0
-    if active_dates:
-        run = 1
-        best_streak_period = 1
-        for i in range(1, len(active_dates)):
-            if active_dates[i] == active_dates[i - 1] + timedelta(days=1):
-                run += 1
-            else:
-                run = 1
-            best_streak_period = max(best_streak_period, run)
+    best_streak_live = _compute_user_global_best_streak_live(db, user_id, today)
 
     best_day = max(daily_poops.items(), key=lambda x: (x[1], x[0])) if daily_poops else None
 
@@ -469,7 +548,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         f"- Всего: 💩({total_poops})",
         f"- Дней с 💩: {days_any}/{days_total}",
         f"- Текущий глобальный стрик (по всем чатам): {streak_val} дн.",
-        f"- Лучший стрик: {best_streak_period} дн.",
+        f"- Лучший стрик: {best_streak_live} дн.",
         "",
         "Твоя динамика:",
         f"- Среднее за календарный день: {avg_per_day:.2f}",
@@ -548,24 +627,8 @@ def build_stats_text_chat(
         avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
         last_mark_date = active_days[-1] if active_days else None
 
-        best_streak_period = 0
-        if active_days:
-            run = 1
-            best_streak_period = 1
-            for i in range(1, len(active_days)):
-                if active_days[i] == active_days[i - 1] + timedelta(days=1):
-                    run += 1
-                else:
-                    run = 1
-                best_streak_period = max(best_streak_period, run)
-
-        streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
-        streak_val = _project_streak_for_day(
-            current_streak=int(streak.current_streak or 0) if streak else 0,
-            last_poop_date=streak.last_poop_date if streak else None,
-            day=today,
-            has_positive_today=last_mark_date == today,
-        )
+        best_streak_live = _compute_user_chat_best_streak_live(db, chat_id, user_id, today)
+        streak_val = _compute_user_chat_streak_live(db, chat_id, user_id, today)
 
         lines = [
             "💬 В этой личке",
@@ -575,7 +638,7 @@ def build_stats_text_chat(
             f"- Всего: 💩({total_poops})",
             f"- Дней с 💩: {days_any}/{period_days}",
             f"- Текущий стрик: {streak_val} дн.",
-            f"- Лучший стрик: {best_streak_period} дн.",
+            f"- Лучший стрик: {best_streak_live} дн.",
             "",
             "Твоя динамика:",
             f"- Среднее за календарный день: {avg_per_day:.2f}",
@@ -606,30 +669,12 @@ def build_stats_text_chat(
     top_rows = sorted(by_user.items(), key=lambda x: (-x[1], x[0]))[:5]
     top_user_ids = [uid for uid, _cnt in top_rows]
 
-    streak_rows = db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
-    today_positive = {
-        int(uid)
-        for uid in db.scalars(
-            select(PoopEvent.user_id)
-            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                DaySession.session_date == today,
-                PoopEvent.origin_chat_id == chat_id,
-            )
-            .group_by(PoopEvent.user_id)
-        ).all()
-    }
     streak_rank: list[tuple[int, int]] = []
-    for row in streak_rows:
-        projected = _project_streak_for_day(
-            current_streak=int(row.current_streak or 0),
-            last_poop_date=row.last_poop_date,
-            day=today,
-            has_positive_today=int(row.user_id) in today_positive,
-        )
-        if projected > 0:
-            streak_rank.append((int(row.user_id), projected))
+    streaks_live = _compute_chat_user_streaks_live(db, [chat_id], today)
+    for (cid, uid), days in streaks_live.items():
+        if cid != chat_id or days <= 0:
+            continue
+        streak_rank.append((uid, days))
     streak_rank.sort(key=lambda x: (-x[1], x[0]))
     streak_top3 = streak_rank[:3]
 
@@ -924,32 +969,11 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         avg_rows.append((chat_id, float(total) / float(participants), total, participants))
     top_avg = sorted(avg_rows, key=lambda x: (-x[1], x[0]))[:5]
 
-    today_positive = set(
-        db.execute(
-            select(DaySession.chat_id, PoopEvent.user_id)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-            .where(
-                DaySession.session_date == today,
-                DaySession.chat_id.in_(chat_ids),
-                PoopEvent.origin_chat_id == DaySession.chat_id,
-            )
-            .group_by(DaySession.chat_id, PoopEvent.user_id)
-        ).all()
-    )
-    streak_rows = db.execute(
-        select(UserStreak.chat_id, UserStreak.user_id, UserStreak.current_streak, UserStreak.last_poop_date)
-        .where(UserStreak.chat_id.in_(chat_ids))
-    ).all()
+    streaks_live = _compute_chat_user_streaks_live(db, chat_ids, today)
     best_streak_by_chat: dict[int, int] = {}
-    for row in streak_rows:
-        projected = _project_streak_for_day(
-            current_streak=int(row.current_streak or 0),
-            last_poop_date=row.last_poop_date,
-            day=today,
-            has_positive_today=(row.chat_id, row.user_id) in today_positive,
-        )
-        if projected > best_streak_by_chat.get(int(row.chat_id), 0):
-            best_streak_by_chat[int(row.chat_id)] = projected
+    for (cid, _uid), days in streaks_live.items():
+        if days > best_streak_by_chat.get(cid, 0):
+            best_streak_by_chat[cid] = days
     top_streak = sorted(
         [(chat_id, days) for chat_id, days in best_streak_by_chat.items() if days > 0],
         key=lambda x: (-x[1], x[0]),

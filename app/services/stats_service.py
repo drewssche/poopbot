@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
-from app.db.models import SessionUserState, User, UserGlobalStreak, UserStreak
+from app.db.models import SessionUserState, User, UserStreak
 from app.services.q1_service import mention
 
 
@@ -229,6 +229,47 @@ def _project_streak_for_day(
     return 1
 
 
+def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> int:
+    days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                PoopEvent.user_id == user_id,
+                DaySession.session_date < today,
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+
+    streak_yesterday = 0
+    if days and days[-1] == (today - timedelta(days=1)):
+        streak_yesterday = 1
+        idx = len(days) - 2
+        while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+            streak_yesterday += 1
+            idx -= 1
+
+    has_today = bool(
+        db.scalar(
+            select(PoopEvent.id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.session_date == today,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .limit(1)
+        )
+    )
+    if not has_today:
+        return streak_yesterday
+    return streak_yesterday + 1 if streak_yesterday > 0 else 1
+
+
 def _collect_events_map(db: Session, session_ids: list[int], user_id: int | None = None) -> dict[tuple[int, int], list[PoopEvent]]:
     if not session_ids:
         return {}
@@ -418,13 +459,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             if f:
                 fe[f] += 1
 
-    g_streak = db.get(UserGlobalStreak, {"user_id": user_id})
-    streak_val = _project_streak_for_day(
-        current_streak=int(g_streak.current_streak or 0) if g_streak else 0,
-        last_poop_date=g_streak.last_poop_date if g_streak else None,
-        day=today,
-        has_positive_today=daily_poops.get(today, 0) > 0,
-    )
+    streak_val = _compute_user_global_streak_live(db, user_id, today)
 
     lines = [
         "🙋 Моя статистика",
@@ -682,29 +717,10 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     above_pct = _calc_above_percent(my_total, totals) if my_rank is not None else None
     top5 = [(TOP5_ROLES[i], poops) for i, (_uid, poops) in enumerate(ranking_rows[:5])]
 
-    streak_rows = db.execute(
-        select(UserStreak.chat_id, UserStreak.user_id, UserStreak.current_streak, UserStreak.last_poop_date)
-    ).all()
-    today_positive = set(
-        db.execute(
-            select(DaySession.chat_id, SessionUserState.user_id)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(DaySession.session_date == today, SessionUserState.poops_n > 0)
-        ).all()
-    )
-    projected_streaks_by_user: dict[int, int] = {}
-    for row in streak_rows:
-        projected = _project_streak_for_day(
-            current_streak=int(row.current_streak or 0),
-            last_poop_date=row.last_poop_date,
-            day=today,
-            has_positive_today=(row.chat_id, row.user_id) in today_positive,
-        )
-        if projected > 0:
-            uid = int(row.user_id)
-            best = projected_streaks_by_user.get(uid, 0)
-            if projected > best:
-                projected_streaks_by_user[uid] = projected
+    projected_streaks_by_user: dict[int, int] = {
+        int(uid): _compute_user_global_streak_live(db, int(uid), today)
+        for uid in per_user_total.keys()
+    }
 
     states_pos = db.scalars(select(SessionUserState).where(SessionUserState.session_id.in_(session_ids))).all()
     session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
@@ -787,7 +803,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     else:
         lines.append("- пока нет данных")
 
-    lines.extend(["", "Лидеры стриков:"])
+    lines.extend(["", "Лидеры глобальных стриков:"])
     top_streaks = sorted(projected_streaks_by_user.items(), key=lambda x: (-x[1], x[0]))[:3]
     if not top_streaks:
         lines.append("- пока нет данных")

@@ -182,3 +182,64 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         lines.append(f"{mention(u)} — {' • '.join(status_bits)}")
 
     return "\n".join(lines)
+
+
+def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, session_date: date) -> str:
+    date_str = session_date.strftime("%d.%m.%y")
+    state = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
+    poops = int(state.poops_n) if state else 0
+
+    events = db.scalars(
+        select(PoopEvent)
+        .where(PoopEvent.session_id == session_id, PoopEvent.user_id == user_id)
+        .order_by(PoopEvent.event_n.asc())
+    ).all()
+
+    streak_row = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
+    chat_streak = _project_streak_for_day(
+        current_streak=int(streak_row.current_streak) if streak_row else 0,
+        last_poop_date=streak_row.last_poop_date if streak_row else None,
+        day=session_date,
+        has_positive_today=poops > 0,
+    )
+
+    global_row = db.get(UserGlobalStreak, {"user_id": user_id})
+    global_today_positive = bool(
+        db.scalar(
+            select(PoopEvent.id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.session_date == session_date,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .limit(1)
+        )
+    )
+    global_streak = _project_streak_for_day(
+        current_streak=int(global_row.current_streak) if global_row else 0,
+        last_poop_date=global_row.last_poop_date if global_row else None,
+        day=session_date,
+        has_positive_today=global_today_positive,
+    )
+
+    lines = [
+        f"💩 Твоя личная сессия ({date_str})",
+        "Нажми +💩, чтобы добавить отметку.",
+        "",
+        f"Итого: 💩({poops})",
+        f"Чатовый стрик: {chat_streak} дн.",
+        f"Глобальный стрик: {global_streak} дн.",
+    ]
+
+    if poops <= 0:
+        lines.extend(["", "Сегодня пока без отметок."])
+        return "\n".join(lines)
+
+    lines.extend(["", "Сегодня:"])
+    for ev in events:
+        b_icon = BRISTOL_EMOJI.get(int(ev.bristol), "❔") if ev.bristol is not None else "❔"
+        f_icon = FEELING_EMOJI.get(ev.feeling, "❔") if ev.feeling else "❔"
+        lines.append(f"- #{int(ev.event_n)} {b_icon} {f_icon}")
+
+    return "\n".join(lines)

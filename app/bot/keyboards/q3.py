@@ -17,14 +17,25 @@ def _choice_label(text: str, selected: bool) -> str:
 
 def q3_keyboard(
     selected_choice: str | None = None,
+    *,
+    private_flow: bool = False,
+    event_n: int | None = None,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    target_n = int(event_n or 1)
     for choice, text in FEELING_CHOICES:
+        cb = f"q3:set:{target_n}:{choice}" if private_flow else f"q3:{choice}"
         kb.row(
             InlineKeyboardButton(
                 text=_choice_label(text, selected_choice == choice),
-                callback_data=f"q3:{choice}",
+                callback_data=cb,
             )
+        )
+
+    if private_flow:
+        kb.row(
+            InlineKeyboardButton(text="⬅️ Назад в Q2", callback_data=f"q3:back_q2:{target_n}"),
+            InlineKeyboardButton(text="Пропустить", callback_data=f"q3:skip:{target_n}"),
         )
 
     return kb.as_markup()

@@ -9,13 +9,14 @@ from sqlalchemy import func, select
 
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q2 import q2_keyboard
+from app.bot.keyboards.q3 import q3_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
 from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import ensure_events_count, list_events
-from app.services.q1_service import render_q1
-from app.services.q2_q3_service import render_q2_text, should_show_q2_q3_button
+from app.services.q1_service import render_q1, render_q1_private
+from app.services.q2_q3_service import render_q2_text, render_q3_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.repo_service import (
     get_or_create_session,
@@ -103,6 +104,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
 
     chat_id = cb.message.chat.id
     user = cb.from_user
+    is_private_chat = cb.message.chat.type == "private"
 
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id)
@@ -117,15 +119,27 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
             return
 
         upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
-        sess = db.scalar(
-            select(DaySession)
-            .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                SessionMessage.kind == "Q2",
-                SessionMessage.message_id == cb.message.message_id,
+        sess = None
+        if is_private_chat:
+            sess = db.scalar(
+                select(DaySession)
+                .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+                .where(
+                    DaySession.chat_id == chat_id,
+                    SessionMessage.kind == "Q1",
+                    SessionMessage.message_id == cb.message.message_id,
+                )
             )
-        )
+        if sess is None:
+            sess = db.scalar(
+                select(DaySession)
+                .join(SessionMessage, SessionMessage.session_id == DaySession.session_id)
+                .where(
+                    DaySession.chat_id == chat_id,
+                    SessionMessage.kind == "Q2",
+                    SessionMessage.message_id == cb.message.message_id,
+                )
+            )
         if sess is None:
             sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
@@ -134,12 +148,17 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
             return
 
         q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-        if not q1_msg_id:
+        if not q1_msg_id and not is_private_chat:
             await cb.answer("\u041d\u0435\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e", show_alert=False)
             return
+        if not q1_msg_id and is_private_chat:
+            q1_msg_id = cb.message.message_id
+            from app.services.repo_service import set_session_message_id
+
+            set_session_message_id(db, sess.session_id, "Q1", q1_msg_id)
 
         q2_msg_id = get_session_message_id(db, sess.session_id, "Q2")
-        if q2_msg_id and cb.message.message_id != q2_msg_id:
+        if (not is_private_chat) and q2_msg_id and cb.message.message_id != q2_msg_id:
             await cb.answer("\u041d\u0435\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e", show_alert=False)
             return
 
@@ -155,6 +174,14 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
         changed = False
 
         selected_n, selected_choice = _parse_q2(cb.data, int(state.poops_n))
+        is_back_q1 = cb.data == "q2:back_q1"
+        is_skip = cb.data.startswith("q2:skip:")
+        if is_skip:
+            try:
+                selected_n = int(cb.data.split(":")[2])
+            except Exception:
+                selected_n = int(state.poops_n)
+            selected_choice = None
         if selected_n < 1 or selected_n > int(state.poops_n):
             selected_n = int(state.poops_n)
 
@@ -165,6 +192,10 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                 state.bristol = evt.bristol
                 changed = True
                 await cb.answer(f"Записал для тебя: #{selected_n} {_choice_to_icon(selected_choice)}", show_alert=False)
+        elif is_back_q1:
+            await cb.answer()
+        elif is_skip:
+            await cb.answer("Пропустил", show_alert=False)
         else:
             await cb.answer()
 
@@ -180,6 +211,34 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
 
         evt = events_by_n.get(selected_n)
         active_choice = _choice_from_bristol(evt.bristol if evt else None)
+
+        if is_private_chat:
+            try:
+                if is_back_q1:
+                    await cb.message.edit_text(
+                        render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=window.session_date),
+                        reply_markup=q1_keyboard(
+                            has_any_members=True,
+                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                            show_q2_q3_button=False,
+                        ),
+                    )
+                else:
+                    await cb.message.edit_text(
+                        render_q3_private_text(db, sess.session_id, user.id, selected_n),
+                        reply_markup=q3_keyboard(
+                            selected_choice=(events_by_n.get(selected_n).feeling if events_by_n.get(selected_n) else None),
+                            private_flow=True,
+                            event_n=selected_n,
+                        ),
+                    )
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    logger.exception("Failed to edit private flow from Q2: %s", e)
+
+            if touched_sessions:
+                await refresh_synced_chats_views(cb.bot, db, touched_sessions)
+            return
 
         try:
             await cb.message.edit_text(
@@ -208,6 +267,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                             db,
                             chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                             session_id=sess.session_id,
+                            is_private_chat=is_private_chat,
                         ),
                     ),
                 )

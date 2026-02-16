@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
 from app.bot.keyboards.q1 import q1_keyboard
+from app.bot.keyboards.q2 import q2_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.models import CommandMessage, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
@@ -17,8 +18,8 @@ from app.services.command_message_service import (
 )
 from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import reconcile_events_count
-from app.services.q1_service import apply_minus, apply_plus, render_q1
-from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
+from app.services.q1_service import apply_minus, apply_plus, render_q1, render_q1_private
+from app.services.q2_q3_service import ensure_q2_q3_exist, render_q2_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.reminder_service import LATE_REMINDER_COMMAND
 from app.services.repo_service import (
@@ -82,6 +83,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
     chat_id = cb.message.chat.id
     user = cb.from_user
+    is_private_chat = cb.message.chat.type == "private"
 
     try:
         with db_session(_session_factory) as db:
@@ -171,8 +173,12 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             db.commit()
 
-            text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
-            has_any_members = "Участники:" in text
+            text = (
+                render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=sess.session_date)
+                if is_private_chat
+                else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
+            )
+            has_any_members = True if is_private_chat else ("Участники:" in text)
             try:
                 if q1_msg_id:
                     await cb.bot.edit_message_text(
@@ -181,10 +187,12 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
+                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
                             show_q2_q3_button=should_show_q2_q3_button(
                                 db,
                                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                                 session_id=sess.session_id,
+                                is_private_chat=is_private_chat,
                             ),
                         ),
                     )
@@ -194,10 +202,12 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
+                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
                             show_q2_q3_button=should_show_q2_q3_button(
                                 db,
                                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                                 session_id=sess.session_id,
+                                is_private_chat=is_private_chat,
                             ),
                         ),
                     )
@@ -206,7 +216,24 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
 
-            if bool(chat.q2_q3_enabled):
+            if is_private_chat and cb.data != "q1:minus" and bool(chat.q2_q3_enabled) and changed:
+                state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
+                target_n = max(1, int(state.poops_n)) if state is not None else 1
+                try:
+                    await cb.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=q1_msg_id or cb.message.message_id,
+                        text=render_q2_private_text(db, sess.session_id, user.id, target_n),
+                        reply_markup=q2_keyboard(private_flow=True, event_n=target_n),
+                    )
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in str(e).lower():
+                        logger.exception("Failed to open private Q2 flow: %s", e)
+                if touched_sessions:
+                    await refresh_synced_chats_views(cb.bot, db, touched_sessions)
+                return
+
+            if bool(chat.q2_q3_enabled) and not is_private_chat:
                 try:
                     await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
                 except Exception:
@@ -253,6 +280,10 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
             )
             if sess is None or sess.status == "closed":
                 await cb.answer("Неактуально", show_alert=False)
+                return
+
+            if cb.message.chat.type == "private":
+                await cb.answer("В личке используй +💩", show_alert=False)
                 return
 
             if not check_rate_limit(db, chat_id=chat_id, user_id=cb.from_user.id, scope="Q1_Q2Q3", cooldown_seconds=4):

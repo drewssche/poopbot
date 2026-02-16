@@ -20,7 +20,7 @@ from app.services.repo_service import (
     set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
-from app.services.q1_service import mention, render_q1
+from app.services.q1_service import mention, render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.stats_service import (
     build_stats_text_chat,
@@ -284,7 +284,11 @@ async def _post_q1(
     member_count = db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id)) or 0
     has_any_members = member_count > 0
 
-    text = render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
+    text = (
+        render_q1_private(db, chat_id=chat_id, session_id=session_id, user_id=chat_id, session_date=session_date)
+        if chat_id > 0
+        else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
+    )
     sent = await _safe_send_message(
         bot,
         chat_id=chat_id,
@@ -296,6 +300,7 @@ async def _post_q1(
                 db,
                 chat_q2_q3_enabled=bool(q2_q3_enabled),
                 session_id=session_id,
+                is_private_chat=chat_id > 0,
             ),
         ),
     )
@@ -422,7 +427,11 @@ async def _lock_q1(bot: Bot, db, chat_id: int, session_id: int) -> None:
         return
 
     sess = db.get(DaySession, session_id)
-    text = render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date)
+    text = (
+        render_q1_private(db, chat_id=chat_id, session_id=session_id, user_id=chat_id, session_date=sess.session_date)
+        if chat_id > 0
+        else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date)
+    )
     text = f"{LOCK_LINE}\n\n{text}"
     await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
 
@@ -469,8 +478,12 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
     if not q1_id:
         return
 
-    text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=session_date)
-    has_any_members = "Участники:" in text
+    text = (
+        render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=chat_id, session_date=session_date)
+        if chat_id > 0
+        else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=session_date)
+    )
+    has_any_members = True if chat_id > 0 else ("Участники:" in text)
     chat = db.get(Chat, chat_id)
     show_remind = True
     show_q2_q3_button = False
@@ -489,6 +502,7 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
                 db,
                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled) if chat is not None else False,
                 session_id=sess.session_id,
+                is_private_chat=chat_id > 0,
             ) if chat is not None else show_q2_q3_button,
         ),
     )

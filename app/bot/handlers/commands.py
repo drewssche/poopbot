@@ -16,7 +16,7 @@ from app.services.command_message_service import (
     get_command_message_id,
     set_command_message_id,
 )
-from app.services.q1_service import render_q1
+from app.services.q1_service import render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.recap_service import is_recap_available
 from app.services.repo_service import (
@@ -118,8 +118,13 @@ async def start_cmd(message: Message) -> None:
                 if "message to be replied not found" not in str(e).lower():
                     raise
 
-        text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-        has_any_members = "Участники:" in text
+        is_private_chat = message.chat.type == "private"
+        text = (
+            render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=window.session_date)
+            if is_private_chat
+            else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+        )
+        has_any_members = True if is_private_chat else ("Участники:" in text)
 
         if window.session_date.month == 12 and window.session_date.day == 30:
             sent_recap_mid = get_command_message_id(db, chat_id, 0, "recap_announce", window.session_date)
@@ -141,6 +146,7 @@ async def start_cmd(message: Message) -> None:
                     db,
                     chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                     session_id=sess.session_id,
+                    is_private_chat=is_private_chat,
                 ),
             ),
         )
@@ -170,7 +176,7 @@ async def help_cmd(message: Message) -> None:
         is_private_chat = message.chat.type == "private"
         root_text = _help_root_text(chat.timezone)
 
-    if existing_mid and not is_private_chat:
+    if existing_mid:
         try:
             await message.bot.edit_message_text(
                 chat_id=chat_id,
@@ -178,12 +184,14 @@ async def help_cmd(message: Message) -> None:
                 text=root_text,
                 reply_markup=help_root_kb(user.id),
             )
-            await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
+            if not is_private_chat:
+                await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
             err = str(e).lower()
             if "message is not modified" in err:
-                await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
+                if not is_private_chat:
+                    await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
                 return
             if all(
                 x not in err
@@ -235,7 +243,7 @@ async def stats_cmd(message: Message) -> None:
         is_private_chat=is_private_chat,
     )
 
-    if existing_mid and not is_private_chat:
+    if existing_mid:
         try:
             await message.bot.edit_message_text(
                 chat_id=chat_id,
@@ -243,12 +251,14 @@ async def stats_cmd(message: Message) -> None:
                 text=text,
                 reply_markup=stats_root_kb(show_recap=show_recap, is_private_chat=is_private_chat),
             )
-            await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
+            if not is_private_chat:
+                await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
             err = str(e).lower()
             if "message is not modified" in err:
-                await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
+                if not is_private_chat:
+                    await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
                 return
             if all(
                 x not in err

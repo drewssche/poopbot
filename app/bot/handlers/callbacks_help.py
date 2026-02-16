@@ -26,7 +26,7 @@ from app.services.help_service import (
     set_chat_post_time,
     set_chat_q2_q3_enabled,
 )
-from app.services.q1_service import render_q1
+from app.services.q1_service import render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
 from app.services.time_service import get_session_window, now_in_tz
@@ -258,8 +258,12 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
                     q1_id = get_session_message_id(db, sess.session_id, "Q1")
                     if q1_id and sess.status != "closed":
-                        q1_text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-                        has_any_members = "Участники:" in q1_text
+                        q1_text = (
+                            render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=actor_id, session_date=window.session_date)
+                            if is_private_chat
+                            else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+                        )
+                        has_any_members = True if is_private_chat else ("Участники:" in q1_text)
                         try:
                             await cb.bot.edit_message_text(
                                 chat_id=chat_id,
@@ -272,13 +276,14 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                         db,
                                         chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                                         session_id=sess.session_id,
+                                        is_private_chat=is_private_chat,
                                     ),
                                 ),
                             )
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e).lower():
                                 logger.exception("Failed to edit Q1 after q2_q3 toggle: %s", e)
-                    if bool(chat.q2_q3_enabled):
+                    if bool(chat.q2_q3_enabled) and not is_private_chat:
                         try:
                             await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
                         except Exception:
@@ -399,8 +404,12 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                     sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
                     q1_id = get_session_message_id(db, sess.session_id, "Q1")
                     if q1_id and sess.status != "closed":
-                        text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-                        has_any_members = "Участники:" in text
+                        text = (
+                            render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=actor_id, session_date=window.session_date)
+                            if is_private_chat
+                            else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
+                        )
+                        has_any_members = True if is_private_chat else ("Участники:" in text)
                         try:
                             await cb.bot.edit_message_text(
                                 chat_id=chat_id,
@@ -414,13 +423,14 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                         db,
                                         chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
                                         session_id=sess.session_id,
+                                        is_private_chat=is_private_chat,
                                     ),
                                 ),
                             )
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e).lower():
                                 logger.exception("Failed to edit Q1 after delete_me: %s", e)
-                        if bool(chat.q2_q3_enabled):
+                        if bool(chat.q2_q3_enabled) and not is_private_chat:
                             try:
                                 await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
                             except Exception:

@@ -1005,12 +1005,23 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         avg_rows.append((chat_id, float(total) / float(participants), total, participants))
     top_avg = sorted(avg_rows, key=lambda x: (-x[1], x[0]))[:5]
 
-    _ = today
     chat_rows = db.scalars(select(Chat).where(Chat.chat_id.in_(chat_ids))).all()
-    today_by_chat = {
-        int(ch.chat_id): now_in_tz(ch.timezone or "Europe/Minsk").date()
-        for ch in chat_rows
-    }
+    tz_by_chat = {int(ch.chat_id): (ch.timezone or "Europe/Minsk") for ch in chat_rows}
+    latest_session_date_by_chat: dict[int, date] = {}
+    for s in sessions:
+        cid = int(s.chat_id)
+        prev = latest_session_date_by_chat.get(cid)
+        if prev is None or s.session_date > prev:
+            latest_session_date_by_chat[cid] = s.session_date
+
+    # For among-chats streak, anchor each chat to its own latest known session date.
+    # This keeps the ranking consistent with what users currently see in that chat's Q1.
+    today_by_chat: dict[int, date] = {}
+    for cid in chat_ids:
+        if cid in latest_session_date_by_chat:
+            today_by_chat[cid] = latest_session_date_by_chat[cid]
+            continue
+        today_by_chat[cid] = now_in_tz(tz_by_chat.get(cid, "Europe/Minsk")).date()
     streaks_live = _compute_chat_user_streaks_live_per_chat_today(db, chat_ids, today_by_chat)
     best_streak_by_chat: dict[int, int] = {}
     for (cid, _uid), days in streaks_live.items():

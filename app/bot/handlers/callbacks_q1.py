@@ -19,7 +19,7 @@ from app.services.poop_event_service import reconcile_events_count
 from app.services.q1_service import apply_minus, apply_plus, render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
 from app.services.rate_limit_service import check_rate_limit
-from app.services.reminder_service import LATE_REMINDER_COMMAND, REMINDER22_COMMAND
+from app.services.reminder_service import LATE_REMINDER_COMMAND
 from app.services.repo_service import (
     ensure_chat_member,
     get_or_create_session,
@@ -69,7 +69,7 @@ def _resolve_reminder_context(db, chat_id: int, current_sess, cb: CallbackQuery,
     return is_current_by_msg_id or is_current_by_reply or is_current_by_mapping
 
 
-@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:plus_reminder", "q1:plus_late"}))
+@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:plus_late"}))
 async def q1_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
         return
@@ -99,8 +99,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             db.flush()
             current_sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
-            if cb.data in {"q1:plus_reminder", "q1:plus_late"}:
-                reminder_command = REMINDER22_COMMAND if cb.data == "q1:plus_reminder" else LATE_REMINDER_COMMAND
+            if cb.data == "q1:plus_late":
+                reminder_command = LATE_REMINDER_COMMAND
                 if not _resolve_reminder_context(db, chat_id, current_sess, cb, reminder_command):
                     await cb.answer("Неактуально", show_alert=False)
                     return
@@ -124,14 +124,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 return
 
             q1_msg_id = get_session_message_id(db, sess.session_id, "Q1")
-            reminder22_msg_id = (
-                cb.message.message_id
-                if cb.data == "q1:plus_reminder"
-                else (
-                    get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
-                    or get_any_command_message_id(db, chat_id, REMINDER22_COMMAND, sess.session_date)
-                )
-            )
             late_msg_id = (
                 cb.message.message_id
                 if cb.data == "q1:plus_late"
@@ -141,8 +133,8 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 )
             )
 
-            if cb.data not in {"q1:plus_reminder", "q1:plus_late"}:
-                allowed_msg_ids = {mid for mid in (q1_msg_id, reminder22_msg_id, late_msg_id) if mid}
+            if cb.data != "q1:plus_late":
+                allowed_msg_ids = {mid for mid in (q1_msg_id, late_msg_id) if mid}
                 if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
                     await cb.answer("Неактуально", show_alert=False)
                     return

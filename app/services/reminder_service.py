@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ChatMember, Session as DaySession, SessionUserState, User
 
-REMINDER22_COMMAND = "reminder22"
 LATE_REMINDER_COMMAND = "late_reminder"
 
 
@@ -48,17 +47,6 @@ def _collect_debtors(db: Session, session_id: int) -> list[tuple[int, User | Non
         if st is None or int(st.poops_n or 0) <= 0:
             debtors.append((uid, users.get(uid)))
     return debtors
-
-
-def build_reminder_22_text(db: Session, session_id: int) -> str | None:
-    debtors = _collect_debtors(db, session_id)
-    if not debtors:
-        return None
-
-    lines = ["⏰ А вот и 22:00. Ну что ребята, покакали?"]
-    for uid, user in debtors:
-        lines.append(_user_mention_html(user, uid))
-    return "\n".join(lines)
 
 
 def build_late_reminder_text(db: Session, session_id: int) -> str | None:

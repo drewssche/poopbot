@@ -14,7 +14,6 @@ def debug_kb(mode: str = "preview") -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🔄 Обновить меню", callback_data=f"debug:refresh:{mode}"))
     kb.row(InlineKeyboardButton(text="🧪 Q1 автопост", callback_data=f"debug:run:{mode}:q1"))
     kb.row(InlineKeyboardButton(text="🧪 Q2/Q3", callback_data=f"debug:run:{mode}:q2q3"))
-    kb.row(InlineKeyboardButton(text="🧪 Напоминалка 22:00", callback_data=f"debug:run:{mode}:r22"))
     kb.row(InlineKeyboardButton(text="🧪 Финалка 23:30", callback_data=f"debug:run:{mode}:late"))
     kb.row(InlineKeyboardButton(text="🧪 Итоги недели", callback_data=f"debug:run:{mode}:week"))
     kb.row(InlineKeyboardButton(text="🧪 Итоги месяца", callback_data=f"debug:run:{mode}:month"))

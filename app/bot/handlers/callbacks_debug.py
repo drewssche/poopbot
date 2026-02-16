@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.keyboards.debug import debug_kb
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
-from app.services.reminder_service import build_late_reminder_text, build_reminder_22_text
+from app.services.reminder_service import build_late_reminder_text
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
 from app.services.scheduler_service import build_periodic_report_text
 from app.services.time_service import get_session_window, now_in_tz
@@ -53,7 +53,6 @@ def _action_label(action: str) -> str:
     labels = {
         "q1": "Q1 автопост",
         "q2q3": "Q2/Q3",
-        "r22": "Напоминалка 22:00",
         "late": "Финалка 23:30",
         "week": "Итоги недели",
         "month": "Итоги месяца",
@@ -162,11 +161,6 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             await _send_output(cb, mode, render_q3_text(db, chat_id, sess.session_id))
             return True
 
-        if action == "r22":
-            text = build_reminder_22_text(db, sess.session_id) or "⏰ Напоминалка 22:00 неактуальна."
-            await _send_output(cb, mode, text, parse_mode="HTML", reply_to_message_id=q1_msg_id or None)
-            return True
-
         if action == "late":
             text = build_late_reminder_text(db, sess.session_id) or "⏳ Финальная напоминалка неактуальна."
             await _send_output(cb, mode, text, parse_mode="HTML", reply_to_message_id=q1_msg_id or None)
@@ -225,7 +219,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             return True
 
         if action == "all":
-            for sub_action in ("q1", "q2q3", "r22", "late", "week", "month", "year", "holiday:feb9", "holiday:nov19", "recap_announce"):
+            for sub_action in ("q1", "q2q3", "late", "week", "month", "year", "holiday:feb9", "holiday:nov19", "recap_announce"):
                 await _send_debug_action(cb, sub_action, mode)
             return True
 

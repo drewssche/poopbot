@@ -48,7 +48,7 @@ def help_notifications_kb(
     )
     kb.row(
         InlineKeyboardButton(
-            text="🧻 Q2-Q3: Вкл" if q2_q3_enabled else "🧻 Q2-Q3: Выкл",
+            text="🧻 Уточняющие вопросы: Вкл" if q2_q3_enabled else "🧻 Уточняющие вопросы: Выкл",
             callback_data=f"help:q2_q3_toggle:{owner_id}",
         )
     )

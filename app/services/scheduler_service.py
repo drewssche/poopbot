@@ -32,9 +32,7 @@ from app.services.stats_service import (
 from app.services.command_message_service import get_command_message_id, set_command_message_id
 from app.services.reminder_service import (
     LATE_REMINDER_COMMAND,
-    REMINDER22_COMMAND,
     build_late_reminder_text,
-    build_reminder_22_text,
 )
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
@@ -268,31 +266,6 @@ async def _post_q1(
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
 
 
-async def _send_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None:
-    q1_id = get_session_message_id(db, session_id, "Q1")
-    if not q1_id:
-        return
-    sess = db.get(DaySession, session_id)
-    if sess is None:
-        return
-    if get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date) is not None:
-        return
-
-    text = build_reminder_22_text(db, session_id)
-    if not text:
-        return
-
-    sent = await _safe_send_message(
-        bot,
-        chat_id=chat_id,
-        text=text,
-        parse_mode="HTML",
-        reply_to_message_id=q1_id,
-    )
-    set_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date, sent.message_id)
-    logger.info("Sent 22:00 reminder chat_id=%s session_id=%s", chat_id, session_id)
-
-
 async def _send_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> None:
     q1_id = get_session_message_id(db, session_id, "Q1")
     if not q1_id:
@@ -353,7 +326,6 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
     await _lock_q1(bot, db, chat_id, session_id)
     await _lock_simple(bot, db, chat_id, session_id, "Q2", Q2_TEXT)
     await _lock_simple(bot, db, chat_id, session_id, "Q3", Q3_TEXT)
-    await _lock_reminder_22(bot, db, chat_id, session_id)
     await _lock_late_reminder(bot, db, chat_id, session_id)
 
     logger.info("Closed session chat_id=%s session_id=%s", chat_id, session_id)
@@ -376,26 +348,6 @@ async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, b
         return
     text = f"{LOCK_LINE}\n\n{body_text}"
     await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
-
-
-async def _lock_reminder_22(bot: Bot, db, chat_id: int, session_id: int) -> None:
-    sess = db.get(DaySession, session_id)
-    if sess is None:
-        return
-    mid = get_command_message_id(db, chat_id, 0, REMINDER22_COMMAND, sess.session_date)
-    if not mid:
-        return
-
-    body = build_reminder_22_text(db, session_id) or "⏰ Напоминалка неактуальна."
-    text = f"{LOCK_LINE}\n\n{body}"
-    await _safe_edit_message_text(
-        bot,
-        chat_id=chat_id,
-        message_id=mid,
-        text=text,
-        parse_mode="HTML",
-        reply_markup=None,
-    )
 
 
 async def _lock_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> None:

@@ -123,7 +123,7 @@ async def refresh_synced_chats_views(bot: Bot, db: Session, touched_sessions: li
                 logger.warning("Q1 sync refresh failed chat_id=%s session_id=%s err=%s", chat_id, session_id, e)
 
         chat = db.get(Chat, chat_id)
-        if chat is not None and bool(chat.q2_q3_enabled):
+        if chat is not None and chat_id < 0 and bool(chat.q2_q3_enabled):
             try:
                 await ensure_q2_q3_exist(bot, db, chat_id, session_id)
             except Exception as e:

@@ -216,7 +216,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
 
-            if is_private_chat and cb.data != "q1:minus" and bool(chat.q2_q3_enabled) and changed:
+            if is_private_chat and cb.data != "q1:minus" and changed:
                 state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
                 target_n = max(1, int(state.poops_n)) if state is not None else 1
                 try:

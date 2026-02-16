@@ -111,7 +111,7 @@ async def start_cmd(message: Message) -> None:
         if q1_msg_id:
             try:
                 await message.answer("Актуальный вопрос за сессию выше 👆", reply_to_message_id=q1_msg_id)
-                if bool(chat.q2_q3_enabled):
+                if bool(chat.q2_q3_enabled) and chat_id < 0:
                     await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
                 return
             except TelegramBadRequest as e:
@@ -151,7 +151,7 @@ async def start_cmd(message: Message) -> None:
             ),
         )
         set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
-        if bool(chat.q2_q3_enabled):
+        if bool(chat.q2_q3_enabled) and chat_id < 0:
             await ensure_q2_q3_exist(message.bot, db, chat_id, sess.session_id)
 
 

@@ -305,7 +305,7 @@ async def _post_q1(
         ),
     )
     set_session_message_id(db, session_id, "Q1", sent.message_id)
-    if q2_q3_enabled:
+    if q2_q3_enabled and chat_id < 0:
         try:
             await asyncio.wait_for(
                 ensure_q2_q3_exist(bot, db, chat_id, session_id),

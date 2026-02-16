@@ -268,12 +268,12 @@ def _compute_user_chat_streak_live(db: Session, chat_id: int, user_id: int, toda
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date <= today,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -287,12 +287,12 @@ def _compute_user_chat_best_streak_live(db: Session, chat_id: int, user_id: int,
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date <= today,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -305,15 +305,15 @@ def _compute_chat_user_streaks_live(db: Session, chat_ids: list[int], today: dat
     if not chat_ids:
         return {}
     rows = db.execute(
-        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        select(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date <= today,
-            PoopEvent.origin_chat_id == DaySession.chat_id,
+            SessionUserState.poops_n > 0,
         )
-        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
-        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+        .group_by(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), SessionUserState.user_id.asc(), DaySession.session_date.asc())
     ).all()
 
     days_by_user_chat: dict[tuple[int, int], list[date]] = {}
@@ -334,15 +334,15 @@ def _compute_chat_user_streaks_live_per_chat_today(
 
     max_today = max(today_by_chat.values())
     rows = db.execute(
-        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        select(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date <= max_today,
-            PoopEvent.origin_chat_id == DaySession.chat_id,
+            SessionUserState.poops_n > 0,
         )
-        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
-        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+        .group_by(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), SessionUserState.user_id.asc(), DaySession.session_date.asc())
     ).all()
 
     days_by_user_chat: dict[tuple[int, int], list[date]] = {}
@@ -750,7 +750,7 @@ def build_stats_text_chat(
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
     lines.append("")
-    lines.append("Примечание: в этом блоке учитываются только отметки, сделанные именно в этом чате.")
+    lines.append("Примечание: количество и распределения считаются по отметкам, сделанным именно в этом чате; стрики — по дневной активности в сессиях этого чата (включая синхронизацию).")
     return "\n".join(lines)
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
     if period in {"today", "week", "month", "year"}:

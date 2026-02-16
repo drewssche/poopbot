@@ -149,7 +149,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer(popup, show_alert=False)
             else:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
-                changed, popup = apply_plus(db, sess.session_id, user.id)
+                changed, popup = apply_plus(db, sess.session_id, user.id, origin_chat_id=chat_id)
                 if changed and now_in_tz(chat.timezone).time().hour < 11:
                     popup = "Кофейку и цигарку бахнул? Красава"
                 await cb.answer(popup, show_alert=False)

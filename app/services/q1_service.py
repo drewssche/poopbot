@@ -64,7 +64,7 @@ def _achievement_pool(n: int) -> list[str]:
     return []
 
 
-def apply_plus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int | None = None) -> tuple[bool, str]:
     st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
     if st is None:
         st = SessionUserState(session_id=session_id, user_id=user_id, poops_n=0)
@@ -74,9 +74,18 @@ def apply_plus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
     if st.poops_n >= 10:
         return False, "Я тебе не верю"
 
+    if origin_chat_id is None:
+        origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
+
     prev = st.poops_n
     st.poops_n += 1
-    create_event(db, session_id=session_id, user_id=user_id, event_n=st.poops_n)
+    create_event(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        event_n=st.poops_n,
+        origin_chat_id=origin_chat_id,
+    )
 
     if prev == 0 and st.poops_n > 0:
         pool = _achievement_pool(st.poops_n)
@@ -301,6 +310,6 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
     for ev in events:
         b_icon = BRISTOL_EMOJI.get(int(ev.bristol), "❔") if ev.bristol is not None else "❔"
         f_icon = FEELING_EMOJI.get(ev.feeling, "❔") if ev.feeling else "❔"
-        lines.append(f"- #{int(ev.event_n)} {b_icon} {f_icon}")
+        lines.append(f"- #{int(ev.event_n)} {b_icon} • {f_icon}")
 
     return "\n".join(lines)

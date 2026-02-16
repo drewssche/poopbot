@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMember, SessionUserState, User, UserGlobalStreak, UserStreak
+from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserGlobalStreak, UserStreak
 from app.services.poop_event_service import create_event, delete_event
 
 
@@ -137,6 +137,19 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         s.user_id: s
         for s in db.scalars(select(UserGlobalStreak).where(UserGlobalStreak.user_id.in_(user_ids))).all()
     }
+    global_today_positive_user_ids = {
+        int(uid)
+        for uid in db.scalars(
+            select(PoopEvent.user_id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.session_date == session_date,
+                PoopEvent.user_id.in_(user_ids),
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .group_by(PoopEvent.user_id)
+        ).all()
+    }
 
     lines = [header, "", "Участники:"]
 
@@ -161,10 +174,10 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             current_streak=int(global_row.current_streak) if global_row else 0,
             last_poop_date=global_row.last_poop_date if global_row else None,
             day=session_date,
-            has_positive_today=poops > 0,
+            has_positive_today=int(uid) in global_today_positive_user_ids,
         )
-        status_bits.append(f"стрик чат {streak_val} дн.")
-        status_bits.append(f"глоб {global_streak_val} дн.")
+        status_bits.append(f"чатовый стрик {streak_val} дн.")
+        status_bits.append(f"глобальный стрик {global_streak_val} дн.")
 
         lines.append(f"{mention(u)} — {' • '.join(status_bits)}")
 

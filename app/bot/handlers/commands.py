@@ -17,7 +17,7 @@ from app.services.command_message_service import (
     set_command_message_id,
 )
 from app.services.q1_service import render_q1
-from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.recap_service import is_recap_available
 from app.services.repo_service import (
     get_or_create_session,
@@ -135,7 +135,14 @@ async def start_cmd(message: Message) -> None:
 
         sent = await message.answer(
             text,
-            reply_markup=q1_keyboard(has_any_members, show_q2_q3_button=not bool(chat.q2_q3_enabled)),
+            reply_markup=q1_keyboard(
+                has_any_members,
+                show_q2_q3_button=should_show_q2_q3_button(
+                    db,
+                    chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
+                    session_id=sess.session_id,
+                ),
+            ),
         )
         set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
         if bool(chat.q2_q3_enabled):

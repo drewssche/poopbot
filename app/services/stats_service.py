@@ -433,7 +433,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         "Твои итоги:",
         f"- Всего: 💩({total_poops})",
         f"- Дней с 💩: {days_any}/{days_total}",
-        f"- Текущий стрик: {streak_val} дн.",
+        f"- Текущий глобальный стрик (по всем чатам): {streak_val} дн.",
         f"- Лучший стрик: {best_streak_period} дн.",
         "",
         "Твоя динамика:",

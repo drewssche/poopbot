@@ -39,6 +39,14 @@ Q3_EMOJI = {
 }
 
 
+def should_show_q2_q3_button(db: Session, chat_q2_q3_enabled: bool, session_id: int) -> bool:
+    if bool(chat_q2_q3_enabled):
+        return False
+    q2_id = get_session_message_id(db, session_id, "Q2")
+    q3_id = get_session_message_id(db, session_id, "Q3")
+    return not bool(q2_id or q3_id)
+
+
 def _q2_choice_from_bristol(value: int | None) -> str | None:
     if value is None:
         return None

@@ -18,7 +18,7 @@ from app.services.command_message_service import (
 from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import reconcile_events_count
 from app.services.q1_service import apply_minus, apply_plus, render_q1
-from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.reminder_service import LATE_REMINDER_COMMAND
 from app.services.repo_service import (
@@ -181,7 +181,11 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
-                            show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                            show_q2_q3_button=should_show_q2_q3_button(
+                                db,
+                                chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
+                                session_id=sess.session_id,
+                            ),
                         ),
                     )
                 else:
@@ -190,7 +194,11 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
-                            show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                            show_q2_q3_button=should_show_q2_q3_button(
+                                db,
+                                chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
+                                session_id=sess.session_id,
+                            ),
                         ),
                     )
                     set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
@@ -247,7 +255,50 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
                 await cb.answer("Неактуально", show_alert=False)
                 return
 
+            if not check_rate_limit(db, chat_id=chat_id, user_id=cb.from_user.id, scope="Q1_Q2Q3", cooldown_seconds=4):
+                await cb.answer("Не так быстро, здоровяк", show_alert=False)
+                return
+
+            q2_id = get_session_message_id(db, sess.session_id, "Q2")
+            q3_id = get_session_message_id(db, sess.session_id, "Q3")
+            if q2_id or q3_id:
+                q1_text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
+                has_any_members = "Участники:" in q1_text
+                try:
+                    await cb.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=get_session_message_id(db, sess.session_id, "Q1") or cb.message.message_id,
+                        text=q1_text,
+                        reply_markup=q1_keyboard(
+                            has_any_members,
+                            show_q2_q3_button=False,
+                        ),
+                    )
+                except TelegramBadRequest:
+                    pass
+                await cb.answer("Уточняющие вопросы уже опубликованы", show_alert=False)
+                return
+
             await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
+
+            q1_text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
+            has_any_members = "Участники:" in q1_text
+            q1_id = get_session_message_id(db, sess.session_id, "Q1")
+            if q1_id:
+                try:
+                    await cb.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=q1_id,
+                        text=q1_text,
+                        reply_markup=q1_keyboard(
+                            has_any_members,
+                            show_q2_q3_button=False,
+                        ),
+                    )
+                except TelegramBadRequest as e:
+                    if "message is not modified" not in str(e).lower():
+                        logger.exception("Failed to hide Q2/Q3 button after manual publish: %s", e)
+
             await cb.answer("Уточняющие вопросы опубликованы", show_alert=False)
     except Exception:
         logger.exception("Unhandled exception in q1_open_q2_q3")

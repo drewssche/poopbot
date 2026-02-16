@@ -27,7 +27,7 @@ from app.services.help_service import (
     set_chat_q2_q3_enabled,
 )
 from app.services.q1_service import render_q1
-from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
 from app.services.time_service import get_session_window, now_in_tz
 
@@ -268,7 +268,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                 reply_markup=q1_keyboard(
                                     has_any_members,
                                     show_remind=now_in_tz(chat.timezone).time().hour < 22,
-                                    show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                                    show_q2_q3_button=should_show_q2_q3_button(
+                                        db,
+                                        chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
+                                        session_id=sess.session_id,
+                                    ),
                                 ),
                             )
                         except TelegramBadRequest as e:
@@ -406,7 +410,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                                     has_any_members,
                                     show_remind=get_session_window(chat.timezone).is_blocked_window is False
                                     and now_in_tz(chat.timezone).time().hour < 22,
-                                    show_q2_q3_button=not bool(chat.q2_q3_enabled),
+                                    show_q2_q3_button=should_show_q2_q3_button(
+                                        db,
+                                        chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
+                                        session_id=sess.session_id,
+                                    ),
                                 ),
                             )
                         except TelegramBadRequest as e:

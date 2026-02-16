@@ -21,7 +21,7 @@ from app.services.repo_service import (
 )
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import mention, render_q1
-from app.services.q2_q3_service import ensure_q2_q3_exist
+from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.stats_service import (
     build_stats_text_chat,
     compute_chat_period_metrics,
@@ -188,9 +188,12 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
             and _streak_recalc_date.get(chat_id) != local_date
         )
         should_recalc_global_now = (
-            local_time.hour == 0
-            and 6 <= local_time.minute <= 10
-            and _global_streak_recalc_date != local_date
+            _global_streak_recalc_date is None
+            or (
+                local_time.hour == 0
+                and 6 <= local_time.minute <= 10
+                and _global_streak_recalc_date != local_date
+            )
         )
         if should_recalc_now:
             _recalculate_streaks_from_history(db, chat_id, local_date)
@@ -289,7 +292,11 @@ async def _post_q1(
         reply_markup=q1_keyboard(
             has_any_members,
             show_remind=show_remind,
-            show_q2_q3_button=not q2_q3_enabled,
+            show_q2_q3_button=should_show_q2_q3_button(
+                db,
+                chat_q2_q3_enabled=bool(q2_q3_enabled),
+                session_id=session_id,
+            ),
         ),
     )
     set_session_message_id(db, session_id, "Q1", sent.message_id)
@@ -381,7 +388,12 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
         for uid in chat_member_user_ids:
             g = db.get(UserGlobalStreak, {"user_id": uid})
             if g is None:
-                g = UserGlobalStreak(user_id=uid, current_streak=0, last_poop_date=None)
+                seed_streak, seed_last_date = _seed_global_streak_from_history(db, uid, local_date)
+                g = UserGlobalStreak(
+                    user_id=uid,
+                    current_streak=seed_streak,
+                    last_poop_date=seed_last_date,
+                )
                 db.add(g)
 
             if uid in positive_global_user_ids:
@@ -473,7 +485,11 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
         reply_markup=q1_keyboard(
             has_any_members,
             show_remind=show_remind,
-            show_q2_q3_button=show_q2_q3_button,
+            show_q2_q3_button=should_show_q2_q3_button(
+                db,
+                chat_q2_q3_enabled=bool(chat.q2_q3_enabled) if chat is not None else False,
+                session_id=sess.session_id,
+            ) if chat is not None else show_q2_q3_button,
         ),
     )
 
@@ -578,6 +594,36 @@ def _recalculate_global_streaks_from_history(db, today: date) -> None:
 
         g.last_poop_date = last_day
         g.current_streak = trailing if last_day == yesterday else 0
+
+
+def _seed_global_streak_from_history(db, user_id: int, today: date) -> tuple[int, date | None]:
+    days = [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.session_date < today,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+    if not days:
+        return 0, None
+
+    last_day = days[-1]
+    if last_day != (today - timedelta(days=1)):
+        return 0, last_day
+
+    trailing = 1
+    idx = len(days) - 2
+    while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+        trailing += 1
+        idx -= 1
+    return trailing, last_day
 
 
 def _is_last_day_of_month(d: date) -> bool:

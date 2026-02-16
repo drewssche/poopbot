@@ -38,6 +38,11 @@ _engine = None
 _session_factory = None
 
 
+def _is_stale_callback_error(e: TelegramBadRequest) -> bool:
+    msg = str(e).lower()
+    return "query is too old" in msg or "query id is invalid" in msg
+
+
 def init_db(database_url: str) -> None:
     global _engine, _session_factory
     if _engine is None:
@@ -452,7 +457,14 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
         except TelegramBadRequest as e:
+            if _is_stale_callback_error(e):
+                return
             if "message is not modified" in str(e).lower():
                 return
             logger.exception("Help edit failed: %s", e)
-            await cb.answer("Ошибка (см. логи)", show_alert=False)
+            try:
+                await cb.answer("Ошибка (см. логи)", show_alert=False)
+            except TelegramBadRequest as answer_err:
+                if _is_stale_callback_error(answer_err):
+                    return
+                raise

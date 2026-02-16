@@ -221,6 +221,19 @@ def _format_debug_card(mode: str, idx: int, total: int, card: str) -> str:
     return body
 
 
+def _nav_or_none(mode: str, kind: str, source_chat_id: int, year: int, current_index: int, total_cards: int):
+    if total_cards <= 1:
+        return None
+    return debug_recap_nav_kb(
+        mode=mode,
+        kind=kind,
+        source_chat_id=source_chat_id,
+        year=year,
+        current_index=current_index,
+        total_cards=total_cards,
+    )
+
+
 async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
     from app.core.config import load_settings
 
@@ -287,7 +300,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 return True
             cards = build_chat_year_recap_cards(db, chat_id=source_chat_id, year=year)
             text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
-            kb = debug_recap_nav_kb(mode, "chat", source_chat_id, year, 1) if len(cards) > 1 else None
+            kb = _nav_or_none(mode, "chat", source_chat_id, year, current_index=0, total_cards=len(cards))
             await cb.message.answer(text, reply_markup=kb)
             if cards:
                 await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
@@ -300,7 +313,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 return True
             cards = build_my_year_recap_cards(db, chat_id=source_chat_id, user_id=cb.from_user.id, year=year)
             text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
-            kb = debug_recap_nav_kb(mode, "mychat", source_chat_id, year, 1) if len(cards) > 1 else None
+            kb = _nav_or_none(mode, "mychat", source_chat_id, year, current_index=0, total_cards=len(cards))
             await cb.message.answer(text, reply_markup=kb)
             if cards:
                 await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
@@ -309,7 +322,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
         if action == "recap_my_all":
             cards = build_my_year_recap_cards_all_chats(db, user_id=cb.from_user.id, year=year)
             text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
-            kb = debug_recap_nav_kb(mode, "myall", 0, year, 1) if len(cards) > 1 else None
+            kb = _nav_or_none(mode, "myall", 0, year, current_index=0, total_cards=len(cards))
             await cb.message.answer(text, reply_markup=kb)
             if cards:
                 await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
@@ -321,8 +334,21 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             return True
 
         if action == "all":
-            for sub_action in ("q1", "q2q3", "late", "week", "month", "year", "holiday:feb9", "holiday:nov19", "recap_announce"):
-                await _send_debug_action(cb, sub_action, mode)
+            sub_actions = ("q1", "q2q3", "late", "week", "month", "year", "holiday:feb9", "holiday:nov19", "recap_announce")
+            done: list[str] = []
+            for sub_action in sub_actions:
+                ok = await _send_debug_action(cb, sub_action, mode)
+                if ok:
+                    done.append(_action_label(sub_action))
+            summary_lines = [
+                "✅ Прогон завершен.",
+                f"Режим: {'Превью' if mode == 'preview' else 'Отправка'}",
+                f"Успешно: {len(done)}/{len(sub_actions)}",
+            ]
+            if done:
+                summary_lines.append("Что выполнено:")
+                summary_lines.extend([f"- {label}" for label in done])
+            await cb.message.answer("\n".join(summary_lines))
             return True
 
     return False
@@ -393,6 +419,22 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
         await cb.answer()
         return
 
+    if parts[1] == "back" and len(parts) == 3:
+        mode = parts[2]
+        if mode not in {"preview", "send"}:
+            return
+        if cb.message is not None:
+            chat_id = cb.message.chat.id
+            with db_session(_session_factory) as db:
+                chat = upsert_chat(db, chat_id=chat_id)
+                today = now_in_tz(chat.timezone).date()
+            await cb.message.edit_text(
+                _build_menu_text(today=today, chat_id=chat_id, mode=mode),
+                reply_markup=debug_kb(mode=mode),
+            )
+        await cb.answer()
+        return
+
     if parts[1] == "run" and len(parts) >= 4:
         mode = parts[2]
         if mode not in {"preview", "send"}:
@@ -438,7 +480,7 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
             return
 
         text = _format_debug_card(mode, idx + 1, len(cards), cards[idx])
-        kb = debug_recap_nav_kb(mode, kind, source_chat_id, year, idx + 1) if (idx + 1) < len(cards) else None
+        kb = _nav_or_none(mode, kind, source_chat_id, year, current_index=idx, total_cards=len(cards))
         await cb.message.edit_text(text, reply_markup=kb)
         await cb.answer()
         return

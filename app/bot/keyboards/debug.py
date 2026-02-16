@@ -34,12 +34,48 @@ def debug_explain_kb(action: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def debug_recap_nav_kb(mode: str, kind: str, source_chat_id: int, year: int, next_index: int) -> InlineKeyboardMarkup:
+def debug_recap_nav_kb(
+    mode: str,
+    kind: str,
+    source_chat_id: int,
+    year: int,
+    current_index: int,
+    total_cards: int,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(
+    prev_index = current_index - 1
+    next_index = current_index + 1
+
+    row: list[InlineKeyboardButton] = []
+    if prev_index >= 0:
+        row.append(
+            InlineKeyboardButton(
+                text="⬅️ Предыдущая карточка",
+                callback_data=f"debug:card:{mode}:{kind}:{source_chat_id}:{year}:{prev_index}",
+            )
+        )
+    if next_index < total_cards:
+        row.append(
+            InlineKeyboardButton(
+                text="➡️ Следующая карточка",
+                callback_data=f"debug:card:{mode}:{kind}:{source_chat_id}:{year}:{next_index}",
+            )
+        )
+    if row:
+        kb.row(*row)
+    utility_row: list[InlineKeyboardButton] = []
+    if current_index > 0:
+        utility_row.append(
+            InlineKeyboardButton(
+                text="⏮ В начало",
+                callback_data=f"debug:card:{mode}:{kind}:{source_chat_id}:{year}:0",
+            )
+        )
+    utility_row.append(
         InlineKeyboardButton(
-            text="➡️ Следующая карточка",
-            callback_data=f"debug:card:{mode}:{kind}:{source_chat_id}:{year}:{next_index}",
+            text="🧭 Назад в /debug",
+            callback_data=f"debug:back:{mode}",
         )
     )
+    kb.row(*utility_row)
     return kb.as_markup()

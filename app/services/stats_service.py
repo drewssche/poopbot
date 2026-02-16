@@ -81,6 +81,14 @@ def _sessions_in_range(db: Session, chat_id: int | None, r: Range) -> list[DaySe
     return list(db.scalars(stmt).all())
 
 
+def _bot_start_date(db: Session) -> date | None:
+    return db.scalar(select(func.min(DaySession.session_date)))
+
+
+def _chat_start_date(db: Session, chat_id: int) -> date | None:
+    return db.scalar(select(func.min(DaySession.session_date)).where(DaySession.chat_id == chat_id))
+
+
 def _chat_origin_events_in_range(
     db: Session,
     chat_id: int,
@@ -320,11 +328,11 @@ def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> 
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
             .where(
-                PoopEvent.user_id == user_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
                 DaySession.session_date < today,
-                PoopEvent.origin_chat_id == DaySession.chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -341,12 +349,12 @@ def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> 
 
     has_today = bool(
         db.scalar(
-            select(PoopEvent.id)
-            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            select(SessionUserState.user_id)
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
             .where(
                 DaySession.session_date == today,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == DaySession.chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
             )
             .limit(1)
         )
@@ -361,11 +369,11 @@ def _compute_user_global_best_streak_live(db: Session, user_id: int, today: date
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
             .where(
-                PoopEvent.user_id == user_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
                 DaySession.session_date <= today,
-                PoopEvent.origin_chat_id == DaySession.chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -454,15 +462,8 @@ def _chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | 
 
 def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, period: str) -> str:
     _ = chat_id
-    first_active_date = db.scalar(
-        select(func.min(DaySession.session_date))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(
-            SessionUserState.user_id == user_id,
-            SessionUserState.poops_n > 0,
-        )
-    )
-    if first_active_date is None:
+    bot_start = _bot_start_date(db)
+    if bot_start is None:
         empty_range = period_to_range(today, period) if period in {"today", "week", "month", "year"} else Range(today, today)
         return (
             "🙋 Моя статистика\n"
@@ -473,7 +474,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     if period in {"today", "week", "month", "year"}:
         r = period_to_range(today, period)
     else:
-        r = Range(first_active_date, today)
+        r = Range(bot_start, today)
     sessions = _sessions_in_range(db, None, r)
     if not sessions:
         return (
@@ -581,18 +582,8 @@ def build_stats_text_chat(
     if bounded_range is not None:
         r = bounded_range
     else:
-        first_stmt = (
-            select(func.min(DaySession.session_date))
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                PoopEvent.origin_chat_id == chat_id,
-            )
-        )
-        if user_id is not None:
-            first_stmt = first_stmt.where(PoopEvent.user_id == user_id)
-        first_active_date = db.scalar(first_stmt)
-        r = Range(first_active_date, today) if first_active_date is not None else Range(today, today)
+        chat_start = _chat_start_date(db, chat_id)
+        r = Range(chat_start, today) if chat_start is not None else Range(today, today)
 
     rows = _chat_origin_events_in_range(db, chat_id, r, user_id=user_id)
     if not rows:
@@ -724,7 +715,11 @@ def build_stats_text_chat(
     lines.append("Примечание: в этом блоке учитываются только отметки, сделанные именно в этом чате.")
     return "\n".join(lines)
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
-    r = period_to_range(today, period) if period in {"today", "week", "month", "year"} else Range(date(1970, 1, 1), today)
+    if period in {"today", "week", "month", "year"}:
+        r = period_to_range(today, period)
+    else:
+        bot_start = _bot_start_date(db)
+        r = Range(bot_start, today) if bot_start is not None else Range(today, today)
 
     sessions = _sessions_in_range(db, None, r)
     if not sessions:

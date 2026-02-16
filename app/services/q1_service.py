@@ -161,26 +161,26 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
     global_today_positive_user_ids = {
         int(uid)
         for uid in db.scalars(
-            select(PoopEvent.user_id)
-            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            select(SessionUserState.user_id)
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
             .where(
                 DaySession.session_date == session_date,
-                PoopEvent.user_id.in_(user_ids),
-                PoopEvent.origin_chat_id == DaySession.chat_id,
+                SessionUserState.user_id.in_(user_ids),
+                SessionUserState.poops_n > 0,
             )
-            .group_by(PoopEvent.user_id)
+            .group_by(SessionUserState.user_id)
         ).all()
     }
     global_hist_rows = db.execute(
-        select(PoopEvent.user_id, DaySession.session_date)
-        .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+        select(SessionUserState.user_id, DaySession.session_date)
+        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
         .where(
-            PoopEvent.user_id.in_(user_ids),
+            SessionUserState.user_id.in_(user_ids),
             DaySession.session_date < session_date,
-            PoopEvent.origin_chat_id == DaySession.chat_id,
+            SessionUserState.poops_n > 0,
         )
-        .group_by(PoopEvent.user_id, DaySession.session_date)
-        .order_by(PoopEvent.user_id.asc(), DaySession.session_date.asc())
+        .group_by(SessionUserState.user_id, DaySession.session_date)
+        .order_by(SessionUserState.user_id.asc(), DaySession.session_date.asc())
     ).all()
     global_days_by_user: dict[int, list[date]] = {int(uid): [] for uid in user_ids}
     for uid, d in global_hist_rows:
@@ -258,11 +258,11 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
             .where(
-                PoopEvent.user_id == user_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
                 DaySession.session_date < session_date,
-                PoopEvent.origin_chat_id == DaySession.chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -270,12 +270,12 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
     ]
     global_today_positive = bool(
         db.scalar(
-            select(PoopEvent.id)
-            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            select(SessionUserState.user_id)
+            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
             .where(
                 DaySession.session_date == session_date,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == DaySession.chat_id,
+                SessionUserState.user_id == user_id,
+                SessionUserState.poops_n > 0,
             )
             .limit(1)
         )

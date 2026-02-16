@@ -844,7 +844,10 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("- пока нет данных")
 
     lines.extend(["", "Лидеры глобальных стриков:"])
-    top_streaks = sorted(projected_streaks_by_user.items(), key=lambda x: (-x[1], x[0]))[:3]
+    top_streaks = sorted(
+        [(uid, days) for uid, days in projected_streaks_by_user.items() if int(days) > 0],
+        key=lambda x: (-x[1], x[0]),
+    )[:3]
     if not top_streaks:
         lines.append("- пока нет данных")
     else:

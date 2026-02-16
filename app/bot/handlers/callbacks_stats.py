@@ -5,6 +5,7 @@ import logging
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
+from sqlalchemy import func, select
 
 from app.bot.keyboards.stats import (
     PERIOD_ALL,
@@ -150,11 +151,18 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
 
 async def _render_among_chats(cb: CallbackQuery, db) -> str:
     from app.db.models import Chat
+    from app.db.models import Session as DaySession
 
     cur_chat = db.get(Chat, cb.message.chat.id)
     tz = cur_chat.timezone if cur_chat else "Europe/Minsk"
     today = now_in_tz(tz).date()
     snap = collect_among_chats_snapshot(db, today)
+    bot_start = db.scalar(select(func.min(DaySession.session_date)))
+    period_text = (
+        f"Период: за всё время ({bot_start.strftime('%d.%m.%y')}–{today.strftime('%d.%m.%y')})"
+        if bot_start is not None
+        else "Период: за всё время"
+    )
 
     ids = set()
     ids.update(chat_id for chat_id, _ in snap["top_total"])
@@ -181,7 +189,7 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
 
     lines = [
         "🏟️ Среди чатов",
-        "Период: за всё время",
+        period_text,
         "",
         "Топ-5 по общему количеству 💩:",
     ]
@@ -203,6 +211,7 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
     if snap["top_streak"]:
         for idx, (cid, days) in enumerate(snap["top_streak"], start=1):
             lines.append(f"- {idx}) {chat_name(cid)} — {days} дн.")
+        lines.append("- Примечание: чатовый стрик считается по отметкам, сделанным именно в этом чате.")
     else:
         lines.append("- пока нет данных")
 

@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards.debug import debug_explain_kb, debug_kb
+from app.bot.keyboards.debug import debug_explain_kb, debug_kb, debug_recap_nav_kb
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.reminder_service import build_late_reminder_text
@@ -206,21 +206,19 @@ async def _send_recap_cards(cb: CallbackQuery, mode: str, cards: list[str], expl
     if not cards:
         await _send_output(cb, mode, "Карточки рекапа пустые.")
         return
+    await _send_output(
+        cb,
+        mode,
+        f"Карточка 1/{len(cards)}\n\n{cards[0]}",
+        explain_action=explain_action,
+    )
+
+
+def _format_debug_card(mode: str, idx: int, total: int, card: str) -> str:
+    body = f"Карточка {idx}/{total}\n\n{card}"
     if mode == "preview":
-        await _send_output(
-            cb,
-            mode,
-            f"Карточек: {len(cards)}\n\nКарточка 1/{len(cards)}\n\n{cards[0]}",
-            explain_action=explain_action,
-        )
-        return
-    for idx, card in enumerate(cards, start=1):
-        await _send_output(
-            cb,
-            mode,
-            f"Карточка {idx}/{len(cards)}\n\n{card}",
-            explain_action=explain_action,
-        )
+        return f"🔎 Превью\n\n{body}"
+    return body
 
 
 async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
@@ -288,7 +286,11 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 await _send_output(cb, mode, "Нет доступного группового чата для чат-рекапа.")
                 return True
             cards = build_chat_year_recap_cards(db, chat_id=source_chat_id, year=year)
-            await _send_recap_cards(cb, mode, cards, explain_action=action)
+            text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
+            kb = debug_recap_nav_kb(mode, "chat", source_chat_id, year, 1) if len(cards) > 1 else None
+            await cb.message.answer(text, reply_markup=kb)
+            if cards:
+                await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
             return True
 
         if action == "recap_my_chat":
@@ -297,12 +299,20 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 await _send_output(cb, mode, "Нет доступного группового чата для личного рекапа.")
                 return True
             cards = build_my_year_recap_cards(db, chat_id=source_chat_id, user_id=cb.from_user.id, year=year)
-            await _send_recap_cards(cb, mode, cards, explain_action=action)
+            text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
+            kb = debug_recap_nav_kb(mode, "mychat", source_chat_id, year, 1) if len(cards) > 1 else None
+            await cb.message.answer(text, reply_markup=kb)
+            if cards:
+                await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
             return True
 
         if action == "recap_my_all":
             cards = build_my_year_recap_cards_all_chats(db, user_id=cb.from_user.id, year=year)
-            await _send_recap_cards(cb, mode, cards, explain_action=action)
+            text = _format_debug_card(mode, 1, len(cards), cards[0]) if cards else "Карточки рекапа пустые."
+            kb = debug_recap_nav_kb(mode, "myall", 0, year, 1) if len(cards) > 1 else None
+            await cb.message.answer(text, reply_markup=kb)
+            if cards:
+                await cb.message.answer("ℹ️ Нажми кнопку ниже, чтобы узнать условия показа.", reply_markup=debug_explain_kb(action))
             return True
 
         if action.startswith("holiday:"):
@@ -394,6 +404,43 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
                 chat_id = cb.message.chat.id
                 _remember_last_action(chat_id=chat_id, actor=_actor_label(cb), action=action, mode=mode)
             await cb.answer()
+        return
+
+    if parts[1] == "card" and len(parts) == 7:
+        mode = parts[2]
+        kind = parts[3]
+        try:
+            source_chat_id = int(parts[4])
+            year = int(parts[5])
+            idx = int(parts[6])
+        except ValueError:
+            return
+        if mode not in {"preview", "send"}:
+            return
+        if cb.message is None or cb.from_user is None:
+            return
+
+        with db_session(_session_factory) as db:
+            if kind == "chat":
+                cards = build_chat_year_recap_cards(db, chat_id=source_chat_id, year=year)
+            elif kind == "mychat":
+                cards = build_my_year_recap_cards(db, chat_id=source_chat_id, user_id=cb.from_user.id, year=year)
+            elif kind == "myall":
+                cards = build_my_year_recap_cards_all_chats(db, user_id=cb.from_user.id, year=year)
+            else:
+                return
+
+        if not cards:
+            await cb.answer()
+            return
+        if idx < 0 or idx >= len(cards):
+            await cb.answer()
+            return
+
+        text = _format_debug_card(mode, idx + 1, len(cards), cards[idx])
+        kb = debug_recap_nav_kb(mode, kind, source_chat_id, year, idx + 1) if (idx + 1) < len(cards) else None
+        await cb.message.edit_text(text, reply_markup=kb)
+        await cb.answer()
         return
 
     if parts[1] == "explain" and len(parts) >= 3:

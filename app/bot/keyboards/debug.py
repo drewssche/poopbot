@@ -32,3 +32,14 @@ def debug_explain_kb(action: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="ℹ️ Как это работает", callback_data=f"debug:explain:{action}"))
     return kb.as_markup()
+
+
+def debug_recap_nav_kb(mode: str, kind: str, source_chat_id: int, year: int, next_index: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text="➡️ Следующая карточка",
+            callback_data=f"debug:card:{mode}:{kind}:{source_chat_id}:{year}:{next_index}",
+        )
+    )
+    return kb.as_markup()

@@ -11,6 +11,7 @@ from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
 from app.db.models import SessionUserState, User
 from app.services.q1_service import mention
+from app.services.time_service import now_in_tz
 
 
 @dataclass(frozen=True)
@@ -321,6 +322,43 @@ def _compute_chat_user_streaks_live(db: Session, chat_ids: list[int], today: dat
         days_by_user_chat.setdefault(key, []).append(d)
 
     return {key: _current_streak_from_days(days, today) for key, days in days_by_user_chat.items()}
+
+
+def _compute_chat_user_streaks_live_per_chat_today(
+    db: Session,
+    chat_ids: list[int],
+    today_by_chat: dict[int, date],
+) -> dict[tuple[int, int], int]:
+    if not chat_ids or not today_by_chat:
+        return {}
+
+    max_today = max(today_by_chat.values())
+    rows = db.execute(
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id.in_(chat_ids),
+            DaySession.session_date <= max_today,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
+        )
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+    ).all()
+
+    days_by_user_chat: dict[tuple[int, int], list[date]] = {}
+    for chat_id, user_id, d in rows:
+        cid = int(chat_id)
+        if cid not in today_by_chat:
+            continue
+        if d > today_by_chat[cid]:
+            continue
+        key = (cid, int(user_id))
+        days_by_user_chat.setdefault(key, []).append(d)
+
+    return {
+        key: _current_streak_from_days(days, today_by_chat[key[0]])
+        for key, days in days_by_user_chat.items()
+    }
 
 
 def _compute_user_global_streak_live(db: Session, user_id: int, today: date) -> int:
@@ -967,7 +1005,13 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         avg_rows.append((chat_id, float(total) / float(participants), total, participants))
     top_avg = sorted(avg_rows, key=lambda x: (-x[1], x[0]))[:5]
 
-    streaks_live = _compute_chat_user_streaks_live(db, chat_ids, today)
+    _ = today
+    chat_rows = db.scalars(select(Chat).where(Chat.chat_id.in_(chat_ids))).all()
+    today_by_chat = {
+        int(ch.chat_id): now_in_tz(ch.timezone or "Europe/Minsk").date()
+        for ch in chat_rows
+    }
+    streaks_live = _compute_chat_user_streaks_live_per_chat_today(db, chat_ids, today_by_chat)
     best_streak_by_chat: dict[int, int] = {}
     for (cid, _uid), days in streaks_live.items():
         if days > best_streak_by_chat.get(cid, 0):

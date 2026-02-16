@@ -85,6 +85,14 @@ class UserStreak(Base):
     last_poop_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
+class UserGlobalStreak(Base):
+    __tablename__ = "user_global_streaks"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    current_streak: Mapped[int] = mapped_column(Integer, default=0)
+    last_poop_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
 class SessionUserState(Base):
     __tablename__ = "session_user_state"
     __table_args__ = (PrimaryKeyConstraint("session_id", "user_id"),)
@@ -115,6 +123,7 @@ class PoopEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(Integer, ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    origin_chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
     event_n: Mapped[int] = mapped_column(Integer, nullable=False)
     bristol: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1..7
     feeling: Mapped[str | None] = mapped_column(

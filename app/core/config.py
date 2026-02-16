@@ -27,6 +27,11 @@ def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
     if not raw:
         return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
 
 
 def _env_float(name: str, default: float) -> float:
@@ -36,11 +41,6 @@ def _env_float(name: str, default: float) -> float:
     try:
         value = float(raw)
         return value if value >= 0 else default
-    except ValueError:
-        return default
-    try:
-        value = int(raw)
-        return value if value > 0 else default
     except ValueError:
         return default
 

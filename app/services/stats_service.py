@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
-from app.db.models import SessionUserState, User, UserStreak
+from app.db.models import SessionUserState, User, UserGlobalStreak, UserStreak
 from app.services.q1_service import mention
 
 
@@ -81,47 +81,42 @@ def _sessions_in_range(db: Session, chat_id: int | None, r: Range) -> list[DaySe
     return list(db.scalars(stmt).all())
 
 
-def compute_chat_period_metrics(db: Session, chat_id: int, r: Range, user_id: int | None = None) -> ChatPeriodMetrics:
-    sessions = _sessions_in_range(db, chat_id, r)
-    if not sessions:
-        return ChatPeriodMetrics(total_poops=0, active_participants=0, active_days_count=0, period_days=(r.end - r.start).days + 1)
-
-    session_ids = [int(s.session_id) for s in sessions]
-    if user_id is None:
-        rows = db.execute(
-            select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
-            .where(SessionUserState.session_id.in_(session_ids))
-            .group_by(SessionUserState.user_id)
-        ).all()
-        total_poops = sum(int(row.poops or 0) for row in rows)
-        active_participants = sum(1 for row in rows if int(row.poops or 0) > 0)
-    else:
-        total_poops = int(
-            db.scalar(
-                select(func.coalesce(func.sum(SessionUserState.poops_n), 0))
-                .where(
-                    SessionUserState.session_id.in_(session_ids),
-                    SessionUserState.user_id == user_id,
-                )
-            )
-            or 0
+def _chat_origin_events_in_range(
+    db: Session,
+    chat_id: int,
+    r: Range,
+    *,
+    user_id: int | None = None,
+) -> list[tuple[date, int, int, int | None, str | None]]:
+    stmt = (
+        select(
+            DaySession.session_date,
+            PoopEvent.user_id,
+            PoopEvent.event_n,
+            PoopEvent.bristol,
+            PoopEvent.feeling,
         )
-        active_participants = 1 if total_poops > 0 else 0
-
-    day_stmt = (
-        select(DaySession.session_date, func.sum(SessionUserState.poops_n).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id == chat_id,
-            DaySession.session_id.in_(session_ids),
+            DaySession.session_date >= r.start,
+            DaySession.session_date <= r.end,
+            PoopEvent.origin_chat_id == chat_id,
         )
     )
     if user_id is not None:
-        day_stmt = day_stmt.where(SessionUserState.user_id == user_id)
-    day_rows = db.execute(
-        day_stmt.group_by(DaySession.session_date).order_by(DaySession.session_date.asc())
-    ).all()
-    active_days_count = sum(1 for _d, poops in day_rows if int(poops or 0) > 0)
+        stmt = stmt.where(PoopEvent.user_id == user_id)
+    return list(db.execute(stmt).all())
+
+
+def compute_chat_period_metrics(db: Session, chat_id: int, r: Range, user_id: int | None = None) -> ChatPeriodMetrics:
+    rows = _chat_origin_events_in_range(db, chat_id, r, user_id=user_id)
+    total_poops = len(rows)
+    if user_id is None:
+        active_participants = len({int(uid) for _d, uid, _n, _b, _f in rows})
+    else:
+        active_participants = 1 if total_poops > 0 else 0
+    active_days_count = len({d for d, _uid, _n, _b, _f in rows})
 
     return ChatPeriodMetrics(
         total_poops=int(total_poops),
@@ -423,16 +418,13 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             if f:
                 fe[f] += 1
 
-    streak_val = 0
-    if active_dates:
-        last_active = active_dates[-1]
-        if last_active in {today, today - timedelta(days=1)}:
-            run = 1
-            idx = len(active_dates) - 2
-            while idx >= 0 and active_dates[idx] == (active_dates[idx + 1] - timedelta(days=1)):
-                run += 1
-                idx -= 1
-            streak_val = run
+    g_streak = db.get(UserGlobalStreak, {"user_id": user_id})
+    streak_val = _project_streak_for_day(
+        current_streak=int(g_streak.current_streak or 0) if g_streak else 0,
+        last_poop_date=g_streak.last_poop_date if g_streak else None,
+        day=today,
+        has_positive_today=daily_poops.get(today, 0) > 0,
+    )
 
     lines = [
         "🙋 Моя статистика",
@@ -465,86 +457,72 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     return "\n".join(lines)
 
 
+
 def build_stats_text_chat(
     db: Session, chat_id: int, today: date, period: str, user_id: int | None = None
 ) -> str:
     is_bounded_period = period in {"today", "week", "month", "year"}
     bounded_range = period_to_range(today, period) if is_bounded_period else None
 
-    if chat_id > 0 and user_id is not None:
-        first_active_date = db.scalar(
+    if bounded_range is not None:
+        r = bounded_range
+    else:
+        first_stmt = (
             select(func.min(DaySession.session_date))
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
+                PoopEvent.origin_chat_id == chat_id,
             )
         )
-        if first_active_date is None:
-            empty_r = bounded_range if bounded_range is not None else Range(today, today)
-            return f"💬 В этой личке\nПериод: {period_label(period)} ({_format_period(empty_r)})\n\nПока нет данных."
+        if user_id is not None:
+            first_stmt = first_stmt.where(PoopEvent.user_id == user_id)
+        first_active_date = db.scalar(first_stmt)
+        r = Range(first_active_date, today) if first_active_date is not None else Range(today, today)
 
-        r = bounded_range if bounded_range is not None else Range(first_active_date, today)
-        sessions = _sessions_in_range(db, chat_id, r)
-        if not sessions:
+    rows = _chat_origin_events_in_range(db, chat_id, r, user_id=user_id)
+    if not rows:
+        if chat_id > 0 and user_id is not None:
             return f"💬 В этой личке\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока нет данных."
+        return f"👥 В этом чате\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока пусто."
 
-        session_ids = [s.session_id for s in sessions]
-        states = db.scalars(
-            select(SessionUserState).where(
-                SessionUserState.session_id.in_(session_ids),
-                SessionUserState.user_id == user_id,
-            )
-        ).all()
+    by_day: dict[date, int] = {}
+    by_user: dict[int, int] = {}
+    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+    fe = {"😇": 0, "😐": 0, "😫": 0}
+    for d, uid, _n, bristol, feeling in rows:
+        uid_int = int(uid)
+        by_day[d] = by_day.get(d, 0) + 1
+        by_user[uid_int] = by_user.get(uid_int, 0) + 1
+        b = _bristol_bucket(bristol)
+        if b:
+            br[b] += 1
+        f = _feeling_emoji(feeling)
+        if f:
+            fe[f] += 1
 
-        total_poops = sum(int(s.poops_n or 0) for s in states)
-        days_total = (r.end - r.start).days + 1
-        avg_per_day = (float(total_poops) / float(days_total)) if days_total > 0 else 0.0
+    total_poops = len(rows)
+    active_days = sorted(d for d, cnt in by_day.items() if cnt > 0)
+    active_days_count = len(active_days)
+    period_days = (r.end - r.start).days + 1
+    peak_day = max(by_day.items(), key=lambda x: (x[1], x[0])) if by_day else None
 
-        session_date_by_id = {int(s.session_id): s.session_date for s in sessions}
-        active_dates = sorted(
-            {
-                session_date_by_id[int(s.session_id)]
-                for s in states
-                if int(s.poops_n or 0) > 0 and int(s.session_id) in session_date_by_id
-            }
-        )
-        days_any = len(active_dates)
+    if chat_id > 0 and user_id is not None:
+        days_any = active_days_count
+        avg_per_day = (float(total_poops) / float(period_days)) if period_days > 0 else 0.0
         avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
-        last_mark_date = active_dates[-1] if active_dates else None
+        last_mark_date = active_days[-1] if active_days else None
 
         best_streak_period = 0
-        if active_dates:
+        if active_days:
             run = 1
             best_streak_period = 1
-            for i in range(1, len(active_dates)):
-                if active_dates[i] == active_dates[i - 1] + timedelta(days=1):
+            for i in range(1, len(active_days)):
+                if active_days[i] == active_days[i - 1] + timedelta(days=1):
                     run += 1
                 else:
                     run = 1
                 best_streak_period = max(best_streak_period, run)
-
-        daily_counts: dict[date, int] = {}
-        for st in states:
-            sid = int(st.session_id)
-            if sid not in session_date_by_id:
-                continue
-            d = session_date_by_id[sid]
-            daily_counts[d] = daily_counts.get(d, 0) + int(st.poops_n or 0)
-        best_day = max(daily_counts.items(), key=lambda x: (x[1], x[0])) if daily_counts else None
-
-        events_map = _collect_events_map(db, session_ids, user_id=user_id)
-        br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
-        fe = {"😇": 0, "😐": 0, "😫": 0}
-        for st in states:
-            for bristol, feeling in _iter_effective_events(st, events_map):
-                b = _bristol_bucket(bristol)
-                if b:
-                    br[b] += 1
-                f = _feeling_emoji(feeling)
-                if f:
-                    fe[f] += 1
 
         streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
         streak_val = _project_streak_for_day(
@@ -560,7 +538,7 @@ def build_stats_text_chat(
             "",
             "Твои итоги:",
             f"- Всего: 💩({total_poops})",
-            f"- Дней с 💩: {days_any}/{days_total}",
+            f"- Дней с 💩: {days_any}/{period_days}",
             f"- Текущий стрик: {streak_val} дн.",
             f"- Лучший стрик: {best_streak_period} дн.",
             "",
@@ -568,8 +546,8 @@ def build_stats_text_chat(
             f"- Среднее за календарный день: {avg_per_day:.2f}",
             f"- Среднее за день с отметкой: {avg_per_active_day:.2f}",
             (
-                f"- Самый активный день: {best_day[0].strftime('%d.%m.%y')} (💩({best_day[1]}))"
-                if best_day
+                f"- Самый активный день: {peak_day[0].strftime('%d.%m.%y')} (💩({peak_day[1]}))"
+                if peak_day
                 else "- Самый активный день: нет данных"
             ),
             (
@@ -578,89 +556,33 @@ def build_stats_text_chat(
                 else "- Последняя отметка: нет данных"
             ),
             "",
+            "Примечание: в этой личке учитываются отметки, сделанные именно здесь.",
+            "",
         ]
         lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
         lines.append("")
         lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
         return "\n".join(lines)
 
-    if bounded_range is not None:
-        r = bounded_range
-    else:
-        r = Range(date(1970, 1, 1), today)
-        first_active_date = db.scalar(
-            select(func.min(DaySession.session_date))
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                SessionUserState.poops_n > 0,
-            )
-        )
-        if first_active_date is not None:
-            r = Range(first_active_date, today)
-
-    sessions = _sessions_in_range(db, chat_id, r)
-    if not sessions:
-        return f"👥 В этом чате\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока пусто."
-
-    session_ids = [s.session_id for s in sessions]
-
-    rows = db.execute(
-        select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
-        .where(SessionUserState.session_id.in_(session_ids))
-        .group_by(SessionUserState.user_id)
-        .order_by(func.sum(SessionUserState.poops_n).desc())
-    ).all()
-    total_poops = sum(int(row.poops or 0) for row in rows)
-    active_participants = sum(1 for row in rows if int(row.poops or 0) > 0)
+    active_participants = len(by_user)
     avg_per_participant = (float(total_poops) / float(active_participants)) if active_participants > 0 else 0.0
-
-    day_rows = db.execute(
-        select(DaySession.session_date, func.sum(SessionUserState.poops_n).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.chat_id == chat_id, DaySession.session_id.in_(session_ids))
-        .group_by(DaySession.session_date)
-        .order_by(DaySession.session_date.asc())
-    ).all()
-    active_days = [(d, int(p or 0)) for d, p in day_rows if int(p or 0) > 0]
-    active_days_count = len(active_days)
-    period_days = (r.end - r.start).days + 1
     avg_per_active_day = (float(total_poops) / float(active_days_count)) if active_days_count > 0 else 0.0
-    peak_day = max(active_days, key=lambda x: (x[1], x[0])) if active_days else None
 
-    states_pos = db.scalars(
-        select(SessionUserState).where(
-            SessionUserState.session_id.in_(session_ids),
-            SessionUserState.poops_n > 0,
-        )
-    ).all()
-
-    events_map = _collect_events_map(db, session_ids)
-    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
-    fe = {"😇": 0, "😐": 0, "😫": 0}
-    for st in states_pos:
-        for bristol, feeling in _iter_effective_events(st, events_map):
-            b = _bristol_bucket(bristol)
-            if b:
-                br[b] += 1
-            f = _feeling_emoji(feeling)
-            if f:
-                fe[f] += 1
-
-    top_rows = rows[:5]
-    top_user_ids = [int(row.user_id) for row in top_rows]
+    top_rows = sorted(by_user.items(), key=lambda x: (-x[1], x[0]))[:5]
+    top_user_ids = [uid for uid, _cnt in top_rows]
 
     streak_rows = db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
     today_positive = {
         int(uid)
         for uid in db.scalars(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(PoopEvent.user_id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == today,
-                SessionUserState.poops_n > 0,
+                PoopEvent.origin_chat_id == chat_id,
             )
+            .group_by(PoopEvent.user_id)
         ).all()
     }
     streak_rank: list[tuple[int, int]] = []
@@ -699,9 +621,9 @@ def build_stats_text_chat(
     ]
 
     if top_rows:
-        for idx, row in enumerate(top_rows, start=1):
-            user = users.get(int(row.user_id))
-            lines.append(f"- {idx}) {_display_name(user, int(row.user_id))} — 💩({int(row.poops or 0)})")
+        for idx, (uid, cnt) in enumerate(top_rows, start=1):
+            user = users.get(uid)
+            lines.append(f"- {idx}) {_display_name(user, uid)} — 💩({cnt})")
     else:
         lines.append("- пока никого в рейтинге")
 
@@ -718,9 +640,9 @@ def build_stats_text_chat(
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
+    lines.append("")
+    lines.append("Примечание: в этом блоке учитываются только отметки, сделанные именно в этом чате.")
     return "\n".join(lines)
-
-
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
     r = period_to_range(today, period) if period in {"today", "week", "month", "year"} else Range(date(1970, 1, 1), today)
 
@@ -913,12 +835,13 @@ def rank_chat_among_groups_by_total(db: Session, chat_id: int, r: Range) -> tupl
         return None, 0
 
     rows = db.execute(
-        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date >= r.start,
             DaySession.session_date <= r.end,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
         .group_by(DaySession.chat_id)
     ).all()
@@ -960,16 +883,16 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     session_ids = [int(s.session_id) for s in sessions]
 
     by_chat_total = db.execute(
-        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
+        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id)
     ).all()
 
     by_chat_participants = db.execute(
-        select(DaySession.chat_id, func.count(func.distinct(SessionUserState.user_id)).label("participants"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids), SessionUserState.poops_n > 0)
+        select(DaySession.chat_id, func.count(func.distinct(PoopEvent.user_id)).label("participants"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id)
     ).all()
 
@@ -987,9 +910,14 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
 
     today_positive = set(
         db.execute(
-            select(DaySession.chat_id, SessionUserState.user_id)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(DaySession.session_date == today, SessionUserState.poops_n > 0)
+            select(DaySession.chat_id, PoopEvent.user_id)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.session_date == today,
+                DaySession.chat_id.in_(chat_ids),
+                PoopEvent.origin_chat_id == DaySession.chat_id,
+            )
+            .group_by(DaySession.chat_id, PoopEvent.user_id)
         ).all()
     )
     streak_rows = db.execute(
@@ -1012,9 +940,9 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     )[:5]
 
     day_rows = db.execute(
-        select(DaySession.chat_id, DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
+        select(DaySession.chat_id, DaySession.session_date, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id, DaySession.session_date)
     ).all()
     record_day = None
@@ -1028,6 +956,7 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.session_id.in_(session_ids),
+            PoopEvent.origin_chat_id == DaySession.chat_id,
             PoopEvent.bristol.is_not(None),
         )
     ).all()

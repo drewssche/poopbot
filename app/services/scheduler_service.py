@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Chat, Session as DaySession, SessionUserState, ChatMember, User, UserStreak
+from app.db.models import Chat, Session as DaySession, SessionUserState, ChatMember, User, UserStreak, UserGlobalStreak, PoopEvent
 from app.db.session import db_session
 from app.services.repo_service import (
     get_or_create_session,
@@ -39,6 +39,9 @@ from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
 _streak_recalc_date: dict[int, date] = {}
+_global_streak_recalc_date: date | None = None
+_CHAT_PROCESS_TIMEOUT_SEC = 25.0
+_TELEGRAM_CALL_TIMEOUT_SEC = 15.0
 
 LOCK_LINE = "🔒 Сессия закрыта."
 
@@ -91,11 +94,18 @@ async def _safe_sleep_on_retry(exc: Exception) -> bool:
 async def _safe_send_message(bot: Bot, **kwargs):
     for _ in range(3):
         try:
-            return await bot.send_message(**kwargs)
+            return await asyncio.wait_for(
+                bot.send_message(**kwargs),
+                timeout=_TELEGRAM_CALL_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("send_message timeout after %.1fs", _TELEGRAM_CALL_TIMEOUT_SEC)
+            continue
         except Exception as e:
             if await _safe_sleep_on_retry(e):
                 continue
             raise
+    raise TimeoutError("send_message failed after retries")
 
 
 async def _safe_edit_message_text(bot: Bot, **kwargs):
@@ -107,7 +117,13 @@ async def _safe_edit_message_text(bot: Bot, **kwargs):
     """
     for _ in range(3):
         try:
-            return await bot.edit_message_text(**kwargs)
+            return await asyncio.wait_for(
+                bot.edit_message_text(**kwargs),
+                timeout=_TELEGRAM_CALL_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("edit_message_text timeout after %.1fs", _TELEGRAM_CALL_TIMEOUT_SEC)
+            continue
         except TelegramBadRequest as e:
             msg = str(e).lower()
             if "message is not modified" in msg:
@@ -119,6 +135,7 @@ async def _safe_edit_message_text(bot: Bot, **kwargs):
             if await _safe_sleep_on_retry(e):
                 continue
             raise
+    raise TimeoutError("edit_message_text failed after retries")
 
 
 async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> None:
@@ -127,7 +144,12 @@ async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: floa
 
     for chat in chats:
         try:
-            await _process_chat(bot, session_factory, chat.chat_id)
+            await asyncio.wait_for(
+                _process_chat(bot, session_factory, chat.chat_id),
+                timeout=_CHAT_PROCESS_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Scheduler chat processing timeout chat_id=%s (>%ss)", chat.chat_id, _CHAT_PROCESS_TIMEOUT_SEC)
         except TelegramForbiddenError:
             # Bot no longer has access to this chat (kicked/blocked): stop scheduling it.
             with db_session(session_factory) as db:
@@ -158,15 +180,25 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
 
         # Recalculate once per day in a narrow low-traffic window,
         # so daytime polling is not impacted by heavy DB work.
+        global _global_streak_recalc_date
+
         should_recalc_now = (
             local_time.hour == 0
             and 6 <= local_time.minute <= 10
             and _streak_recalc_date.get(chat_id) != local_date
         )
+        should_recalc_global_now = (
+            local_time.hour == 0
+            and 6 <= local_time.minute <= 10
+            and _global_streak_recalc_date != local_date
+        )
         if should_recalc_now:
             _recalculate_streaks_from_history(db, chat_id, local_date)
             _streak_recalc_date[chat_id] = local_date
             await _refresh_current_q1_view(bot, db, chat_id, window.session_date)
+        if should_recalc_global_now:
+            _recalculate_global_streaks_from_history(db, local_date)
+            _global_streak_recalc_date = local_date
 
         active_sessions = db.scalars(
             select(DaySession)
@@ -262,7 +294,13 @@ async def _post_q1(
     )
     set_session_message_id(db, session_id, "Q1", sent.message_id)
     if q2_q3_enabled:
-        await ensure_q2_q3_exist(bot, db, chat_id, session_id)
+        try:
+            await asyncio.wait_for(
+                ensure_q2_q3_exist(bot, db, chat_id, session_id),
+                timeout=20.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Q2/Q3 publish timeout chat_id=%s session_id=%s", chat_id, session_id)
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
 
 
@@ -304,16 +342,19 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
         select(UserStreak.user_id, UserStreak).where(UserStreak.chat_id == chat_id)
     ).all()
 
-    states = {
-        s.user_id: s
-        for s in db.scalars(select(SessionUserState).where(SessionUserState.session_id == session_id)).all()
+    positive_user_ids = {
+        int(uid)
+        for uid in db.scalars(
+            select(PoopEvent.user_id)
+            .where(PoopEvent.session_id == session_id, PoopEvent.origin_chat_id == chat_id)
+            .group_by(PoopEvent.user_id)
+        ).all()
     }
 
     local_date = sess.session_date
 
     for user_id, streak in member_rows:
-        poops = states.get(user_id).poops_n if user_id in states else 0
-        if poops > 0:
+        if int(user_id) in positive_user_ids:
             if streak.last_poop_date == (local_date - timedelta(days=1)):
                 streak.current_streak += 1
             else:
@@ -321,6 +362,38 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
             streak.last_poop_date = local_date
         else:
             streak.current_streak = 0
+
+    # global streak: reset only if no marks in any chat for this session_date.
+    chat_member_user_ids = [int(uid) for uid, _st in member_rows]
+    if chat_member_user_ids:
+        positive_global_user_ids = {
+            int(uid)
+            for uid in db.scalars(
+                select(PoopEvent.user_id)
+                .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+                .where(
+                    DaySession.session_date == local_date,
+                    PoopEvent.origin_chat_id == DaySession.chat_id,
+                )
+                .group_by(PoopEvent.user_id)
+            ).all()
+        }
+        for uid in chat_member_user_ids:
+            g = db.get(UserGlobalStreak, {"user_id": uid})
+            if g is None:
+                g = UserGlobalStreak(user_id=uid, current_streak=0, last_poop_date=None)
+                db.add(g)
+
+            if uid in positive_global_user_ids:
+                if g.last_poop_date == local_date:
+                    continue
+                if g.last_poop_date == (local_date - timedelta(days=1)):
+                    g.current_streak += 1
+                else:
+                    g.current_streak = 1
+                g.last_poop_date = local_date
+            else:
+                g.current_streak = 0
 
     # Р»РѕС‡РёРј Q1/Q2/Q3 (РµСЃР»Рё СЃРѕРѕР±С‰РµРЅРёР№ РЅРµС‚ вЂ” СЃРїРѕРєРѕР№РЅРѕ РїСЂРѕРїСѓСЃРєР°РµРј)
     await _lock_q1(bot, db, chat_id, session_id)
@@ -413,14 +486,15 @@ def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
         return
 
     rows = db.execute(
-        select(DaySession.session_date, SessionUserState.user_id)
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        select(DaySession.session_date, PoopEvent.user_id)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id == chat_id,
             DaySession.session_date < today,
-            SessionUserState.poops_n > 0,
-            SessionUserState.user_id.in_(member_user_ids),
+            PoopEvent.origin_chat_id == chat_id,
+            PoopEvent.user_id.in_(member_user_ids),
         )
+        .group_by(DaySession.session_date, PoopEvent.user_id)
         .order_by(DaySession.session_date.asc())
     ).all()
 
@@ -454,6 +528,56 @@ def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
 
         streak.last_poop_date = last_day
         streak.current_streak = trailing if last_day == yesterday else 0
+
+
+def _recalculate_global_streaks_from_history(db, today: date) -> None:
+    user_ids = [
+        int(uid)
+        for uid in db.scalars(select(ChatMember.user_id).group_by(ChatMember.user_id)).all()
+    ]
+    if not user_ids:
+        return
+
+    rows = db.execute(
+        select(DaySession.session_date, PoopEvent.user_id)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.session_date < today,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
+            PoopEvent.user_id.in_(user_ids),
+        )
+        .group_by(DaySession.session_date, PoopEvent.user_id)
+        .order_by(DaySession.session_date.asc())
+    ).all()
+
+    days_by_user: dict[int, list[date]] = {uid: [] for uid in user_ids}
+    for session_date, user_id in rows:
+        uid = int(user_id)
+        if not days_by_user[uid] or days_by_user[uid][-1] != session_date:
+            days_by_user[uid].append(session_date)
+
+    yesterday = today - timedelta(days=1)
+    for uid in user_ids:
+        g = db.get(UserGlobalStreak, {"user_id": uid})
+        if g is None:
+            g = UserGlobalStreak(user_id=uid, current_streak=0, last_poop_date=None)
+            db.add(g)
+
+        days = days_by_user.get(uid, [])
+        if not days:
+            g.current_streak = 0
+            g.last_poop_date = None
+            continue
+
+        last_day = days[-1]
+        trailing = 1
+        idx = len(days) - 2
+        while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+            trailing += 1
+            idx -= 1
+
+        g.last_poop_date = last_day
+        g.current_streak = trailing if last_day == yesterday else 0
 
 
 def _is_last_day_of_month(d: date) -> bool:

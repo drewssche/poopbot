@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Chat, User, ChatMember, Session as DaySession, SessionMessage, SessionUserState, UserStreak
+from app.db.models import Chat, User, ChatMember, Session as DaySession, SessionMessage, SessionUserState, UserStreak, UserGlobalStreak
 
 
 def upsert_chat(db: Session, chat_id: int) -> Chat:
@@ -48,6 +48,10 @@ def ensure_chat_member(db: Session, chat_id: int, user_id: int) -> ChatMember:
         streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
         if streak is None:
             db.add(UserStreak(chat_id=chat_id, user_id=user_id, current_streak=0, last_poop_date=None))
+
+        g_streak = db.get(UserGlobalStreak, {"user_id": user_id})
+        if g_streak is None:
+            db.add(UserGlobalStreak(user_id=user_id, current_streak=0, last_poop_date=None))
     return member
 
 

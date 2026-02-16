@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Session as DaySession
-from app.db.models import SessionUserState, PoopEvent, User, ChatMember
+from app.db.models import PoopEvent, User, ChatMember
 
 
 def _year_flavor(year: int) -> tuple[str, str, str]:
@@ -69,13 +69,13 @@ def list_user_recap_chat_ids(db: Session, user_id: int, year: int) -> list[int]:
     end = date(year, 12, 31)
     rows = db.scalars(
         select(DaySession.chat_id)
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id < 0,
             DaySession.session_date >= start,
             DaySession.session_date <= end,
-            SessionUserState.user_id == user_id,
-            SessionUserState.poops_n > 0,
+            PoopEvent.user_id == user_id,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
         .group_by(DaySession.chat_id)
         .order_by(DaySession.chat_id.asc())
@@ -102,18 +102,18 @@ def pick_user_recap_source_chat(db: Session, user_id: int, year: int) -> int | N
     row = db.execute(
         select(
             DaySession.chat_id,
-            func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"),
+            func.count(PoopEvent.id).label("poops"),
         )
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id < 0,
             DaySession.session_date >= start,
             DaySession.session_date <= end,
-            SessionUserState.user_id == user_id,
-            SessionUserState.poops_n > 0,
+            PoopEvent.user_id == user_id,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
         .group_by(DaySession.chat_id)
-        .order_by(func.coalesce(func.sum(SessionUserState.poops_n), 0).desc(), DaySession.chat_id.asc())
+        .order_by(func.count(PoopEvent.id).desc(), DaySession.chat_id.asc())
     ).first()
     if row is None:
         return None
@@ -123,12 +123,13 @@ def pick_user_recap_source_chat(db: Session, user_id: int, year: int) -> int | N
 def _count_for_day(db: Session, chat_id: int, user_id: int, day: date) -> int:
     return int(
         db.scalar(
-            select(func.coalesce(func.sum(SessionUserState.poops_n), 0))
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(func.count(PoopEvent.id))
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == day,
-                SessionUserState.user_id == user_id,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
             )
         )
         or 0
@@ -153,25 +154,22 @@ def build_my_year_recap_cards(db: Session, chat_id: int, user_id: int, year: int
         return [f"🎉 Твой рекап {year}\n\nПока пусто за этот год."]
 
     session_ids = [int(s.session_id) for s in sessions]
-    date_by_session = {int(s.session_id): s.session_date for s in sessions}
-    states = db.scalars(
-        select(SessionUserState).where(
-            SessionUserState.session_id.in_(session_ids),
-            SessionUserState.user_id == user_id,
+    event_rows = db.execute(
+        select(DaySession.session_date, PoopEvent.event_n)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.session_id.in_(session_ids),
+            PoopEvent.user_id == user_id,
+            PoopEvent.origin_chat_id == chat_id,
         )
+        .order_by(DaySession.session_date.asc(), PoopEvent.event_n.asc())
     ).all()
 
-    total = sum(int(s.poops_n or 0) for s in states)
+    total = len(event_rows)
+    if total <= 0:
+        return [f"🎉 Твой рекап {year}\n\nПока пусто за этот год."]
 
-    active_days = sorted(
-        date_by_session[int(s.session_id)]
-        for s in states
-        if int(s.poops_n or 0) > 0 and int(s.session_id) in date_by_session
-    )
-    unique_active_days: list[date] = []
-    for d in active_days:
-        if not unique_active_days or unique_active_days[-1] != d:
-            unique_active_days.append(d)
+    unique_active_days = sorted({d for d, _n in event_rows})
 
     best_streak = 0
     if unique_active_days:
@@ -185,12 +183,8 @@ def build_my_year_recap_cards(db: Session, chat_id: int, user_id: int, year: int
             best_streak = max(best_streak, run)
 
     day_totals: dict[date, int] = {}
-    for s in states:
-        sid = int(s.session_id)
-        if sid not in date_by_session:
-            continue
-        d = date_by_session[sid]
-        day_totals[d] = day_totals.get(d, 0) + int(s.poops_n or 0)
+    for d, _n in event_rows:
+        day_totals[d] = day_totals.get(d, 0) + 1
     peak_day = max(day_totals.items(), key=lambda x: (x[1], x[0])) if day_totals else None
 
     feb9 = _count_for_day(db, chat_id, user_id, date(year, 2, 9))
@@ -324,52 +318,60 @@ def build_chat_year_recap_cards(db: Session, chat_id: int, year: int) -> list[st
         return [f"📊 Рекап чата {year}\n\nЗа этот год в чате пока пусто."]
 
     session_ids = [int(s.session_id) for s in sessions]
-    day_by_sid = {int(s.session_id): s.session_date for s in sessions}
     period_days = (end - start).days + 1
 
-    total_poops = int(
-        db.scalar(
-            select(func.coalesce(func.sum(SessionUserState.poops_n), 0)).where(SessionUserState.session_id.in_(session_ids))
+    event_rows = db.execute(
+        select(DaySession.session_date, PoopEvent.user_id, PoopEvent.bristol, PoopEvent.feeling)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.session_id.in_(session_ids),
+            PoopEvent.origin_chat_id == chat_id,
         )
-        or 0
-    )
-    by_user = db.execute(
-        select(SessionUserState.user_id, func.sum(SessionUserState.poops_n).label("poops"))
-        .where(SessionUserState.session_id.in_(session_ids))
-        .group_by(SessionUserState.user_id)
-        .order_by(func.sum(SessionUserState.poops_n).desc(), SessionUserState.user_id.asc())
     ).all()
-    active_users = [(int(r.user_id), int(r.poops or 0)) for r in by_user if int(r.poops or 0) > 0]
+    if not event_rows:
+        return [f"📊 Рекап чата {year}\n\nЗа этот год в чате пока пусто."]
+
+    total_poops = len(event_rows)
+    by_user_map: dict[int, int] = {}
+    day_totals: dict[date, int] = {}
+    user_days: dict[int, set[date]] = {}
+    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
+    fe = {"😇": 0, "😐": 0, "😫": 0}
+    for day, uid, bristol, feeling in event_rows:
+        uid_int = int(uid)
+        by_user_map[uid_int] = by_user_map.get(uid_int, 0) + 1
+        day_totals[day] = day_totals.get(day, 0) + 1
+        user_days.setdefault(uid_int, set()).add(day)
+        if bristol is not None:
+            b = int(bristol)
+            if b <= 2:
+                br["🧱"] += 1
+            elif b <= 4:
+                br["🍌"] += 1
+            elif b <= 6:
+                br["🍦"] += 1
+            else:
+                br["💦"] += 1
+        if feeling == "great":
+            fe["😇"] += 1
+        elif feeling == "ok":
+            fe["😐"] += 1
+        elif feeling == "bad":
+            fe["😫"] += 1
+
+    by_user = sorted(by_user_map.items(), key=lambda x: (-x[1], x[0]))
+    active_users = [(uid, poops) for uid, poops in by_user if poops > 0]
     users = {
         int(u.user_id): u
         for u in db.scalars(select(User).where(User.user_id.in_([uid for uid, _ in active_users]))).all()
     } if active_users else {}
 
-    day_rows = db.execute(
-        select(DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.chat_id == chat_id, DaySession.session_id.in_(session_ids))
-        .group_by(DaySession.session_date)
-        .order_by(DaySession.session_date.asc())
-    ).all()
-    active_days = [(d, int(p or 0)) for d, p in day_rows if int(p or 0) > 0]
+    active_days = sorted(day_totals.items(), key=lambda x: x[0])
     peak_day = max(active_days, key=lambda x: (x[1], x[0])) if active_days else None
 
-    user_days: dict[int, list[date]] = {}
-    state_rows = db.execute(
-        select(SessionUserState.user_id, SessionUserState.session_id, SessionUserState.poops_n)
-        .where(SessionUserState.session_id.in_(session_ids), SessionUserState.poops_n > 0)
-    ).all()
-    for uid, sid, _poops in state_rows:
-        d = day_by_sid.get(int(sid))
-        if d is None:
-            continue
-        user_days.setdefault(int(uid), []).append(d)
-    for uid in list(user_days.keys()):
-        user_days[uid] = sorted(set(user_days[uid]))
-
     best_streak_user: tuple[int, int] | None = None
-    for uid, days in user_days.items():
+    for uid, days_set in user_days.items():
+        days = sorted(days_set)
         if not days:
             continue
         run = 1
@@ -383,68 +385,26 @@ def build_chat_year_recap_cards(db: Session, chat_id: int, year: int) -> list[st
         if best_streak_user is None or best > best_streak_user[1]:
             best_streak_user = (uid, best)
 
-    br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
-    fe = {"😇": 0, "😐": 0, "😫": 0}
-    ev_rows = db.scalars(select(PoopEvent).where(PoopEvent.session_id.in_(session_ids))).all()
-    for e in ev_rows:
-        if e.bristol is not None:
-            b = int(e.bristol)
-            if b <= 2:
-                br["🧱"] += 1
-            elif b <= 4:
-                br["🍌"] += 1
-            elif b <= 6:
-                br["🍦"] += 1
-            else:
-                br["💦"] += 1
-        if e.feeling == "great":
-            fe["😇"] += 1
-        elif e.feeling == "ok":
-            fe["😐"] += 1
-        elif e.feeling == "bad":
-            fe["😫"] += 1
-
-    if sum(br.values()) == 0 or sum(fe.values()) == 0:
-        fallback_states = db.scalars(
-            select(SessionUserState).where(SessionUserState.session_id.in_(session_ids), SessionUserState.poops_n > 0)
-        ).all()
-        for s in fallback_states:
-            if sum(br.values()) == 0 and s.bristol is not None:
-                b = int(s.bristol)
-                if b <= 2:
-                    br["🧱"] += 1
-                elif b <= 4:
-                    br["🍌"] += 1
-                elif b <= 6:
-                    br["🍦"] += 1
-                else:
-                    br["💦"] += 1
-            if sum(fe.values()) == 0:
-                if s.feeling == "great":
-                    fe["😇"] += 1
-                elif s.feeling == "ok":
-                    fe["😐"] += 1
-                elif s.feeling == "bad":
-                    fe["😫"] += 1
-
     feb9_total = int(
         db.scalar(
-            select(func.coalesce(func.sum(SessionUserState.poops_n), 0))
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(func.count(PoopEvent.id))
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == date(year, 2, 9),
+                PoopEvent.origin_chat_id == chat_id,
             )
         )
         or 0
     )
     nov19_total = int(
         db.scalar(
-            select(func.coalesce(func.sum(SessionUserState.poops_n), 0))
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(func.count(PoopEvent.id))
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == date(year, 11, 19),
+                PoopEvent.origin_chat_id == chat_id,
             )
         )
         or 0
@@ -550,38 +510,24 @@ def build_my_year_recap_cards_all_chats(db: Session, user_id: int, year: int) ->
         start = max(start, first_interaction)
     end = date(year, 12, 31)
 
-    states = db.scalars(
-        select(SessionUserState)
-        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+    event_rows = db.execute(
+        select(DaySession.session_date, DaySession.chat_id, PoopEvent.bristol, PoopEvent.feeling)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id < 0,
             DaySession.session_date >= start,
             DaySession.session_date <= end,
-            SessionUserState.user_id == user_id,
+            PoopEvent.user_id == user_id,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
     ).all()
-    if not states:
+    if not event_rows:
         return [f"🎉 Твой рекап {year}\n\nПока пусто за этот год."]
 
-    session_ids = [int(s.session_id) for s in states]
-    session_rows = db.execute(
-        select(DaySession.session_id, DaySession.session_date, DaySession.chat_id).where(DaySession.session_id.in_(session_ids))
-    ).all()
-    by_sid_date = {int(sid): sdate for sid, sdate, _ in session_rows}
-    by_sid_chat = {int(sid): int(cid) for sid, _, cid in session_rows}
-
-    total = sum(int(s.poops_n or 0) for s in states)
+    total = len(event_rows)
     period_days = (end - start).days + 1
 
-    active_days = sorted(
-        by_sid_date[int(s.session_id)]
-        for s in states
-        if int(s.poops_n or 0) > 0 and int(s.session_id) in by_sid_date
-    )
-    unique_days: list[date] = []
-    for d in active_days:
-        if not unique_days or unique_days[-1] != d:
-            unique_days.append(d)
+    unique_days = sorted({day for day, _cid, _b, _f in event_rows})
 
     best_streak = 0
     if unique_days:
@@ -596,30 +542,13 @@ def build_my_year_recap_cards_all_chats(db: Session, user_id: int, year: int) ->
 
     day_totals: dict[date, int] = {}
     chat_totals: dict[int, int] = {}
-    for s in states:
-        sid = int(s.session_id)
-        poops = int(s.poops_n or 0)
-        if sid in by_sid_date:
-            d = by_sid_date[sid]
-            day_totals[d] = day_totals.get(d, 0) + poops
-        if sid in by_sid_chat:
-            cid = by_sid_chat[sid]
-            chat_totals[cid] = chat_totals.get(cid, 0) + poops
-    peak_day = max(day_totals.items(), key=lambda x: (x[1], x[0])) if day_totals else None
-    top_chats = sorted(chat_totals.items(), key=lambda x: (-x[1], x[0]))[:3]
-
-    ev_rows = db.scalars(
-        select(PoopEvent)
-        .where(
-            PoopEvent.session_id.in_(session_ids),
-            PoopEvent.user_id == user_id,
-        )
-    ).all()
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
-    for e in ev_rows:
-        if e.bristol is not None:
-            b = int(e.bristol)
+    for d, cid, bristol, feeling in event_rows:
+        day_totals[d] = day_totals.get(d, 0) + 1
+        chat_totals[int(cid)] = chat_totals.get(int(cid), 0) + 1
+        if bristol is not None:
+            b = int(bristol)
             if b <= 2:
                 br["🧱"] += 1
             elif b <= 4:
@@ -628,12 +557,14 @@ def build_my_year_recap_cards_all_chats(db: Session, user_id: int, year: int) ->
                 br["🍦"] += 1
             else:
                 br["💦"] += 1
-        if e.feeling == "great":
+        if feeling == "great":
             fe["😇"] += 1
-        elif e.feeling == "ok":
+        elif feeling == "ok":
             fe["😐"] += 1
-        elif e.feeling == "bad":
+        elif feeling == "bad":
             fe["😫"] += 1
+    peak_day = max(day_totals.items(), key=lambda x: (x[1], x[0])) if day_totals else None
+    top_chats = sorted(chat_totals.items(), key=lambda x: (-x[1], x[0]))[:3]
 
     chat_count = len([cid for cid, val in chat_totals.items() if val > 0])
     avg_period = (float(total) / float(period_days)) if period_days > 0 else 0.0

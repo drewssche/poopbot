@@ -15,6 +15,7 @@ from app.services.command_message_service import (
     get_any_command_message_id,
     get_command_message_id,
 )
+from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import reconcile_events_count
 from app.services.q1_service import apply_minus, apply_plus, render_q1
 from app.services.q2_q3_service import ensure_q2_q3_exist
@@ -139,13 +140,15 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     await cb.answer("Неактуально", show_alert=False)
                     return
 
+            touched_sessions: list[tuple[int, int]] = []
+
             if cb.data == "q1:minus":
-                _, popup = apply_minus(db, sess.session_id, user.id)
+                changed, popup = apply_minus(db, sess.session_id, user.id)
                 await cb.answer(popup, show_alert=False)
             else:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
-                ok, popup = apply_plus(db, sess.session_id, user.id)
-                if ok and now_in_tz(chat.timezone).time().hour < 11:
+                changed, popup = apply_plus(db, sess.session_id, user.id)
+                if changed and now_in_tz(chat.timezone).time().hour < 11:
                     popup = "Кофейку и цигарку бахнул? Красава"
                 await cb.answer(popup, show_alert=False)
 
@@ -155,7 +158,16 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 session_id=sess.session_id,
                 user_id=user.id,
                 poops_n=int(state.poops_n) if state else 0,
+                origin_chat_id=chat_id,
             )
+
+            if changed:
+                touched_sessions = sync_user_state_across_member_chats(
+                    db,
+                    source_chat_id=chat_id,
+                    source_session_id=sess.session_id,
+                    user_id=user.id,
+                )
 
             db.commit()
 
@@ -191,6 +203,9 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
                 except Exception:
                     logger.exception("Failed to refresh Q2/Q3 after Q1 action")
+
+            if changed and touched_sessions:
+                await refresh_synced_chats_views(cb.bot, db, touched_sessions)
     except Exception:
         logger.exception("Unhandled exception in q1_callbacks")
         try:

@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMember, SessionUserState, User, UserStreak
+from app.db.models import ChatMember, SessionUserState, User, UserGlobalStreak, UserStreak
 from app.services.poop_event_service import create_event, delete_event
 
 
@@ -133,6 +133,10 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         s.user_id: s
         for s in db.scalars(select(UserStreak).where(UserStreak.chat_id == chat_id)).all()
     }
+    global_streaks = {
+        s.user_id: s
+        for s in db.scalars(select(UserGlobalStreak).where(UserGlobalStreak.user_id.in_(user_ids))).all()
+    }
 
     lines = [header, "", "Участники:"]
 
@@ -152,7 +156,15 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             day=session_date,
             has_positive_today=poops > 0,
         )
-        status_bits.append(f"стрик {streak_val} дн.")
+        global_row = global_streaks.get(uid)
+        global_streak_val = _project_streak_for_day(
+            current_streak=int(global_row.current_streak) if global_row else 0,
+            last_poop_date=global_row.last_poop_date if global_row else None,
+            day=session_date,
+            has_positive_today=poops > 0,
+        )
+        status_bits.append(f"стрик чат {streak_val} дн.")
+        status_bits.append(f"глоб {global_streak_val} дн.")
 
         lines.append(f"{mention(u)} — {' • '.join(status_bits)}")
 

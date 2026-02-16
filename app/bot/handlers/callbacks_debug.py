@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards.debug import debug_kb
+from app.bot.keyboards.debug import debug_explain_kb, debug_kb
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.reminder_service import build_late_reminder_text
@@ -47,6 +47,86 @@ def _holiday_text(kind: str) -> str:
     if kind == "nov19":
         return "Сегодня Всемирный день туалета (World Toilet Day)."
     return "Holiday notice не найден."
+
+
+def _explain_text(action: str) -> str:
+    texts = {
+        "q1": (
+            "ℹ️ Q1 автопост\n\n"
+            "Когда: по времени автопоста чата (10:00/14:00/19:00).\n"
+            "Условия: уведомления включены, активная сессия, не техокно 23:55–00:05.\n"
+            "Не сработает: если Q1 уже есть или сессия закрыта."
+        ),
+        "q2q3": (
+            "ℹ️ Q2/Q3\n\n"
+            "Когда: автоматически после Q1, если включены уточняющие вопросы.\n"
+            "Условия: есть активная сессия и сообщение Q1.\n"
+            "Не сработает: если сессия закрыта/неактуальна."
+        ),
+        "late": (
+            "ℹ️ Финалка 23:30\n\n"
+            "Когда: ежедневно в 23:30 по таймзоне чата.\n"
+            "Условия: включены уведомления и финалка 23:30, сессия активна, есть Q1.\n"
+            "Отправляется: только если есть те, кто не отметился."
+        ),
+        "week": (
+            "ℹ️ Итоги недели\n\n"
+            "Когда: в воскресенье в 23:50.\n"
+            "Период: Пн–Вс текущей недели.\n"
+            "Включает: сравнение с прошлой неделей и место чата среди чатов (для групп)."
+        ),
+        "month": (
+            "ℹ️ Итоги месяца\n\n"
+            "Когда: в последний день месяца в 23:50.\n"
+            "Период: весь календарный месяц.\n"
+            "Включает: сравнение с прошлым месяцем и место чата среди чатов (для групп)."
+        ),
+        "year": (
+            "ℹ️ Итоги года\n\n"
+            "Когда: 31 декабря в 23:50.\n"
+            "Период: 01.01–31.12 текущего года.\n"
+            "Включает: сравнение с прошлым годом и место чата среди чатов (для групп)."
+        ),
+        "holiday:feb9": (
+            "ℹ️ Holiday 9 Feb\n\n"
+            "Когда: 9 февраля.\n"
+            "Условия: включены уведомления, активная сессия, есть Q1/Q2/Q3.\n"
+            "Отправляется один раз за день."
+        ),
+        "holiday:nov19": (
+            "ℹ️ Holiday 19 Nov\n\n"
+            "Когда: 19 ноября.\n"
+            "Условия: включены уведомления, активная сессия, есть Q1/Q2/Q3.\n"
+            "Отправляется один раз за день."
+        ),
+        "recap_announce": (
+            "ℹ️ Анонс рекапа\n\n"
+            "Когда: 30 декабря при автопосте Q1.\n"
+            "Условия: анонс за день ещё не отправлялся.\n"
+            "Назначение: подсказать, что доступен годовой рекап."
+        ),
+        "recap_chat": (
+            "ℹ️ Рекап чата\n\n"
+            "Что это: карточки итогов выбранного чата за целевой год.\n"
+            "Источник: исторические данные сессий/событий чата."
+        ),
+        "recap_my_chat": (
+            "ℹ️ Рекап личный (текущий чат)\n\n"
+            "Что это: личные карточки за год, но только в рамках выбранного чата.\n"
+            "Источник: твои отметки и события в этом чате."
+        ),
+        "recap_my_all": (
+            "ℹ️ Рекап личный (все чаты)\n\n"
+            "Что это: личные карточки за год по всем твоим групповым чатам.\n"
+            "Источник: агрегированные личные данные по всем чатам."
+        ),
+        "all": (
+            "ℹ️ Прогнать все\n\n"
+            "Что делает: последовательно запускает ключевые debug-события.\n"
+            "Назначение: быстро проверить весь поток сообщений."
+        ),
+    }
+    return texts.get(action, f"ℹ️ Пояснение для `{action}` пока не добавлено.")
 
 
 def _action_label(action: str) -> str:
@@ -100,16 +180,18 @@ async def _send_output(
     cb: CallbackQuery,
     mode: str,
     text: str,
+    explain_action: str | None = None,
     *,
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
 ) -> None:
     if cb.message is None:
         return
+    kb = debug_explain_kb(explain_action) if explain_action else None
     if mode == "preview":
-        await cb.message.answer(f"🔎 Превью\n\n{text}", parse_mode=parse_mode)
+        await cb.message.answer(f"🔎 Превью\n\n{text}", parse_mode=parse_mode, reply_markup=kb)
         return
-    await cb.message.answer(text, parse_mode=parse_mode, reply_to_message_id=reply_to_message_id)
+    await cb.message.answer(text, parse_mode=parse_mode, reply_to_message_id=reply_to_message_id, reply_markup=kb)
 
 
 def _resolve_source_chat_id(current_chat_id: int, member_chat_ids: list[int]) -> int | None:
@@ -118,17 +200,27 @@ def _resolve_source_chat_id(current_chat_id: int, member_chat_ids: list[int]) ->
     return member_chat_ids[0] if member_chat_ids else None
 
 
-async def _send_recap_cards(cb: CallbackQuery, mode: str, cards: list[str]) -> None:
+async def _send_recap_cards(cb: CallbackQuery, mode: str, cards: list[str], explain_action: str) -> None:
     if cb.message is None:
         return
     if not cards:
         await _send_output(cb, mode, "Карточки рекапа пустые.")
         return
     if mode == "preview":
-        await _send_output(cb, mode, f"Карточек: {len(cards)}\n\nКарточка 1/{len(cards)}\n\n{cards[0]}")
+        await _send_output(
+            cb,
+            mode,
+            f"Карточек: {len(cards)}\n\nКарточка 1/{len(cards)}\n\n{cards[0]}",
+            explain_action=explain_action,
+        )
         return
     for idx, card in enumerate(cards, start=1):
-        await cb.message.answer(f"Карточка {idx}/{len(cards)}\n\n{card}")
+        await _send_output(
+            cb,
+            mode,
+            f"Карточка {idx}/{len(cards)}\n\n{card}",
+            explain_action=explain_action,
+        )
 
 
 async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
@@ -153,32 +245,32 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
 
         if action == "q1":
             text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-            await _send_output(cb, mode, text)
+            await _send_output(cb, mode, text, explain_action=action)
             return True
 
         if action == "q2q3":
-            await _send_output(cb, mode, render_q2_text(db, chat_id, sess.session_id))
-            await _send_output(cb, mode, render_q3_text(db, chat_id, sess.session_id))
+            await _send_output(cb, mode, render_q2_text(db, chat_id, sess.session_id), explain_action=action)
+            await _send_output(cb, mode, render_q3_text(db, chat_id, sess.session_id), explain_action=action)
             return True
 
         if action == "late":
             text = build_late_reminder_text(db, sess.session_id) or "⏳ Финальная напоминалка неактуальна."
-            await _send_output(cb, mode, text, parse_mode="HTML", reply_to_message_id=q1_msg_id or None)
+            await _send_output(cb, mode, text, explain_action=action, parse_mode="HTML", reply_to_message_id=q1_msg_id or None)
             return True
 
         if action == "week":
             text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="week", title="📉 Итоги недели")
-            await _send_output(cb, mode, text)
+            await _send_output(cb, mode, text, explain_action=action)
             return True
 
         if action == "month":
             text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="month", title="📉 Итоги месяца")
-            await _send_output(cb, mode, text)
+            await _send_output(cb, mode, text, explain_action=action)
             return True
 
         if action == "year":
             text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="year", title="📉 Итоги года")
-            await _send_output(cb, mode, text)
+            await _send_output(cb, mode, text, explain_action=action)
             return True
 
         if action == "recap_announce":
@@ -187,7 +279,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 if chat_id > 0
                 else "🎉 Доступен рекап года. Забирай итоги!"
             )
-            await _send_output(cb, mode, recap_text)
+            await _send_output(cb, mode, recap_text, explain_action=action)
             return True
 
         if action == "recap_chat":
@@ -196,7 +288,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 await _send_output(cb, mode, "Нет доступного группового чата для чат-рекапа.")
                 return True
             cards = build_chat_year_recap_cards(db, chat_id=source_chat_id, year=year)
-            await _send_recap_cards(cb, mode, cards)
+            await _send_recap_cards(cb, mode, cards, explain_action=action)
             return True
 
         if action == "recap_my_chat":
@@ -205,17 +297,17 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
                 await _send_output(cb, mode, "Нет доступного группового чата для личного рекапа.")
                 return True
             cards = build_my_year_recap_cards(db, chat_id=source_chat_id, user_id=cb.from_user.id, year=year)
-            await _send_recap_cards(cb, mode, cards)
+            await _send_recap_cards(cb, mode, cards, explain_action=action)
             return True
 
         if action == "recap_my_all":
             cards = build_my_year_recap_cards_all_chats(db, user_id=cb.from_user.id, year=year)
-            await _send_recap_cards(cb, mode, cards)
+            await _send_recap_cards(cb, mode, cards, explain_action=action)
             return True
 
         if action.startswith("holiday:"):
             kind = action.split(":")[1]
-            await _send_output(cb, mode, _holiday_text(kind))
+            await _send_output(cb, mode, _holiday_text(kind), explain_action=action)
             return True
 
         if action == "all":
@@ -302,3 +394,9 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
                 chat_id = cb.message.chat.id
                 _remember_last_action(chat_id=chat_id, actor=_actor_label(cb), action=action, mode=mode)
             await cb.answer()
+        return
+
+    if parts[1] == "explain" and len(parts) >= 3:
+        action = ":".join(parts[2:])
+        await cb.message.answer(_explain_text(action))
+        await cb.answer()

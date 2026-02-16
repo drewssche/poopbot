@@ -26,3 +26,9 @@ def debug_kb(mode: str = "preview") -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🧪 Рекап личный (все чаты)", callback_data=f"debug:run:{mode}:recap_my_all"))
     kb.row(InlineKeyboardButton(text="🚀 Прогнать все", callback_data=f"debug:run:{mode}:all"))
     return kb.as_markup()
+
+
+def debug_explain_kb(action: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="ℹ️ Как это работает", callback_data=f"debug:explain:{action}"))
+    return kb.as_markup()

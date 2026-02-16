@@ -656,8 +656,10 @@ def build_stats_text_chat(
         avg_per_active_day = (float(total_poops) / float(days_any)) if days_any > 0 else 0.0
         last_mark_date = active_days[-1] if active_days else None
 
-        best_streak_live = _compute_user_chat_best_streak_live(db, chat_id, user_id, today)
-        streak_val = _compute_user_chat_streak_live(db, chat_id, user_id, today)
+        # In private-chat stats, keep streaks consistent with the same local-origin dataset
+        # used for totals and active days in this block.
+        best_streak_live = _best_streak_from_days(active_days)
+        streak_val = _current_streak_from_days(active_days, today)
 
         lines = [
             "💬 В этой личке",
@@ -932,13 +934,12 @@ def rank_chat_among_groups_by_total(db: Session, chat_id: int, r: Range) -> tupl
         return None, 0
 
     rows = db.execute(
-        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date >= r.start,
             DaySession.session_date <= r.end,
-            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
         .group_by(DaySession.chat_id)
     ).all()
@@ -980,16 +981,16 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     session_ids = [int(s.session_id) for s in sessions]
 
     by_chat_total = db.execute(
-        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
+        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids))
         .group_by(DaySession.chat_id)
     ).all()
 
     by_chat_participants = db.execute(
-        select(DaySession.chat_id, func.count(func.distinct(PoopEvent.user_id)).label("participants"))
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
+        select(DaySession.chat_id, func.count(func.distinct(SessionUserState.user_id)).label("participants"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), SessionUserState.poops_n > 0)
         .group_by(DaySession.chat_id)
     ).all()
 
@@ -1033,9 +1034,9 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     )[:5]
 
     day_rows = db.execute(
-        select(DaySession.chat_id, DaySession.session_date, func.count(PoopEvent.id).label("poops"))
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
+        select(DaySession.chat_id, DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids))
         .group_by(DaySession.chat_id, DaySession.session_date)
     ).all()
     record_day = None

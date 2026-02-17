@@ -59,6 +59,16 @@ services:
         condition: service_healthy
 
     command: ["bash", "-lc", "alembic upgrade head && python -m app.main"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import json, pathlib, tempfile, time, sys; p=pathlib.Path(tempfile.gettempdir())/'poopbot_heartbeat.json'; d=json.loads(p.read_text(encoding='utf-8')) if p.exists() else None; age=time.time()-p.stat().st_mtime if p.exists() else 1e9; sys.exit(0 if d and age < 240 else 1)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
     mem_limit: 512m
     mem_reservation: 128m

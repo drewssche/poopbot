@@ -1,12 +1,17 @@
 import asyncio
 import contextlib
 import logging
+import os
+import tempfile
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 from aiogram import Bot, Dispatcher
 from aiogram import BaseMiddleware
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.dispatcher.event.bases import UNHANDLED
 
 from app.core.config import Settings
 from app.db.engine import make_engine, make_session_factory
@@ -20,11 +25,17 @@ from app.bot.handlers.callbacks_help import router as callbacks_help_router
 from app.bot.handlers.callbacks_recap import router as callbacks_recap_router
 from app.bot.handlers.callbacks_stats import router as callbacks_stats_router
 from app.bot.handlers.callbacks_debug import router as callbacks_debug_router
+from app.bot.handlers.callbacks_fallback import router as callbacks_fallback_router
 
 
 class _UpdateActivityMiddleware(BaseMiddleware):
-    def __init__(self, on_update: Callable[[], None]) -> None:
-        self._on_update = on_update
+    def __init__(
+        self,
+        on_received: Callable[[], None],
+        on_handled: Callable[[], None],
+    ) -> None:
+        self._on_received = on_received
+        self._on_handled = on_handled
 
     async def __call__(
         self,
@@ -32,26 +43,132 @@ class _UpdateActivityMiddleware(BaseMiddleware):
         event: Any,
         data: Dict[str, Any],
     ) -> Any:
-        self._on_update()
-        return await handler(event, data)
+        self._on_received()
+        response = await handler(event, data)
+        if response is not UNHANDLED:
+            self._on_handled()
+        return response
 
 
 async def _heartbeat_loop(
     interval_sec: int,
     stale_sec: int,
-    get_last_update_ts: Callable[[], float],
+    get_last_received_ts: Callable[[], float],
+    get_last_handled_ts: Callable[[], float],
 ) -> None:
     logger = logging.getLogger(__name__)
     while True:
         await asyncio.sleep(interval_sec)
-        idle_sec = int(time.monotonic() - get_last_update_ts())
-        if idle_sec >= stale_sec:
+        received_idle_sec = int(time.monotonic() - get_last_received_ts())
+        handled_idle_sec = int(time.monotonic() - get_last_handled_ts())
+        if received_idle_sec >= stale_sec:
             logger.warning(
-                "No handled updates for %ss (possible token/webhook/competing-instance issue)",
-                idle_sec,
+                "No updates received for %ss (possible token/webhook/competing-instance issue)",
+                received_idle_sec,
+            )
+        elif handled_idle_sec >= stale_sec:
+            logger.warning(
+                "No handled updates for %ss (updates still coming, check stale buttons/handlers)",
+                handled_idle_sec,
             )
         else:
-            logger.debug("Heartbeat ok, last handled update %ss ago", idle_sec)
+            logger.debug(
+                "Heartbeat ok, last update %ss ago, last handled %ss ago",
+                received_idle_sec,
+                handled_idle_sec,
+            )
+
+
+async def _webhook_guard_loop(bot: Bot, interval_sec: int) -> None:
+    logger = logging.getLogger(__name__)
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            info = await bot.get_webhook_info()
+            if info.url:
+                logger.warning("Webhook detected during polling, resetting webhook url=%s", info.url)
+                await bot.delete_webhook(drop_pending_updates=False)
+        except Exception:
+            logger.exception("Webhook guard check failed")
+
+
+async def _polling_guard_loop(
+    bot: Bot,
+    interval_sec: int,
+    stale_sec: int,
+    pending_threshold: int,
+    get_last_received_ts: Callable[[], float],
+) -> None:
+    logger = logging.getLogger(__name__)
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            idle_sec = int(time.monotonic() - get_last_received_ts())
+            if idle_sec < stale_sec:
+                continue
+            info = await bot.get_webhook_info()
+            if info.pending_update_count >= pending_threshold:
+                logger.critical(
+                    "Polling guard restart: idle=%ss pending_updates=%s threshold=%s",
+                    idle_sec,
+                    info.pending_update_count,
+                    pending_threshold,
+                )
+                os._exit(1)
+        except Exception:
+            logger.exception("Polling guard check failed")
+
+
+async def _heartbeat_file_loop(
+    interval_sec: int,
+    get_last_received_ts: Callable[[], float],
+    get_last_handled_ts: Callable[[], float],
+) -> None:
+    path = Path(tempfile.gettempdir()) / "poopbot_heartbeat.json"
+    logger = logging.getLogger(__name__)
+    while True:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            payload = (
+                "{"
+                f"\"ts_utc\":\"{now}\","
+                f"\"last_received_sec\":{int(time.monotonic() - get_last_received_ts())},"
+                f"\"last_handled_sec\":{int(time.monotonic() - get_last_handled_ts())}"
+                "}"
+            )
+            path.write_text(payload, encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to write heartbeat file %s", path)
+        await asyncio.sleep(max(5, interval_sec))
+
+
+async def _handled_rate_loop(
+    interval_sec: int,
+    get_total_received: Callable[[], int],
+    get_total_handled: Callable[[], int],
+) -> None:
+    logger = logging.getLogger(__name__)
+    prev_received = get_total_received()
+    prev_handled = get_total_handled()
+    while True:
+        await asyncio.sleep(interval_sec)
+        total_received = get_total_received()
+        total_handled = get_total_handled()
+        delta_received = max(0, total_received - prev_received)
+        delta_handled = max(0, total_handled - prev_handled)
+        prev_received = total_received
+        prev_handled = total_handled
+        if delta_received == 0:
+            logger.info("Handled rate: no updates in last %ss", interval_sec)
+            continue
+        rate = (delta_handled / delta_received) * 100.0
+        logger.info(
+            "Handled rate: %s/%s (%.1f%%) for last %ss",
+            delta_handled,
+            delta_received,
+            rate,
+            interval_sec,
+        )
 
 
 async def run_bot(settings: Settings) -> None:
@@ -72,17 +189,27 @@ async def run_bot(settings: Settings) -> None:
     dp.include_router(callbacks_recap_router)
     dp.include_router(callbacks_stats_router)
     dp.include_router(callbacks_debug_router)
+    dp.include_router(callbacks_fallback_router)
 
     if settings.startup_delete_webhook:
         await bot.delete_webhook(drop_pending_updates=settings.drop_pending_updates_on_start)
 
-    last_update_ts = time.monotonic()
+    last_received_ts = time.monotonic()
+    last_handled_ts = time.monotonic()
+    total_received_count = 0
+    total_handled_count = 0
 
-    def _touch_update() -> None:
-        nonlocal last_update_ts
-        last_update_ts = time.monotonic()
+    def _touch_received() -> None:
+        nonlocal last_received_ts, total_received_count
+        last_received_ts = time.monotonic()
+        total_received_count += 1
 
-    dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_update))
+    def _touch_handled() -> None:
+        nonlocal last_handled_ts, total_handled_count
+        last_handled_ts = time.monotonic()
+        total_handled_count += 1
+
+    dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_received, _touch_handled))
 
     start_scheduler(bot, session_factory, chat_throttle_sec=settings.scheduler_chat_throttle_sec)
 
@@ -90,7 +217,40 @@ async def run_bot(settings: Settings) -> None:
         _heartbeat_loop(
             interval_sec=settings.heartbeat_interval_sec,
             stale_sec=settings.heartbeat_stale_sec,
-            get_last_update_ts=lambda: last_update_ts,
+            get_last_received_ts=lambda: last_received_ts,
+            get_last_handled_ts=lambda: last_handled_ts,
+        )
+    )
+    heartbeat_file_task = asyncio.create_task(
+        _heartbeat_file_loop(
+            interval_sec=settings.heartbeat_interval_sec,
+            get_last_received_ts=lambda: last_received_ts,
+            get_last_handled_ts=lambda: last_handled_ts,
+        )
+    )
+    webhook_guard_task = (
+        asyncio.create_task(_webhook_guard_loop(bot, settings.webhook_guard_interval_sec))
+        if settings.webhook_guard_enabled
+        else None
+    )
+    polling_guard_task = (
+        asyncio.create_task(
+            _polling_guard_loop(
+                bot=bot,
+                interval_sec=max(30, settings.webhook_guard_interval_sec),
+                stale_sec=settings.heartbeat_stale_sec,
+                pending_threshold=settings.polling_guard_pending_threshold,
+                get_last_received_ts=lambda: last_received_ts,
+            )
+        )
+        if settings.polling_guard_enabled
+        else None
+    )
+    handled_rate_task = asyncio.create_task(
+        _handled_rate_loop(
+            interval_sec=max(30, settings.handled_rate_log_interval_sec),
+            get_total_received=lambda: total_received_count,
+            get_total_handled=lambda: total_handled_count,
         )
     )
 
@@ -99,7 +259,23 @@ async def run_bot(settings: Settings) -> None:
         await dp.start_polling(bot)
     finally:
         hb_task.cancel()
+        heartbeat_file_task.cancel()
+        if webhook_guard_task is not None:
+            webhook_guard_task.cancel()
+        if polling_guard_task is not None:
+            polling_guard_task.cancel()
+        handled_rate_task.cancel()
         with contextlib.suppress(Exception):
             await hb_task
+        with contextlib.suppress(Exception):
+            await heartbeat_file_task
+        if webhook_guard_task is not None:
+            with contextlib.suppress(Exception):
+                await webhook_guard_task
+        if polling_guard_task is not None:
+            with contextlib.suppress(Exception):
+                await polling_guard_task
+        with contextlib.suppress(Exception):
+            await handled_rate_task
         with contextlib.suppress(Exception):
             await bot.session.close()

@@ -14,6 +14,11 @@ class Settings:
     heartbeat_interval_sec: int = 60
     heartbeat_stale_sec: int = 300
     scheduler_chat_throttle_sec: float = 0.2
+    webhook_guard_enabled: bool = True
+    webhook_guard_interval_sec: int = 180
+    polling_guard_enabled: bool = True
+    polling_guard_pending_threshold: int = 5
+    handled_rate_log_interval_sec: int = 300
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -30,6 +35,17 @@ def _env_int(name: str, default: int) -> int:
     try:
         value = int(raw)
         return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _env_non_negative_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value >= 0 else default
     except ValueError:
         return default
 
@@ -65,4 +81,9 @@ def load_settings() -> Settings:
         heartbeat_interval_sec=_env_int("HEARTBEAT_INTERVAL_SEC", 60),
         heartbeat_stale_sec=_env_int("HEARTBEAT_STALE_SEC", 300),
         scheduler_chat_throttle_sec=_env_float("SCHEDULER_CHAT_THROTTLE_SEC", 0.2),
+        webhook_guard_enabled=_env_bool("WEBHOOK_GUARD_ENABLED", True),
+        webhook_guard_interval_sec=_env_int("WEBHOOK_GUARD_INTERVAL_SEC", 180),
+        polling_guard_enabled=_env_bool("POLLING_GUARD_ENABLED", True),
+        polling_guard_pending_threshold=_env_non_negative_int("POLLING_GUARD_PENDING_THRESHOLD", 5),
+        handled_rate_log_interval_sec=_env_int("HANDLED_RATE_LOG_INTERVAL_SEC", 300),
     )

@@ -775,6 +775,14 @@ def build_stats_text_chat(
             user = users.get(uid)
             role = TOP5_ROLES[idx - 1] if idx - 1 < len(TOP5_ROLES) else "Участник рейтинга"
             lines.append(f"- {idx}) {role} — {_display_name(user, uid)} • 💩({cnt})")
+        top_uid, _top_cnt = top_rows[0]
+        top_user = users.get(top_uid)
+        lines.extend(
+            [
+                "",
+                f"👑 Титул чата: {TOP5_ROLES[0]} — {_display_name(top_user, top_uid)}",
+            ]
+        )
     else:
         lines.append("- пока никого в рейтинге")
 
@@ -960,6 +968,10 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     else:
         lines.append(f"- Место: #{my_rank} из {len(ranking_rows)}")
         lines.append(f"- Всего: 💩({my_total})")
+        if 1 <= my_rank <= len(TOP5_ROLES):
+            lines.append(f"- Текущий титул: {TOP5_ROLES[my_rank - 1]}")
+            if my_rank == 1:
+                lines.append("- Ты сейчас держишь трон: 👑 Король какашек")
         if above_pct is not None:
             lines.append(f"- Выше {above_pct}% участников")
 

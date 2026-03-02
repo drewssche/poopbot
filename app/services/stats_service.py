@@ -629,6 +629,15 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         ),
         "",
     ]
+    mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
+    lines.extend(
+        [
+            "Масса и вода (оценка):",
+            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "",
+        ]
+    )
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
@@ -686,6 +695,7 @@ def build_stats_text_chat(
         best_streak_live = _best_streak_from_days(active_days)
         streak_val = _current_streak_from_days(active_days, today)
 
+        mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
         lines = [
             "💬 В этой личке",
             f"Период: {period_label(period)} ({_format_period(r)})",
@@ -709,6 +719,10 @@ def build_stats_text_chat(
                 if last_mark_date
                 else "- Последняя отметка: нет данных"
             ),
+            "",
+            "Масса и вода (оценка):",
+            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
             "",
             "Примечание: в этой личке учитываются отметки, сделанные именно здесь.",
             "",
@@ -772,6 +786,16 @@ def build_stats_text_chat(
             lines.append(f"- {idx}) {_streak_nickname(days)} — {_display_name(user, uid)} ({days} дн.)")
     else:
         lines.append("- пока нет активных стриков")
+
+    mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
+    lines.extend(
+        [
+            "",
+            "Масса и вода (оценка):",
+            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+        ]
+    )
 
     lines.append("")
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))

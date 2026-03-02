@@ -358,7 +358,7 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
     lines.extend(
         [
             "",
-            "Масса и вода по всем чатам (оценка):",
+            "Масса и вода по всем групповым чатам (оценка):",
             f"- 💩({total_poops_all}) — это примерно {format_mass(mass_g)} говна.",
             f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
         ]

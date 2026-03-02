@@ -277,7 +277,7 @@ def _current_global_king(db: Session, today: date) -> tuple[int, int] | None:
 def _is_user_participant_in_chat(db: Session, chat_id: int, user_id: int) -> bool:
     return bool(
         db.scalar(
-            select(PoopEvent.event_id)
+            select(PoopEvent.id)
             .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,

@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Chat, Session as DaySession, SessionUserState, User, PoopEvent
+from app.db.models import Chat, ChatMember, Session as DaySession, SessionUserState, User, UserStreak, PoopEvent
 from app.db.session import db_session
 from app.services.repo_service import (
     get_or_create_session,

@@ -172,6 +172,10 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         now_local = now_in_tz(chat.timezone)
         local_time = now_local.time()
         local_date = now_local.date()
+        now_min = local_time.hour * 60 + local_time.minute
+        post_min = chat.post_time.hour * 60 + chat.post_time.minute
+        late_min = 23 * 60 + 30
+        periodic_min = 23 * 60 + 50
         close_cutoff = time(23, 55)
         notifications_enabled = bool(chat.notifications_enabled)
         late_reminder_enabled = bool(chat.late_reminder_enabled)
@@ -217,9 +221,17 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
 
         # РђРІС‚РѕРїРѕСЃС‚ Q1 РІ chat.post_time (СЂР°Р±РѕС‚Р°РµС‚ С‚РѕР»СЊРєРѕ РїРѕСЃР»Рµ РїРµСЂРІРѕРіРѕ /start,
         # РїРѕС‚РѕРјСѓ С‡С‚Рѕ Chat РїРѕСЏРІР»СЏРµС‚СЃСЏ РІ Р‘Р” С‚РѕР»СЊРєРѕ РєРѕРіРґР° РµРіРѕ СЃРѕР·РґР°Р»Рё РєРѕРјР°РЅРґРѕР№ /start РёР»Рё /help /stats)
-        if notifications_enabled and local_time.hour == chat.post_time.hour and local_time.minute == chat.post_time.minute:
+        # Catch-up mode: if exact minute was missed (network outage), post later in same session
+        # while Q1 is still absent.
+        if notifications_enabled and now_min >= post_min:
             q1_id = get_session_message_id(db, sess.session_id, "Q1")
             if not q1_id:
+                if now_min > post_min:
+                    logger.warning(
+                        "Q1 catch-up send chat_id=%s delayed_by_min=%s",
+                        chat_id,
+                        now_min - post_min,
+                    )
                 await _post_q1(
                     bot,
                     db,
@@ -230,11 +242,13 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
                     show_remind=(local_time < time(22, 0)),
                 )
 
-        if notifications_enabled and late_reminder_enabled and local_time.hour == 23 and local_time.minute == 30:
+        # Catch-up for late reminder in the same active session.
+        if notifications_enabled and late_reminder_enabled and now_min >= late_min:
             await _send_late_reminder(bot, db, chat_id, sess.session_id)
 
         # 23:50 периодическая статистика (неделя/месяц/год), чтобы успеть учесть вечерние отметки.
-        if notifications_enabled and local_time.hour == 23 and local_time.minute == 50:
+        # Catch-up for periodic reports in case 23:50 tick was missed.
+        if notifications_enabled and now_min >= periodic_min:
             await _send_periodic_stats(bot, db, chat_id, local_date)
 
         if notifications_enabled:

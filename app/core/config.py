@@ -13,6 +13,9 @@ class Settings:
     drop_pending_updates_on_start: bool = False
     heartbeat_interval_sec: int = 60
     heartbeat_stale_sec: int = 300
+    polling_guard_interval_sec: int = 60
+    polling_guard_request_timeout_sec: int = 10
+    polling_guard_network_failures_to_restart: int = 5
     scheduler_chat_throttle_sec: float = 0.2
     webhook_guard_enabled: bool = True
     webhook_guard_interval_sec: int = 180
@@ -80,6 +83,9 @@ def load_settings() -> Settings:
         drop_pending_updates_on_start=_env_bool("DROP_PENDING_UPDATES_ON_START", False),
         heartbeat_interval_sec=_env_int("HEARTBEAT_INTERVAL_SEC", 60),
         heartbeat_stale_sec=_env_int("HEARTBEAT_STALE_SEC", 300),
+        polling_guard_interval_sec=_env_int("POLLING_GUARD_INTERVAL_SEC", 60),
+        polling_guard_request_timeout_sec=_env_int("POLLING_GUARD_REQUEST_TIMEOUT_SEC", 10),
+        polling_guard_network_failures_to_restart=_env_int("POLLING_GUARD_NETWORK_FAILURES_TO_RESTART", 5),
         scheduler_chat_throttle_sec=_env_float("SCHEDULER_CHAT_THROTTLE_SEC", 0.2),
         webhook_guard_enabled=_env_bool("WEBHOOK_GUARD_ENABLED", True),
         webhook_guard_interval_sec=_env_int("WEBHOOK_GUARD_INTERVAL_SEC", 180),

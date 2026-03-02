@@ -12,6 +12,7 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.event.bases import UNHANDLED
+from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 
 from app.core.config import Settings
 from app.db.engine import make_engine, make_session_factory
@@ -171,6 +172,54 @@ async def _handled_rate_loop(
         )
 
 
+async def _polling_connectivity_guard_loop(
+    bot: Bot,
+    interval_sec: int,
+    stale_sec: int,
+    request_timeout_sec: int,
+    network_failures_to_restart: int,
+    get_last_received_ts: Callable[[], float],
+) -> None:
+    logger = logging.getLogger(__name__)
+    network_failures = 0
+    while True:
+        await asyncio.sleep(interval_sec)
+        idle_sec = int(time.monotonic() - get_last_received_ts())
+        if idle_sec < stale_sec:
+            if network_failures > 0:
+                logger.info("Polling guard: telegram connectivity recovered")
+            network_failures = 0
+            continue
+
+        try:
+            info = await asyncio.wait_for(bot.get_webhook_info(), timeout=request_timeout_sec)
+            if getattr(info, "url", ""):
+                logger.warning("Polling guard: webhook is set while polling is enabled (url=%s)", info.url)
+            await asyncio.wait_for(bot.get_me(), timeout=request_timeout_sec)
+            if network_failures > 0:
+                logger.info("Polling guard: telegram connectivity recovered")
+            network_failures = 0
+        except (TelegramNetworkError, asyncio.TimeoutError) as e:
+            network_failures += 1
+            logger.error(
+                "Polling guard network failure %s/%s after %ss idle: %s",
+                network_failures,
+                network_failures_to_restart,
+                idle_sec,
+                e,
+            )
+            if network_failures >= network_failures_to_restart:
+                raise RuntimeError(
+                    "Polling guard: restarting process after repeated telegram connectivity failures"
+                ) from e
+        except TelegramBadRequest as e:
+            logger.error("Polling guard telegram bad request after %ss idle: %s", idle_sec, e)
+            network_failures = 0
+        except Exception as e:
+            logger.exception("Polling guard check failed: %s", e)
+            network_failures = 0
+
+
 async def run_bot(settings: Settings) -> None:
     bot = Bot(
         token=settings.bot_token,
@@ -253,10 +302,32 @@ async def run_bot(settings: Settings) -> None:
             get_total_handled=lambda: total_handled_count,
         )
     )
+    connectivity_guard_task = asyncio.create_task(
+        _polling_connectivity_guard_loop(
+            bot=bot,
+            interval_sec=settings.polling_guard_interval_sec,
+            stale_sec=settings.heartbeat_stale_sec,
+            request_timeout_sec=settings.polling_guard_request_timeout_sec,
+            network_failures_to_restart=settings.polling_guard_network_failures_to_restart,
+            get_last_received_ts=lambda: last_received_ts,
+        )
+    )
 
     logging.getLogger(__name__).info("Bot started")
     try:
-        await dp.start_polling(bot)
+        polling_task = asyncio.create_task(dp.start_polling(bot))
+        done, pending = await asyncio.wait(
+            {polling_task, connectivity_guard_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+        if polling_task in done:
+            polling_task.result()
+        if connectivity_guard_task in done:
+            connectivity_guard_task.result()
     finally:
         hb_task.cancel()
         heartbeat_file_task.cancel()
@@ -264,6 +335,7 @@ async def run_bot(settings: Settings) -> None:
             webhook_guard_task.cancel()
         if polling_guard_task is not None:
             polling_guard_task.cancel()
+        connectivity_guard_task.cancel()
         handled_rate_task.cancel()
         with contextlib.suppress(Exception):
             await hb_task
@@ -275,6 +347,8 @@ async def run_bot(settings: Settings) -> None:
         if polling_guard_task is not None:
             with contextlib.suppress(Exception):
                 await polling_guard_task
+        with contextlib.suppress(Exception):
+            await connectivity_guard_task
         with contextlib.suppress(Exception):
             await handled_rate_task
         with contextlib.suppress(Exception):

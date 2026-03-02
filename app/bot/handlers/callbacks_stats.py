@@ -87,7 +87,9 @@ def _render(db, chat_id: int, user_id: int, scope: str) -> str:
     if scope == SCOPE_MY:
         return build_stats_text_my(db, chat_id, user_id, today, PERIOD_ALL)
     if scope == SCOPE_CHAT:
-        return build_stats_text_chat(db, chat_id, today, PERIOD_ALL, user_id=user_id)
+        # In group chats "В этом чате" must always be chat-wide, not per-clicker.
+        chat_user_id = user_id if chat_id > 0 else None
+        return build_stats_text_chat(db, chat_id, today, PERIOD_ALL, user_id=chat_user_id)
     return build_stats_text_global(db, user_id, today, PERIOD_ALL)
 
 
@@ -121,7 +123,9 @@ def _render_period(db, chat_id: int, user_id: int, scope: str, period: str, offs
     if scope == SCOPE_MY:
         return build_stats_text_my(db, chat_id, user_id, anchor, period), anchor
     if scope == SCOPE_CHAT:
-        return build_stats_text_chat(db, chat_id, anchor, period, user_id=user_id), anchor
+        # In group chats "В этом чате" must always be chat-wide, not per-clicker.
+        chat_user_id = user_id if chat_id > 0 else None
+        return build_stats_text_chat(db, chat_id, anchor, period, user_id=chat_user_id), anchor
     if scope == SCOPE_GLOBAL:
         return build_stats_text_global(db, user_id, anchor, period), anchor
     return "", anchor

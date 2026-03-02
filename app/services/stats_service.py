@@ -240,6 +240,55 @@ def _display_name(user: User | None, fallback_user_id: int) -> str:
     return mention(user)
 
 
+def _per_user_totals_dedup(db: Session, r: Range) -> dict[int, int]:
+    sessions = _sessions_in_range(db, None, r)
+    if not sessions:
+        return {}
+    session_ids = [s.session_id for s in sessions]
+    day_user_rows = db.execute(
+        select(DaySession.session_date, SessionUserState.user_id, SessionUserState.poops_n)
+        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids))
+    ).all()
+    per_user_day_max: dict[tuple[int, date], int] = {}
+    for row in day_user_rows:
+        key = (int(row.user_id), row.session_date)
+        poops = int(row.poops_n or 0)
+        prev = per_user_day_max.get(key)
+        if prev is None or poops > prev:
+            per_user_day_max[key] = poops
+
+    per_user_total: dict[int, int] = {}
+    for (uid, _day), poops in per_user_day_max.items():
+        per_user_total[uid] = per_user_total.get(uid, 0) + poops
+    return per_user_total
+
+
+def _current_global_king(db: Session, today: date) -> tuple[int, int] | None:
+    bot_start = _bot_start_date(db)
+    if bot_start is None:
+        return None
+    totals = _per_user_totals_dedup(db, Range(bot_start, today))
+    if not totals:
+        return None
+    return sorted(totals.items(), key=lambda x: (-x[1], x[0]))[0]
+
+
+def _is_user_participant_in_chat(db: Session, chat_id: int, user_id: int) -> bool:
+    return bool(
+        db.scalar(
+            select(PoopEvent.event_id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                PoopEvent.origin_chat_id == chat_id,
+                PoopEvent.user_id == user_id,
+            )
+            .limit(1)
+        )
+    )
+
+
 def _calc_above_percent(value: int, all_values: list[int]) -> int | None:
     if not all_values:
         return None
@@ -736,7 +785,8 @@ def build_stats_text_chat(
     avg_per_participant = (float(total_poops) / float(active_participants)) if active_participants > 0 else 0.0
     avg_per_active_day = (float(total_poops) / float(active_days_count)) if active_days_count > 0 else 0.0
 
-    top_rows = sorted(by_user.items(), key=lambda x: (-x[1], x[0]))[:5]
+    participant_rows = sorted(by_user.items(), key=lambda x: (-x[1], x[0]))
+    top_rows = participant_rows[:5]
     top_user_ids = [uid for uid, _cnt in top_rows]
 
     streak_rank: list[tuple[int, int]] = []
@@ -748,7 +798,7 @@ def build_stats_text_chat(
     streak_rank.sort(key=lambda x: (-x[1], x[0]))
     streak_top3 = streak_rank[:3]
 
-    user_ids = sorted({uid for uid in top_user_ids + [uid for uid, _ in streak_top3]})
+    user_ids = sorted({uid for uid in by_user.keys()} | {uid for uid, _ in streak_top3})
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()} if user_ids else {}
 
     lines = [
@@ -775,16 +825,15 @@ def build_stats_text_chat(
             user = users.get(uid)
             role = TOP5_ROLES[idx - 1] if idx - 1 < len(TOP5_ROLES) else "Участник рейтинга"
             lines.append(f"- {idx}) {role} — {_display_name(user, uid)} • 💩({cnt})")
-        top_uid, _top_cnt = top_rows[0]
-        top_user = users.get(top_uid)
-        lines.extend(
-            [
-                "",
-                f"👑 Титул чата: {TOP5_ROLES[0]} — {_display_name(top_user, top_uid)}",
-            ]
-        )
     else:
         lines.append("- пока никого в рейтинге")
+
+    global_king = _current_global_king(db, today)
+    if global_king is not None:
+        king_uid, _king_total = global_king
+        if _is_user_participant_in_chat(db, chat_id, king_uid):
+            king_user = users.get(king_uid) or db.get(User, king_uid)
+            lines.extend(["", f"👑 Титул чата: {TOP5_ROLES[0]} — {_display_name(king_user, king_uid)}"])
 
     lines.append("")
     lines.append("Топ-3 по стрику:")
@@ -804,6 +853,13 @@ def build_stats_text_chat(
             f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
         ]
     )
+    lines.extend(["", "По участникам (оценка):"])
+    for uid, cnt in participant_rows:
+        user = users.get(uid)
+        p_mass_g, p_water_l, p_water_gal = estimate_waste_metrics(cnt)
+        lines.append(
+            f"- {_display_name(user, uid)}: 💩({cnt}) • {format_mass(p_mass_g)} • {format_water(p_water_l, p_water_gal)}"
+        )
 
     lines.append("")
     lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
@@ -824,25 +880,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         return f"🌍 Глобальная статистика\nПериод: {period_label(period)} ({_format_period(r)})\n\nПока пусто."
 
     session_ids = [s.session_id for s in sessions]
-
-    # Deduplicate cross-chat marks for global totals:
-    # for each (user, date) keep max poops_n among chats.
-    day_user_rows = db.execute(
-        select(DaySession.session_date, SessionUserState.user_id, SessionUserState.poops_n, SessionUserState.session_id)
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
-    ).all()
-    per_user_day_max: dict[tuple[int, date], int] = {}
-    for row in day_user_rows:
-        key = (int(row.user_id), row.session_date)
-        poops = int(row.poops_n or 0)
-        prev = per_user_day_max.get(key)
-        if prev is None or poops > prev:
-            per_user_day_max[key] = poops
-
-    per_user_total: dict[int, int] = {}
-    for (uid, _day), poops in per_user_day_max.items():
-        per_user_total[uid] = per_user_total.get(uid, 0) + poops
+    per_user_total = _per_user_totals_dedup(db, r)
 
     users_count = len(per_user_total)
     total_poops = sum(per_user_total.values())
@@ -950,6 +988,12 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
             f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
         ]
     )
+    if ranking_rows:
+        king_uid, king_total = ranking_rows[0]
+        king_mass_g, king_water_l, king_water_gal = estimate_waste_metrics(king_total)
+        lines.append(
+            f"- {TOP5_ROLES[0]}: 💩({int(king_total)}) • {format_mass(king_mass_g)} • {format_water(king_water_l, king_water_gal)}"
+        )
 
     lines.extend(["", "Лидеры глобальных стриков:"])
     top_streaks = sorted(

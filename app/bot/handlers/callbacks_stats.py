@@ -302,7 +302,7 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
     if snap["top_total"]:
         for idx, (cid, total) in enumerate(snap["top_total"], start=1):
             mass_g, _water_l, _water_gal = estimate_waste_metrics(total)
-            lines.append(f"- {idx}) {chat_name(cid)} — 💩({total}) • это примерно {format_mass(mass_g)} говна")
+            lines.append(f"- {idx}) {chat_name(cid)} — 💩({total}) • насрано примерно {format_mass(mass_g)}")
     else:
         lines.append("- пока нет данных")
 
@@ -362,9 +362,9 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
     lines.extend(
         [
             "",
-            "Масса и вода по всем групповым чатам (оценка):",
-            f"- 💩({total_poops_all}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв по всем групповым чатам (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({total_poops_all})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
         ]
     )
 

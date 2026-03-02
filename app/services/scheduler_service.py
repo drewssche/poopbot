@@ -606,15 +606,15 @@ def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, 
     mass_g, water_l, water_gal = estimate_waste_metrics(curr_metrics.total_poops)
     if is_private:
         waste_lines = [
-            "Масса и вода (оценка):",
-            f"- 💩({curr_metrics.total_poops}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({curr_metrics.total_poops})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
         ]
     else:
         waste_lines = [
-            "Масса и вода (оценка):",
-            f"- В этом чате 💩({curr_metrics.total_poops}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв в этом чате ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- В этом чате насрано примерно: {format_mass(mass_g)} (по 💩({curr_metrics.total_poops})).",
+            f"- Воды на смыв в этом чате: {format_water(water_l, water_gal)}.",
         ]
     text = text + "\n\n" + "\n".join(waste_lines)
 

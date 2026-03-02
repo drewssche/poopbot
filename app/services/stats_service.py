@@ -681,9 +681,9 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
     lines.extend(
         [
-            "Масса и вода (оценка):",
-            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({int(total_poops)})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
             "",
         ]
     )
@@ -769,9 +769,9 @@ def build_stats_text_chat(
                 else "- Последняя отметка: нет данных"
             ),
             "",
-            "Масса и вода (оценка):",
-            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({int(total_poops)})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
             "",
             "Примечание: в этой личке учитываются отметки, сделанные именно здесь.",
             "",
@@ -848,9 +848,9 @@ def build_stats_text_chat(
     lines.extend(
         [
             "",
-            "Масса и вода (оценка):",
-            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({int(total_poops)})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
         ]
     )
     lines.extend(["", "По участникам (оценка):"])
@@ -858,7 +858,7 @@ def build_stats_text_chat(
         user = users.get(uid)
         p_mass_g, p_water_l, p_water_gal = estimate_waste_metrics(cnt)
         lines.append(
-            f"- {_display_name(user, uid)}: 💩({cnt}) • {format_mass(p_mass_g)} • {format_water(p_water_l, p_water_gal)}"
+            f"- {_display_name(user, uid)}: 💩({cnt}) • насрал примерно {format_mass(p_mass_g)} • воды на смыв {format_water(p_water_l, p_water_gal)}"
         )
 
     lines.append("")
@@ -983,16 +983,16 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     lines.extend(
         [
             "",
-            "Масса и вода (оценка):",
-            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
-            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+            "Сколько насрано и сколько воды на смыв (оценка):",
+            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({int(total_poops)})).",
+            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
         ]
     )
     if ranking_rows:
         king_uid, king_total = ranking_rows[0]
         king_mass_g, king_water_l, king_water_gal = estimate_waste_metrics(king_total)
         lines.append(
-            f"- {TOP5_ROLES[0]}: 💩({int(king_total)}) • {format_mass(king_mass_g)} • {format_water(king_water_l, king_water_gal)}"
+            f"- {TOP5_ROLES[0]}: 💩({int(king_total)}) • насрал примерно {format_mass(king_mass_g)} • воды на смыв {format_water(king_water_l, king_water_gal)}"
         )
 
     lines.extend(["", "Лидеры глобальных стриков:"])

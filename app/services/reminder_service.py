@@ -9,6 +9,15 @@ LATE_REMINDER_COMMAND = "late_reminder"
 
 
 def _user_mention_html(user: User | None, user_id: int) -> str:
+    if user is not None and bool(getattr(user, "disable_mentions", False)):
+        first = (user.first_name if user else "") or ""
+        last = (user.last_name if user else "") or ""
+        full_name = " ".join(x.strip() for x in (first, last) if x and x.strip()).strip()
+        if full_name:
+            return full_name
+        if user.username:
+            return user.username
+        return f"id:{user_id}"
     if user is not None and user.username:
         return f"@{user.username}"
 

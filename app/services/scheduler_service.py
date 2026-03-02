@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Chat, Session as DaySession, SessionUserState, ChatMember, User, UserStreak, PoopEvent
+from app.db.models import Chat, Session as DaySession, SessionUserState, User, PoopEvent
 from app.db.session import db_session
 from app.services.repo_service import (
     get_or_create_session,
@@ -24,7 +24,11 @@ from app.services.q1_service import mention, render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.stats_service import (
     build_stats_text_chat,
+    _compute_chat_user_streaks_live,
     compute_chat_period_metrics,
+    estimate_waste_metrics,
+    format_mass,
+    format_water,
     period_to_range,
     previous_period_range,
     rank_chat_among_groups_by_total,
@@ -175,7 +179,7 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         now_min = local_time.hour * 60 + local_time.minute
         post_min = chat.post_time.hour * 60 + chat.post_time.minute
         late_min = 23 * 60 + 30
-        periodic_min = 23 * 60 + 50
+        periodic_min = 9 * 60
         close_cutoff = time(23, 55)
         notifications_enabled = bool(chat.notifications_enabled)
         late_reminder_enabled = bool(chat.late_reminder_enabled)
@@ -246,8 +250,8 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         if notifications_enabled and late_reminder_enabled and now_min >= late_min:
             await _send_late_reminder(bot, db, chat_id, sess.session_id)
 
-        # 23:50 периодическая статистика (неделя/месяц/год), чтобы успеть учесть вечерние отметки.
-        # Catch-up for periodic reports in case 23:50 tick was missed.
+        # Периодические отчеты отправляем утром следующего дня (после закрытия периода).
+        # Catch-up: если 09:00 было пропущено, отправим позже в тот же день один раз.
         if notifications_enabled and now_min >= periodic_min:
             await _send_periodic_stats(bot, db, chat_id, local_date)
 
@@ -599,36 +603,54 @@ def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, 
 
     text = text + "\n\n" + "\n".join(trend_lines)
 
+    mass_g, water_l, water_gal = estimate_waste_metrics(curr_metrics.total_poops)
+    if is_private:
+        waste_lines = [
+            "Масса и вода (оценка):",
+            f"- 💩({curr_metrics.total_poops}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+        ]
+    else:
+        waste_lines = [
+            "Масса и вода (оценка):",
+            f"- В этом чате 💩({curr_metrics.total_poops}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв в этом чате ушло примерно: {format_water(water_l, water_gal)}",
+        ]
+    text = text + "\n\n" + "\n".join(waste_lines)
+
     if not is_private:
-        praise_block = _build_streak_praise_block(db, chat_id)
+        praise_block = _build_streak_praise_block(db, chat_id, local_date)
         if praise_block:
             text = text + "\n\n" + praise_block
     return text
 
 
 async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> None:
+    # Отправляем на следующий день утром за только что завершившийся период.
+    report_for_date = local_date - timedelta(days=1)
+
     # используем user_id=0 как системную метку, чтобы не дублировать отправки
-    def _already_sent(kind: str) -> bool:
-        return get_command_message_id(db, chat_id, 0, kind, local_date) is not None
+    def _already_sent(kind: str, anchor_date: date) -> bool:
+        return get_command_message_id(db, chat_id, 0, kind, anchor_date) is not None
 
-    async def _send(kind: str, period: str, title: str) -> None:
-        if _already_sent(kind):
+    async def _send(kind: str, period: str, title: str, anchor_date: date) -> None:
+        if _already_sent(kind, anchor_date):
             return
-        text = build_periodic_report_text(db, chat_id=chat_id, local_date=local_date, period=period, title=title)
+        text = build_periodic_report_text(db, chat_id=chat_id, local_date=anchor_date, period=period, title=title)
         sent = await _safe_send_message(bot, chat_id=chat_id, text=text)
-        set_command_message_id(db, chat_id, 0, kind, local_date, sent.message_id)
+        set_command_message_id(db, chat_id, 0, kind, anchor_date, sent.message_id)
 
-    # РЅРµРґРµР»СЏ: СЃС‡РёС‚Р°РµРј РєРѕРЅС†РѕРј РЅРµРґРµР»Рё РІРѕСЃРєСЂРµСЃРµРЅСЊРµ (weekday=6)
-    if local_date.weekday() == 6:
-        await _send("weekly_stats", "week", "📉 Итоги недели")
+    # Неделя: понедельник утром за прошлую неделю (закрылась в воскресенье).
+    if report_for_date.weekday() == 6:
+        await _send("weekly_stats", "week", "📉 Итоги недели", report_for_date)
 
-    # РјРµСЃСЏС†
-    if _is_last_day_of_month(local_date):
-        await _send("monthly_stats", "month", "📉 Итоги месяца")
+    # Месяц: 1-го числа утром за прошлый месяц.
+    if _is_last_day_of_month(report_for_date):
+        await _send("monthly_stats", "month", "📉 Итоги месяца", report_for_date)
 
-    # РіРѕРґ
-    if local_date.month == 12 and local_date.day == 31:
-        await _send("yearly_stats", "year", "📉 Итоги года")
+    # Год: 1 января утром за прошлый год.
+    if report_for_date.month == 12 and report_for_date.day == 31:
+        await _send("yearly_stats", "year", "📉 Итоги года", report_for_date)
 
 
 def _streak_rank_label(days: int) -> str:
@@ -645,25 +667,26 @@ def _streak_rank_label(days: int) -> str:
     return "👏 Держит ритм"
 
 
-def _build_streak_praise_block(db, chat_id: int) -> str | None:
-    rows = db.execute(
-        select(UserStreak.user_id, UserStreak.current_streak, User)
-        .join(
-            ChatMember,
-            (ChatMember.chat_id == UserStreak.chat_id) & (ChatMember.user_id == UserStreak.user_id),
-        )
-        .join(User, User.user_id == UserStreak.user_id)
-        .where(UserStreak.chat_id == chat_id, UserStreak.current_streak > 0)
-        .order_by(UserStreak.current_streak.desc(), UserStreak.user_id.asc())
-        .limit(10)
-    ).all()
-    if not rows:
+def _build_streak_praise_block(db, chat_id: int, today: date) -> str | None:
+    streaks_by_user = _compute_chat_user_streaks_live(db, [chat_id], today)
+    rank = sorted(
+        [(uid, days) for (cid, uid), days in streaks_by_user.items() if cid == chat_id and days > 0],
+        key=lambda x: (-x[1], x[0]),
+    )[:10]
+    if not rank:
         return None
+    users = {
+        int(u.user_id): u
+        for u in db.scalars(select(User).where(User.user_id.in_([uid for uid, _ in rank]))).all()
+    }
 
     lines = ["👏 Кто держит стрик:"]
-    for user_id, streak_days, user in rows:
+    for user_id, streak_days in rank:
         days = int(streak_days or 0)
         if days <= 0:
+            continue
+        user = users.get(int(user_id))
+        if user is None:
             continue
         lines.append(f"- {_streak_rank_label(days)}: {mention(user)} — {days} дн.")
 

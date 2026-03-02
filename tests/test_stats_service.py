@@ -82,7 +82,7 @@ class StatsServiceTests(unittest.TestCase):
                     )
                 )
 
-    def test_chat_streak_uses_session_state_not_only_origin_events(self) -> None:
+    def test_chat_streak_uses_origin_events_for_chat_context(self) -> None:
         chat_id = -100
         user_id = 1
         self._add_chat(chat_id)
@@ -102,7 +102,7 @@ class StatsServiceTests(unittest.TestCase):
 
         self.db.commit()
         streak = _compute_user_chat_streak_live(self.db, chat_id, user_id, date(2026, 2, 16))
-        self.assertEqual(streak, 7)
+        self.assertEqual(streak, 4)
 
     def test_private_block_streak_consistent_with_private_origin_dataset(self) -> None:
         chat_id = 200

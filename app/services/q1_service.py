@@ -42,6 +42,11 @@ def _streak_until_yesterday(days: list[date], day: date) -> int:
 
 
 def mention(u: User) -> str:
+    if bool(getattr(u, "disable_mentions", False)):
+        name = " ".join(x for x in [(u.first_name or "").strip(), (u.last_name or "").strip()] if x).strip()
+        if not name:
+            name = (u.username or "").strip() or f"id:{int(u.user_id)}"
+        return name
     if u.username:
         return f"@{u.username}"
     name = (u.first_name or "").strip()
@@ -140,60 +145,32 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
     chat_today_positive_user_ids = {
         int(uid)
         for uid in db.scalars(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+            select(PoopEvent.user_id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == session_date,
-                SessionUserState.user_id.in_(user_ids),
-                SessionUserState.poops_n > 0,
+                PoopEvent.user_id.in_(user_ids),
+                PoopEvent.origin_chat_id == chat_id,
             )
-            .group_by(SessionUserState.user_id)
+            .group_by(PoopEvent.user_id)
         ).all()
     }
     chat_hist_rows = db.execute(
-        select(SessionUserState.user_id, DaySession.session_date)
-        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
+        select(PoopEvent.user_id, DaySession.session_date)
+        .join(DaySession, DaySession.session_id == PoopEvent.session_id)
         .where(
             DaySession.chat_id == chat_id,
-            SessionUserState.user_id.in_(user_ids),
+            PoopEvent.user_id.in_(user_ids),
             DaySession.session_date < session_date,
-            SessionUserState.poops_n > 0,
+            PoopEvent.origin_chat_id == chat_id,
         )
-        .group_by(SessionUserState.user_id, DaySession.session_date)
-        .order_by(SessionUserState.user_id.asc(), DaySession.session_date.asc())
+        .group_by(PoopEvent.user_id, DaySession.session_date)
+        .order_by(PoopEvent.user_id.asc(), DaySession.session_date.asc())
     ).all()
     chat_days_by_user: dict[int, list[date]] = {int(uid): [] for uid in user_ids}
     for uid, d in chat_hist_rows:
         chat_days_by_user[int(uid)].append(d)
-
-    global_today_positive_user_ids = {
-        int(uid)
-        for uid in db.scalars(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
-            .where(
-                DaySession.session_date == session_date,
-                SessionUserState.user_id.in_(user_ids),
-                SessionUserState.poops_n > 0,
-            )
-            .group_by(SessionUserState.user_id)
-        ).all()
-    }
-    global_hist_rows = db.execute(
-        select(SessionUserState.user_id, DaySession.session_date)
-        .join(DaySession, DaySession.session_id == SessionUserState.session_id)
-        .where(
-            SessionUserState.user_id.in_(user_ids),
-            DaySession.session_date < session_date,
-            SessionUserState.poops_n > 0,
-        )
-        .group_by(SessionUserState.user_id, DaySession.session_date)
-        .order_by(SessionUserState.user_id.asc(), DaySession.session_date.asc())
-    ).all()
-    global_days_by_user: dict[int, list[date]] = {int(uid): [] for uid in user_ids}
-    for uid, d in global_hist_rows:
-        global_days_by_user[int(uid)].append(d)
 
     lines = [header, "", "Участники:"]
 
@@ -209,11 +186,7 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         streak_val = _streak_until_yesterday(chat_days_by_user.get(int(uid), []), session_date)
         if int(uid) in chat_today_positive_user_ids:
             streak_val += 1 if streak_val > 0 else 1
-        global_streak_val = _streak_until_yesterday(global_days_by_user.get(int(uid), []), session_date)
-        if int(uid) in global_today_positive_user_ids:
-            global_streak_val += 1 if global_streak_val > 0 else 1
         status_bits.append(f"чатовый стрик {streak_val} дн.")
-        status_bits.append(f"глобальный стрик {global_streak_val} дн.")
 
         lines.append(f"{mention(u)} — {' • '.join(status_bits)}")
 
@@ -263,43 +236,12 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
     if chat_today_positive:
         chat_streak += 1 if chat_streak > 0 else 1
 
-    global_days = [
-        d
-        for d in db.scalars(
-            select(DaySession.session_date)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-            .where(
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
-                DaySession.session_date < session_date,
-            )
-            .group_by(DaySession.session_date)
-            .order_by(DaySession.session_date.asc())
-        ).all()
-    ]
-    global_today_positive = bool(
-        db.scalar(
-            select(SessionUserState.user_id)
-            .join(DaySession, DaySession.session_id == SessionUserState.session_id)
-            .where(
-                DaySession.session_date == session_date,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
-            )
-            .limit(1)
-        )
-    )
-    global_streak = _streak_until_yesterday(global_days, session_date)
-    if global_today_positive:
-        global_streak += 1 if global_streak > 0 else 1
-
     lines = [
         f"💩 Твоя личная сессия ({date_str})",
         "Нажми +💩, чтобы добавить отметку.",
         "",
         f"Итого: 💩({poops})",
-        f"Чатовый стрик: {chat_streak} дн.",
-        f"Глобальный стрик: {global_streak} дн.",
+        f"Стрик в этой личке: {chat_streak} дн.",
     ]
 
     if poops <= 0:

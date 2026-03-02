@@ -292,6 +292,11 @@ def build_my_year_recap_cards(db: Session, chat_id: int, user_id: int, year: int
 def _user_label(user: User | None, user_id: int) -> str:
     if user is None:
         return f"id:{user_id}"
+    if bool(getattr(user, "disable_mentions", False)):
+        full = " ".join(part for part in [user.first_name or "", user.last_name or ""] if part).strip()
+        if full:
+            return full
+        return (user.username or "").strip() or f"id:{user_id}"
     if user.username:
         return f"@{user.username}"
     full = " ".join(part for part in [user.first_name or "", user.last_name or ""] if part).strip()

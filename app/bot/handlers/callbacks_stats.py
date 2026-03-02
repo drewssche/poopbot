@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import calendar
 import logging
+from datetime import date, timedelta
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -9,6 +11,9 @@ from sqlalchemy import func, select
 
 from app.bot.keyboards.stats import (
     PERIOD_ALL,
+    PERIOD_MONTH,
+    PERIOD_WEEK,
+    PERIOD_YEAR,
     SCOPE_AMONG,
     SCOPE_CHAT,
     SCOPE_GLOBAL,
@@ -16,6 +21,7 @@ from app.bot.keyboards.stats import (
     stats_among_kb,
     stats_global_kb,
     stats_local_kb,
+    stats_period_kb,
     stats_root_kb,
 )
 from app.db.engine import make_engine, make_session_factory
@@ -27,6 +33,11 @@ from app.services.stats_service import (
     build_stats_text_global,
     build_stats_text_my,
     collect_among_chats_snapshot,
+    estimate_waste_metrics,
+    period_label,
+    period_to_range,
+    format_mass,
+    format_water,
 )
 from app.services.time_service import now_in_tz
 
@@ -80,6 +91,49 @@ def _render(db, chat_id: int, user_id: int, scope: str) -> str:
     return build_stats_text_global(db, user_id, today, PERIOD_ALL)
 
 
+def _period_anchor(today: date, period: str, offset: int) -> date:
+    off = max(0, int(offset))
+    if period == PERIOD_WEEK:
+        week_start = today - timedelta(days=today.weekday())
+        target_start = week_start - timedelta(days=7 * off)
+        return target_start + timedelta(days=6)
+    if period == PERIOD_MONTH:
+        y, m = today.year, today.month
+        for _ in range(off):
+            m -= 1
+            if m == 0:
+                m = 12
+                y -= 1
+        end_day = calendar.monthrange(y, m)[1]
+        return date(y, m, end_day)
+    if period == PERIOD_YEAR:
+        return date(today.year - off, 12, 31)
+    return today
+
+
+def _render_period(db, chat_id: int, user_id: int, scope: str, period: str, offset: int) -> tuple[str, date]:
+    from app.db.models import Chat
+
+    chat = db.get(Chat, chat_id)
+    tz = chat.timezone if chat else "Europe/Minsk"
+    today = now_in_tz(tz).date()
+    anchor = _period_anchor(today, period, offset)
+    if scope == SCOPE_MY:
+        return build_stats_text_my(db, chat_id, user_id, anchor, period), anchor
+    if scope == SCOPE_CHAT:
+        return build_stats_text_chat(db, chat_id, anchor, period, user_id=user_id), anchor
+    if scope == SCOPE_GLOBAL:
+        return build_stats_text_global(db, user_id, anchor, period), anchor
+    return "", anchor
+
+
+def _archive_badge(period: str, offset: int) -> str:
+    off = max(0, int(offset))
+    if off == 0:
+        return f"🗂 Архив: {period_label(period)} #0 (текущий)"
+    return f"🗂 Архив: {period_label(period)} #-{off}"
+
+
 @router.callback_query(F.data.startswith("stats:"))
 async def stats_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
@@ -118,7 +172,46 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
                 return
 
             text = _render(db, chat_id, user.id, scope)
-            await _edit(cb, text, stats_local_kb())
+            await _edit(cb, text, stats_local_kb(scope=scope))
+            return
+
+        if len(parts) == 5 and parts[1] == "period":
+            scope = parts[2]
+            period = parts[3]
+            try:
+                offset = max(0, int(parts[4]))
+            except ValueError:
+                offset = 0
+
+            if scope not in (SCOPE_MY, SCOPE_CHAT, SCOPE_GLOBAL, SCOPE_AMONG):
+                await cb.answer()
+                return
+            if period not in (PERIOD_WEEK, PERIOD_MONTH, PERIOD_YEAR):
+                await cb.answer()
+                return
+
+            if scope == SCOPE_AMONG:
+                text = await _render_among_chats(cb, db, period=period, offset=offset)
+                text = f"{_archive_badge(period, offset)}\n\n{text}"
+                await _edit(cb, text, stats_period_kb(scope=scope, period=period, offset=offset))
+                return
+
+            text, _anchor = _render_period(db, chat_id, user.id, scope, period, offset)
+            text = f"{_archive_badge(period, offset)}\n\n{text}"
+            await _edit(
+                cb,
+                text,
+                stats_period_kb(
+                    scope=scope,
+                    period=period,
+                    offset=offset,
+                    is_private_chat=(cb.message.chat.type == "private"),
+                ),
+            )
+            return
+
+        if len(parts) == 2 and parts[1] == "noop":
+            await cb.answer()
             return
 
         if len(parts) == 3 and parts[1] == "global" and parts[2] == "me":
@@ -149,20 +242,26 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
-async def _render_among_chats(cb: CallbackQuery, db) -> str:
+async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, offset: int = 0) -> str:
     from app.db.models import Chat
     from app.db.models import Session as DaySession
 
     cur_chat = db.get(Chat, cb.message.chat.id)
     tz = cur_chat.timezone if cur_chat else "Europe/Minsk"
     today = now_in_tz(tz).date()
-    snap = collect_among_chats_snapshot(db, today)
-    bot_start = db.scalar(select(func.min(DaySession.session_date)))
-    period_text = (
-        f"Период: за всё время ({bot_start.strftime('%d.%m.%y')}–{today.strftime('%d.%m.%y')})"
-        if bot_start is not None
-        else "Период: за всё время"
-    )
+    if period in (PERIOD_WEEK, PERIOD_MONTH, PERIOD_YEAR):
+        anchor = _period_anchor(today, period, offset)
+        r = period_to_range(anchor, period)
+        snap = collect_among_chats_snapshot(db, today=anchor, r=r)
+        period_text = f"Период: {period_label(period)} ({r.start.strftime('%d.%m.%y')}–{r.end.strftime('%d.%m.%y')})"
+    else:
+        snap = collect_among_chats_snapshot(db, today)
+        bot_start = db.scalar(select(func.min(DaySession.session_date)))
+        period_text = (
+            f"Период: за всё время ({bot_start.strftime('%d.%m.%y')}–{today.strftime('%d.%m.%y')})"
+            if bot_start is not None
+            else "Период: за всё время"
+        )
 
     ids = set()
     ids.update(chat_id for chat_id, _ in snap["top_total"])
@@ -198,7 +297,15 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
 
     if snap["top_total"]:
         for idx, (cid, total) in enumerate(snap["top_total"], start=1):
-            lines.append(f"- {idx}) {chat_name(cid)} — 💩({total})")
+            mass_g, _water_l, _water_gal = estimate_waste_metrics(total)
+            lines.append(f"- {idx}) {chat_name(cid)} — 💩({total}) • это примерно {format_mass(mass_g)} говна")
+    else:
+        lines.append("- пока нет данных")
+
+    lines.extend(["", "Топ-5 по массе (оценка):"])
+    if snap.get("top_mass"):
+        for idx, (cid, mass_g) in enumerate(snap["top_mass"], start=1):
+            lines.append(f"- {idx}) {chat_name(cid)} — {format_mass(float(mass_g))}")
     else:
         lines.append("- пока нет данных")
 
@@ -214,7 +321,7 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
         for idx, (cid, days) in enumerate(snap["top_streak"], start=1):
             lines.append(f"- {idx}) {chat_name(cid)} — {days} дн.")
         lines.append("")
-        lines.append("Примечание: чатовый стрик считается по дневной активности в сессиях чата (включая синхронизированные отметки).")
+        lines.append("Примечание: чатовый стрик считается по дневной активности именно в этом чате.")
     else:
         lines.append("- пока нет данных")
 
@@ -245,6 +352,17 @@ async def _render_among_chats(cb: CallbackQuery, db) -> str:
         cid, share, _dry_n, total_n = most_dry
         pct = int(round(float(share) * 100))
         lines.append(f"- 🥨 Самый сухой чат: {chat_name(cid)} — {pct}% (1–2), оценок: {total_n}")
+
+    total_poops_all = int(snap.get("total_poops_all", 0))
+    mass_g, water_l, water_gal = estimate_waste_metrics(total_poops_all)
+    lines.extend(
+        [
+            "",
+            "Масса и вода по всем чатам (оценка):",
+            f"- 💩({total_poops_all}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+        ]
+    )
 
     return "\n".join(lines)
 

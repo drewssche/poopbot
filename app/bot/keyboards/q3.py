@@ -34,7 +34,7 @@ def q3_keyboard(
 
     if private_flow:
         kb.row(
-            InlineKeyboardButton(text="⬅️ Назад в Q2", callback_data=f"q3:back_q2:{target_n}"),
+            InlineKeyboardButton(text="⬅️ Вернуться", callback_data=f"q3:back_q2:{target_n}"),
             InlineKeyboardButton(text="Пропустить", callback_data=f"q3:skip:{target_n}"),
         )
 

@@ -25,10 +25,12 @@ from app.services.help_service import (
     set_chat_notifications_enabled,
     set_chat_post_time,
     set_chat_q2_q3_enabled,
+    set_user_disable_mentions,
 )
 from app.services.q1_service import render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
+from app.db.models import User
 from app.services.time_service import get_session_window, now_in_tz
 
 logger = logging.getLogger(__name__)
@@ -99,10 +101,12 @@ def _notifications_text(
     post_time_text: str,
     late_reminder_enabled: bool,
     q2_q3_enabled: bool,
+    disable_mentions: bool,
 ) -> str:
     notifications_status = "включены" if enabled else "выключены"
     late_status = "включена" if late_reminder_enabled else "выключена"
     q2_q3_status = "включены" if q2_q3_enabled else "выключены"
+    mention_status = "включена" if disable_mentions else "выключена"
     q2_q3_extra = (
         "Уточняющие вопросы публикуются автоматически после основного вопроса."
         if q2_q3_enabled
@@ -114,12 +118,15 @@ def _notifications_text(
         f"(время публикации основного вопроса: <b>{post_time_text}</b>).\n"
         f"Финальная напоминалка в 23:30: <b>{late_status}</b>.\n"
         f"Уточняющие вопросы: <b>{q2_q3_status}</b>.\n\n"
+        f"Не тегать меня: <b>{mention_status}</b>.\n\n"
         "Что включает этот раздел:\n"
         "• Автопост ежедневного вопроса.\n"
         "• Финальную напоминалку должникам в 23:30 (отдельный переключатель).\n"
         f"• {q2_q3_extra}\n"
+        "• Персональный режим «Не тегать меня»: вместо @username/кликабельного упоминания будет просто имя.\n"
         "• Отвечать в уточняющих вопросах можно, когда у тебя есть хотя бы один `+💩` за текущую сессию.\n"
         "• Плановые итоговые сообщения по расписанию.\n\n"
+        "Если выключить `🔔 Уведомления`, отключаются: автопост Q1, финалка 23:30, плановые итоги недели/месяца/года.\n"
         "Команды `/start`, `/help`, `/stats` работают независимо от этого переключателя."
     )
 
@@ -173,6 +180,8 @@ async def help_callbacks(cb: CallbackQuery) -> None:
 
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id)
+        actor_user = db.get(User, actor_id)
+        actor_disable_mentions = bool(actor_user.disable_mentions) if actor_user is not None else False
 
         try:
             if data.startswith("help:settings:"):
@@ -193,6 +202,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         post_time_text=chat.post_time.strftime("%H:%M"),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
@@ -201,6 +211,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         notifications_enabled=bool(chat.notifications_enabled),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                 )
                 await cb.answer()
@@ -219,6 +230,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         post_time_text=chat.post_time.strftime("%H:%M"),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
@@ -227,6 +239,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         notifications_enabled=bool(chat.notifications_enabled),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                 )
                 await cb.answer("Готово", show_alert=False)
@@ -241,6 +254,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         post_time_text=chat.post_time.strftime("%H:%M"),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
@@ -249,6 +263,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         notifications_enabled=bool(chat.notifications_enabled),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                 )
                 await cb.answer("Готово", show_alert=False)
@@ -300,6 +315,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         post_time_text=chat.post_time.strftime("%H:%M"),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
@@ -308,6 +324,32 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         notifications_enabled=bool(chat.notifications_enabled),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
+                    ),
+                )
+                await cb.answer("Готово", show_alert=False)
+
+            elif data.startswith("help:mentions_toggle:"):
+                set_user_disable_mentions(db, actor_id, not actor_disable_mentions)
+                db.flush()
+                actor_user = db.get(User, actor_id)
+                actor_disable_mentions = bool(actor_user.disable_mentions) if actor_user is not None else False
+                await cb.message.edit_text(
+                    _notifications_text(
+                        enabled=bool(chat.notifications_enabled),
+                        post_time_text=chat.post_time.strftime("%H:%M"),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=help_notifications_kb(
+                        owner_id,
+                        current_hour=chat.post_time.hour,
+                        notifications_enabled=bool(chat.notifications_enabled),
+                        late_reminder_enabled=bool(chat.late_reminder_enabled),
+                        q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                 )
                 await cb.answer("Готово", show_alert=False)
@@ -353,6 +395,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         post_time_text=chat.post_time.strftime("%H:%M"),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                     parse_mode="HTML",
                     reply_markup=help_notifications_kb(
@@ -361,6 +404,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                         notifications_enabled=bool(chat.notifications_enabled),
                         late_reminder_enabled=bool(chat.late_reminder_enabled),
                         q2_q3_enabled=bool(chat.q2_q3_enabled),
+                        disable_mentions=actor_disable_mentions,
                     ),
                 )
 

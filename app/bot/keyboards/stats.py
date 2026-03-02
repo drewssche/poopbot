@@ -30,14 +30,24 @@ def stats_root_kb(show_recap: bool = False, is_private_chat: bool = False) -> In
     return kb.as_markup()
 
 
-def stats_local_kb() -> InlineKeyboardMarkup:
+def stats_local_kb(scope: str = SCOPE_CHAT) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="📅 Неделя", callback_data=f"stats:period:{scope}:{PERIOD_WEEK}:0"),
+        InlineKeyboardButton(text="🗓 Месяц", callback_data=f"stats:period:{scope}:{PERIOD_MONTH}:0"),
+        InlineKeyboardButton(text="🧾 Год", callback_data=f"stats:period:{scope}:{PERIOD_YEAR}:0"),
+    )
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
     return kb.as_markup()
 
 
 def stats_global_kb(is_private_chat: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="📅 Неделя", callback_data=f"stats:period:{SCOPE_GLOBAL}:{PERIOD_WEEK}:0"),
+        InlineKeyboardButton(text="🗓 Месяц", callback_data=f"stats:period:{SCOPE_GLOBAL}:{PERIOD_MONTH}:0"),
+        InlineKeyboardButton(text="🧾 Год", callback_data=f"stats:period:{SCOPE_GLOBAL}:{PERIOD_YEAR}:0"),
+    )
     if not is_private_chat:
         kb.row(InlineKeyboardButton(text="👤 Показать меня", callback_data="stats:global:me"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
@@ -46,5 +56,37 @@ def stats_global_kb(is_private_chat: bool = False) -> InlineKeyboardMarkup:
 
 def stats_among_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="📅 Неделя", callback_data=f"stats:period:{SCOPE_AMONG}:{PERIOD_WEEK}:0"),
+        InlineKeyboardButton(text="🗓 Месяц", callback_data=f"stats:period:{SCOPE_AMONG}:{PERIOD_MONTH}:0"),
+        InlineKeyboardButton(text="🧾 Год", callback_data=f"stats:period:{SCOPE_AMONG}:{PERIOD_YEAR}:0"),
+    )
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
+    return kb.as_markup()
+
+
+def stats_period_kb(scope: str, period: str, offset: int, is_private_chat: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    prev_offset = int(offset) + 1
+    next_offset = max(0, int(offset) - 1)
+
+    kb.row(
+        InlineKeyboardButton(text="⬅️ Раньше", callback_data=f"stats:period:{scope}:{period}:{prev_offset}"),
+        InlineKeyboardButton(
+            text="➡️ Ближе",
+            callback_data=f"stats:period:{scope}:{period}:{next_offset}" if int(offset) > 0 else "stats:noop",
+        ),
+    )
+
+    kb.row(
+        InlineKeyboardButton(text="📅 Неделя", callback_data=f"stats:period:{scope}:{PERIOD_WEEK}:0"),
+        InlineKeyboardButton(text="🗓 Месяц", callback_data=f"stats:period:{scope}:{PERIOD_MONTH}:0"),
+        InlineKeyboardButton(text="🧾 Год", callback_data=f"stats:period:{scope}:{PERIOD_YEAR}:0"),
+    )
+
+    if scope == SCOPE_GLOBAL and not is_private_chat:
+        kb.row(InlineKeyboardButton(text="👤 Показать меня", callback_data="stats:global:me"))
+
+    kb.row(InlineKeyboardButton(text="↩️ За всё время", callback_data=f"stats:open:{scope}"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="stats:back:root"))
     return kb.as_markup()

@@ -47,6 +47,14 @@ def set_chat_q2_q3_enabled(db: Session, chat_id: int, enabled: bool) -> None:
     chat.q2_q3_enabled = bool(enabled)
 
 
+def set_user_disable_mentions(db: Session, user_id: int, enabled: bool) -> None:
+    user = db.get(User, user_id)
+    if user is None:
+        user = User(user_id=user_id)
+        db.add(user)
+    user.disable_mentions = bool(enabled)
+
+
 def set_help_message(db: Session, chat_id: int, message_id: int, owner_id: int) -> None:
     chat = db.get(Chat, chat_id)
     if chat is None:

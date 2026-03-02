@@ -67,6 +67,31 @@ def period_label(period: str) -> str:
     return "за всё время"
 
 
+GRAMS_PER_POOP_ESTIMATE = 150.0
+LITERS_PER_FLUSH_ESTIMATE = 6.0
+GALLONS_PER_LITER = 0.264172
+
+
+def estimate_waste_metrics(poops_n: int) -> tuple[float, float, float]:
+    n = max(0, int(poops_n))
+    mass_g = float(n) * GRAMS_PER_POOP_ESTIMATE
+    water_l = float(n) * LITERS_PER_FLUSH_ESTIMATE
+    water_gal = water_l * GALLONS_PER_LITER
+    return mass_g, water_l, water_gal
+
+
+def format_mass(mass_g: float) -> str:
+    if mass_g >= 1_000_000.0:
+        return f"{mass_g / 1_000_000.0:.2f} т"
+    if mass_g >= 1_000.0:
+        return f"{mass_g / 1_000.0:.2f} кг"
+    return f"{int(round(mass_g))} г"
+
+
+def format_water(water_l: float, water_gal: float) -> str:
+    return f"{water_l:.0f} л ({water_gal:.1f} гал)"
+
+
 @dataclass(frozen=True)
 class ChatPeriodMetrics:
     total_poops: int
@@ -268,12 +293,12 @@ def _compute_user_chat_streak_live(db: Session, chat_id: int, user_id: int, toda
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date <= today,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -287,12 +312,12 @@ def _compute_user_chat_best_streak_live(db: Session, chat_id: int, user_id: int,
         d
         for d in db.scalars(
             select(DaySession.session_date)
-            .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date <= today,
-                SessionUserState.user_id == user_id,
-                SessionUserState.poops_n > 0,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
             )
             .group_by(DaySession.session_date)
             .order_by(DaySession.session_date.asc())
@@ -305,15 +330,15 @@ def _compute_chat_user_streaks_live(db: Session, chat_ids: list[int], today: dat
     if not chat_ids:
         return {}
     rows = db.execute(
-        select(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date <= today,
-            SessionUserState.poops_n > 0,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
-        .group_by(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
-        .order_by(DaySession.chat_id.asc(), SessionUserState.user_id.asc(), DaySession.session_date.asc())
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
     ).all()
 
     days_by_user_chat: dict[tuple[int, int], list[date]] = {}
@@ -334,15 +359,15 @@ def _compute_chat_user_streaks_live_per_chat_today(
 
     max_today = max(today_by_chat.values())
     rows = db.execute(
-        select(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
             DaySession.session_date <= max_today,
-            SessionUserState.poops_n > 0,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
         )
-        .group_by(DaySession.chat_id, SessionUserState.user_id, DaySession.session_date)
-        .order_by(DaySession.chat_id.asc(), SessionUserState.user_id.asc(), DaySession.session_date.asc())
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
     ).all()
 
     days_by_user_chat: dict[tuple[int, int], list[date]] = {}
@@ -734,7 +759,8 @@ def build_stats_text_chat(
     if top_rows:
         for idx, (uid, cnt) in enumerate(top_rows, start=1):
             user = users.get(uid)
-            lines.append(f"- {idx}) {_display_name(user, uid)} — 💩({cnt})")
+            role = TOP5_ROLES[idx - 1] if idx - 1 < len(TOP5_ROLES) else "Участник рейтинга"
+            lines.append(f"- {idx}) {role} — {_display_name(user, uid)} • 💩({cnt})")
     else:
         lines.append("- пока никого в рейтинге")
 
@@ -752,7 +778,7 @@ def build_stats_text_chat(
     lines.append("")
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
     lines.append("")
-    lines.append("Примечание: количество и распределения считаются по отметкам, сделанным именно в этом чате; стрики — по дневной активности в сессиях этого чата (включая синхронизацию).")
+    lines.append("Примечание: количество и распределения считаются по отметкам, сделанным именно в этом чате; стрики — по дневной активности именно в этом чате.")
     return "\n".join(lines)
 def build_stats_text_global(db: Session, user_id: int, today: date, period: str) -> str:
     if period in {"today", "week", "month", "year"}:
@@ -883,6 +909,16 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     else:
         lines.append("- пока нет данных")
 
+    mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
+    lines.extend(
+        [
+            "",
+            "Масса и вода (оценка):",
+            f"- 💩({int(total_poops)}) — это примерно {format_mass(mass_g)} говна.",
+            f"- На смыв ушло примерно: {format_water(water_l, water_gal)}",
+        ]
+    )
+
     lines.extend(["", "Лидеры глобальных стриков:"])
     top_streaks = sorted(
         [(uid, days) for uid, days in projected_streaks_by_user.items() if int(days) > 0],
@@ -959,6 +995,8 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
             "top_total": [],
             "top_avg": [],
             "top_streak": [],
+            "top_mass": [],
+            "total_poops_all": 0,
             "record_day": None,
             "record_days": [],
             "most_liquid": None,
@@ -974,6 +1012,8 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
             "top_total": [],
             "top_avg": [],
             "top_streak": [],
+            "top_mass": [],
+            "total_poops_all": 0,
             "record_day": None,
             "record_days": [],
             "most_liquid": None,
@@ -998,7 +1038,9 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
 
     participants_map = {int(r.chat_id): int(r.participants or 0) for r in by_chat_participants}
     totals = [(int(r.chat_id), int(r.poops or 0)) for r in by_chat_total]
+    total_poops_all = sum(total for _cid, total in totals)
     top_total = sorted(totals, key=lambda x: (-x[1], x[0]))[:5]
+    top_mass = [(chat_id, estimate_waste_metrics(total)[0]) for chat_id, total in top_total]
 
     avg_rows: list[tuple[int, float, int, int]] = []
     for chat_id, total in totals:
@@ -1098,6 +1140,8 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         "top_total": top_total,
         "top_avg": top_avg,
         "top_streak": top_streak,
+        "top_mass": top_mass,
+        "total_poops_all": total_poops_all,
         "record_day": record_day,
         "record_days": record_days,
         "most_liquid": most_liquid,

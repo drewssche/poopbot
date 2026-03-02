@@ -32,6 +32,7 @@ def help_notifications_kb(
     notifications_enabled: bool = True,
     late_reminder_enabled: bool = True,
     q2_q3_enabled: bool = False,
+    disable_mentions: bool = False,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -50,6 +51,12 @@ def help_notifications_kb(
         InlineKeyboardButton(
             text="🧻 Уточняющие вопросы: Вкл" if q2_q3_enabled else "🧻 Уточняющие вопросы: Выкл",
             callback_data=f"help:q2_q3_toggle:{owner_id}",
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text="🙈 Не тегать меня: Вкл" if disable_mentions else "🏷️ Не тегать меня: Выкл",
+            callback_data=f"help:mentions_toggle:{owner_id}",
         )
     )
     kb.row(

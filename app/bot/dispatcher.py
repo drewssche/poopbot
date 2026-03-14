@@ -226,7 +226,13 @@ async def run_bot(settings: Settings) -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    engine = make_engine(settings.database_url)
+    engine = make_engine(
+        settings.database_url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout_sec=settings.db_pool_timeout_sec,
+        pool_recycle_sec=settings.db_pool_recycle_sec,
+    )
     session_factory = make_session_factory(engine)
 
     dp = Dispatcher()
@@ -260,7 +266,12 @@ async def run_bot(settings: Settings) -> None:
 
     dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_received, _touch_handled))
 
-    start_scheduler(bot, session_factory, chat_throttle_sec=settings.scheduler_chat_throttle_sec)
+    start_scheduler(
+        bot,
+        session_factory,
+        chat_throttle_sec=settings.scheduler_chat_throttle_sec,
+        tick_interval_sec=settings.scheduler_tick_interval_sec,
+    )
 
     hb_task = asyncio.create_task(
         _heartbeat_loop(
@@ -295,12 +306,16 @@ async def run_bot(settings: Settings) -> None:
         if settings.polling_guard_enabled
         else None
     )
-    handled_rate_task = asyncio.create_task(
-        _handled_rate_loop(
-            interval_sec=max(30, settings.handled_rate_log_interval_sec),
-            get_total_received=lambda: total_received_count,
-            get_total_handled=lambda: total_handled_count,
+    handled_rate_task = (
+        asyncio.create_task(
+            _handled_rate_loop(
+                interval_sec=max(30, settings.handled_rate_log_interval_sec),
+                get_total_received=lambda: total_received_count,
+                get_total_handled=lambda: total_handled_count,
+            )
         )
+        if settings.handled_rate_log_interval_sec > 0
+        else None
     )
     connectivity_guard_task = asyncio.create_task(
         _polling_connectivity_guard_loop(
@@ -336,7 +351,8 @@ async def run_bot(settings: Settings) -> None:
         if polling_guard_task is not None:
             polling_guard_task.cancel()
         connectivity_guard_task.cancel()
-        handled_rate_task.cancel()
+        if handled_rate_task is not None:
+            handled_rate_task.cancel()
         with contextlib.suppress(Exception):
             await hb_task
         with contextlib.suppress(Exception):
@@ -349,7 +365,8 @@ async def run_bot(settings: Settings) -> None:
                 await polling_guard_task
         with contextlib.suppress(Exception):
             await connectivity_guard_task
-        with contextlib.suppress(Exception):
-            await handled_rate_task
+        if handled_rate_task is not None:
+            with contextlib.suppress(Exception):
+                await handled_rate_task
         with contextlib.suppress(Exception):
             await bot.session.close()

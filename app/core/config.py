@@ -9,6 +9,10 @@ class Settings:
     log_level: str = "INFO"
     app_env: str = "dev"
     bot_owner_id: int | None = None
+    db_pool_size: int = 2
+    db_max_overflow: int = 0
+    db_pool_timeout_sec: int = 10
+    db_pool_recycle_sec: int = 1800
     startup_delete_webhook: bool = True
     drop_pending_updates_on_start: bool = False
     heartbeat_interval_sec: int = 60
@@ -17,11 +21,12 @@ class Settings:
     polling_guard_request_timeout_sec: int = 10
     polling_guard_network_failures_to_restart: int = 5
     scheduler_chat_throttle_sec: float = 0.2
+    scheduler_tick_interval_sec: int = 60
     webhook_guard_enabled: bool = True
     webhook_guard_interval_sec: int = 180
     polling_guard_enabled: bool = True
     polling_guard_pending_threshold: int = 5
-    handled_rate_log_interval_sec: int = 300
+    handled_rate_log_interval_sec: int = 0
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -79,6 +84,10 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
         app_env=os.getenv("APP_ENV", "dev").strip(),
         bot_owner_id=int(owner) if (owner := os.getenv("BOT_OWNER_ID", "").strip()).isdigit() else None,
+        db_pool_size=_env_int("DB_POOL_SIZE", 2),
+        db_max_overflow=_env_non_negative_int("DB_MAX_OVERFLOW", 0),
+        db_pool_timeout_sec=_env_int("DB_POOL_TIMEOUT_SEC", 10),
+        db_pool_recycle_sec=_env_int("DB_POOL_RECYCLE_SEC", 1800),
         startup_delete_webhook=_env_bool("STARTUP_DELETE_WEBHOOK", True),
         drop_pending_updates_on_start=_env_bool("DROP_PENDING_UPDATES_ON_START", False),
         heartbeat_interval_sec=_env_int("HEARTBEAT_INTERVAL_SEC", 60),
@@ -87,9 +96,10 @@ def load_settings() -> Settings:
         polling_guard_request_timeout_sec=_env_int("POLLING_GUARD_REQUEST_TIMEOUT_SEC", 10),
         polling_guard_network_failures_to_restart=_env_int("POLLING_GUARD_NETWORK_FAILURES_TO_RESTART", 5),
         scheduler_chat_throttle_sec=_env_float("SCHEDULER_CHAT_THROTTLE_SEC", 0.2),
+        scheduler_tick_interval_sec=_env_int("SCHEDULER_TICK_INTERVAL_SEC", 60),
         webhook_guard_enabled=_env_bool("WEBHOOK_GUARD_ENABLED", True),
         webhook_guard_interval_sec=_env_int("WEBHOOK_GUARD_INTERVAL_SEC", 180),
         polling_guard_enabled=_env_bool("POLLING_GUARD_ENABLED", True),
         polling_guard_pending_threshold=_env_non_negative_int("POLLING_GUARD_PENDING_THRESHOLD", 5),
-        handled_rate_log_interval_sec=_env_int("HANDLED_RATE_LOG_INTERVAL_SEC", 300),
+        handled_rate_log_interval_sec=_env_non_negative_int("HANDLED_RATE_LOG_INTERVAL_SEC", 0),
     )

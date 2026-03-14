@@ -65,15 +65,20 @@ Q3_TEXT = (
 )
 
 
-def start_scheduler(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> AsyncIOScheduler:
+def start_scheduler(
+    bot: Bot,
+    session_factory: sessionmaker,
+    chat_throttle_sec: float = 0.2,
+    tick_interval_sec: int = 60,
+) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         func=_tick,
-        trigger=IntervalTrigger(seconds=30),
+        trigger=IntervalTrigger(seconds=max(30, tick_interval_sec)),
         args=[bot, session_factory, chat_throttle_sec],
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=30,
+        misfire_grace_time=max(30, tick_interval_sec),
     )
     scheduler.start()
     logger.info("Scheduler started")

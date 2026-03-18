@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, date, time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramMigrateToChat,
+    TelegramRetryAfter,
+)
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +22,7 @@ from app.db.session import db_session
 from app.services.repo_service import (
     get_or_create_session,
     get_session_message_id,
+    migrate_chat_settings,
     set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
@@ -165,6 +171,15 @@ async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: floa
                 if stale_chat is not None:
                     stale_chat.is_enabled = False
             logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat.chat_id)
+        except TelegramMigrateToChat as e:
+            with db_session(session_factory) as db:
+                migrated = migrate_chat_settings(db, chat.chat_id, e.migrate_to_chat_id)
+            logger.warning(
+                "Chat migrated to supergroup: old_chat_id=%s new_chat_id=%s migrated=%s",
+                chat.chat_id,
+                e.migrate_to_chat_id,
+                migrated is not None,
+            )
         except Exception:
             logger.exception("Scheduler chat processing failed chat_id=%s", chat.chat_id)
         if chat_throttle_sec > 0:

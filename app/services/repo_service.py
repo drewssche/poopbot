@@ -19,6 +19,33 @@ def upsert_chat(db: Session, chat_id: int) -> Chat:
     return chat
 
 
+def migrate_chat_settings(db: Session, old_chat_id: int, new_chat_id: int) -> Chat | None:
+    old_chat = db.get(Chat, old_chat_id)
+    if old_chat is None:
+        return None
+
+    new_chat = db.get(Chat, new_chat_id)
+    if new_chat is None:
+        new_chat = Chat(chat_id=new_chat_id)
+        db.add(new_chat)
+
+    # Preserve operational settings when Telegram upgrades a group to a supergroup.
+    new_chat.timezone = old_chat.timezone
+    new_chat.post_time = old_chat.post_time
+    new_chat.notifications_enabled = old_chat.notifications_enabled
+    new_chat.late_reminder_enabled = old_chat.late_reminder_enabled
+    new_chat.q2_q3_enabled = old_chat.q2_q3_enabled
+    new_chat.show_in_global = old_chat.show_in_global
+    new_chat.help_message_id = old_chat.help_message_id
+    new_chat.help_owner_id = old_chat.help_owner_id
+    new_chat.is_enabled = True
+
+    old_chat.is_enabled = False
+    old_chat.help_message_id = None
+    old_chat.help_owner_id = None
+    return new_chat
+
+
 def upsert_user(db: Session, user_id: int, username: Optional[str], first_name: Optional[str], last_name: Optional[str]) -> User:
     user = db.get(User, user_id)
     if user is None:

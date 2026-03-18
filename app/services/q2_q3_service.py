@@ -107,13 +107,19 @@ def q2_choice_from_bristol(value: int | None) -> str | None:
 
 
 def _collect_people_and_state(db: Session, chat_id: int, session_id: int) -> tuple[list[int], dict[int, User], dict[int, SessionUserState], dict[tuple[int, int], PoopEvent]]:
-    members = db.scalars(
-        select(ChatMember).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
+    member_rows = db.execute(
+        select(ChatMember.user_id).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
     ).all()
-    user_ids = [int(m.user_id) for m in members]
+    user_ids = [int(user_id) for (user_id,) in member_rows]
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()} if user_ids else {}
     states = {
-        s.user_id: s for s in db.scalars(select(SessionUserState).where(SessionUserState.session_id == session_id)).all()
+        s.user_id: s
+        for s in db.scalars(
+            select(SessionUserState).where(
+                SessionUserState.session_id == session_id,
+                SessionUserState.user_id.in_(user_ids),
+            )
+        ).all()
     }
     events = db.scalars(
         select(PoopEvent)

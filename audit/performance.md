@@ -192,6 +192,97 @@ Action taken:
 
 - Changed `LOG_LEVEL=INFO`.
 
+### 10. Scheduler loaded full `Chat` rows and then loaded the same chat again
+
+File: `app/services/scheduler_service.py`
+
+Impact:
+
+- Each scheduler tick first loaded full `Chat` ORM objects for all enabled chats.
+- `_process_chat()` then opened a new session and loaded the same chat again with `db.get(Chat, chat_id)`.
+- For a single bot this is not catastrophic, but it is unnecessary DB and ORM work on every tick.
+
+Risk level: low
+
+Action taken:
+
+- Changed the tick scan to load only enabled `chat_id` values.
+- Left the per-chat `db.get()` inside `_process_chat()` intact, because that is the correct fresh read for current chat settings.
+
+### 11. Some hot render paths loaded more rows than they needed
+
+Files:
+
+- `app/services/q1_service.py`
+- `app/services/q2_q3_service.py`
+
+Impact:
+
+- Q1/Q2/Q3 renderers are in the hot path for daily posts, updates after button presses, and help/debug refresh flows.
+- They previously loaded:
+  - full `ChatMember` ORM rows when only `user_id` ordering was needed
+  - all `SessionUserState` rows for a session, even if only current chat members mattered
+
+Risk level: low
+
+Action taken:
+
+- Switched member reads to `ChatMember.user_id` only.
+- Restricted `SessionUserState` queries to the member ids of the current chat.
+
+Expected effect:
+
+- Lower row materialization cost and less wasted Python/ORM work during Q1/Q2/Q3 rendering.
+
+### 12. Scheduler checked member count with `count(*)` where only existence mattered
+
+File: `app/services/scheduler_service.py`
+
+Impact:
+
+- `_post_q1()` only needed a boolean `has_any_members`, but queried full `count(*)`.
+- On a weak VPS this is a small but unnecessary cost on an often-used path.
+
+Risk level: low
+
+Action taken:
+
+- Replaced `count(*)` with `select(ChatMember.user_id).limit(1)` and boolean conversion.
+
+### 13. Stats paths loaded zero-value session states that were not used
+
+File: `app/services/stats_service.py`
+
+Impact:
+
+- "My" and global stats paths loaded `SessionUserState` rows with `poops_n = 0`.
+- These rows do not affect totals, active days, or effective event distributions, but still cost query bandwidth and ORM work.
+
+Risk level: low
+
+Action taken:
+
+- Restricted those reads to `SessionUserState.poops_n > 0`.
+
+### 14. Recap paths did repeat holiday-day count queries that were already implied by loaded yearly events
+
+File: `app/services/recap_cards.py`
+
+Impact:
+
+- Personal yearly recap and chat yearly recap already loaded yearly event rows and built per-day totals.
+- They then made extra count queries for February 9 and November 19.
+
+Risk level: low
+
+Action taken:
+
+- Reused `day_totals` from the already-loaded yearly dataset for those holiday counters.
+
+Expected effect:
+
+- Fewer redundant DB round-trips on yearly recap generation.
+
 ## What was checked and not found
 
 - No multiple worker processes like Gunicorn/Uvicorn workers.
@@ -200,6 +291,7 @@ Action taken:
 - No cron sidecars.
 - No obvious tight busy loops; loops are sleep-based.
 - No obvious API hammering besides service guards and scheduler wakeups.
+- No obvious N+1 loop explosion in the newly split handlers after refactor.
 
 ## Heavy restart operations
 
@@ -225,6 +317,8 @@ Assessment:
 - `app/db/engine.py`
 - `app/bot/dispatcher.py`
 - `app/services/scheduler_service.py`
+- `app/services/q1_service.py`
+- `app/services/q2_q3_service.py`
 - `.env`
 - `pytest.ini`
 
@@ -234,7 +328,7 @@ Assessment:
 - Local `.venv` created.
 - Dependencies installed from `requirements.txt`.
 - `pytest` installed into local `.venv`.
-- Test run result: `3 passed` in `tests/test_stats_service.py`.
+- Test run result after refactor/performance work: `5 passed` in `tests/test_stats_service.py` and `tests/test_repo_service.py`.
 
 ## Server `.env` provided by user
 
@@ -257,6 +351,8 @@ If you want the low-resource profile from this audit on the VPS, those values sh
 3. Production logging was noisier than necessary.
 4. Service guard loops and healthchecks were more frequent than required.
 5. Extra handled-rate loop consumed periodic CPU/logging with limited value.
+6. Scheduler and message render hot paths did some avoidable ORM/SQL work.
+7. Stats and recap paths had a few redundant or overly broad reads.
 
 For the current load of about 130 users, these are still low-risk optimizations. Nothing in the audit indicates an immediate need for Redis, queues, or process sharding yet.
 
@@ -270,6 +366,11 @@ For the current load of about 130 users, these are still low-risk optimizations.
 6. Switched bot startup command to use `exec`.
 7. Removed `build-essential` from the image.
 8. Switched production log level from `DEBUG` to `INFO`.
+9. Changed scheduler scan to load only enabled `chat_id` values.
+10. Restricted Q1/Q2/Q3 render queries to only the current chat members where possible.
+11. Replaced one `count(*)` member check with an existence query.
+12. Filtered zero-value `SessionUserState` rows out of stats hot paths.
+13. Removed redundant holiday count queries from yearly recap generation.
 
 ## What to check on the server
 

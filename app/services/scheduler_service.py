@@ -8,10 +8,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
 from aiogram.exceptions import (
-    TelegramBadRequest,
     TelegramForbiddenError,
     TelegramMigrateToChat,
-    TelegramRetryAfter,
 )
 
 from sqlalchemy import select, func
@@ -28,29 +26,23 @@ from app.services.repo_service import (
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import mention, render_q1, render_q1_private
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
-from app.services.stats_service import (
-    build_stats_text_chat,
-    _compute_chat_user_streaks_live,
-    compute_chat_period_metrics,
-    estimate_waste_metrics,
-    format_mass,
-    format_water,
-    period_to_range,
-    previous_period_range,
-    rank_chat_among_groups_by_total,
+from app.services.scheduler_reports import (
+    build_periodic_report_text,
+    send_holiday_notice_if_needed,
+    send_periodic_stats,
 )
 from app.services.command_message_service import get_command_message_id, set_command_message_id
 from app.services.reminder_service import (
     LATE_REMINDER_COMMAND,
     build_late_reminder_text,
 )
+from app.services.scheduler_telegram import safe_edit_message_text, safe_send_message
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
 _streak_recalc_date: dict[int, date] = {}
 _CHAT_PROCESS_TIMEOUT_SEC = 25.0
-_TELEGRAM_CALL_TIMEOUT_SEC = 15.0
 
 LOCK_LINE = "🔒 Сессия закрыта."
 
@@ -90,98 +82,36 @@ def start_scheduler(
     logger.info("Scheduler started")
     return scheduler
 
-
-async def _safe_sleep_on_retry(exc: Exception) -> bool:
-    if not isinstance(exc, TelegramRetryAfter):
-        return False
-    retry_after = exc.retry_after
-    try:
-        delay = float(retry_after) + 0.5
-    except Exception:
-        return False
-    delay = max(0.5, min(delay, 60.0))
-    logger.warning("Telegram rate limit hit. Sleeping %.1fs", delay)
-    await asyncio.sleep(delay)
-    return True
-
-
-async def _safe_send_message(bot: Bot, **kwargs):
-    for _ in range(3):
-        try:
-            return await asyncio.wait_for(
-                bot.send_message(**kwargs),
-                timeout=_TELEGRAM_CALL_TIMEOUT_SEC,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("send_message timeout after %.1fs", _TELEGRAM_CALL_TIMEOUT_SEC)
-            continue
-        except Exception as e:
-            if await _safe_sleep_on_retry(e):
-                continue
-            raise
-    raise TimeoutError("send_message failed after retries")
-
-
-async def _safe_edit_message_text(bot: Bot, **kwargs):
-    """
-    Retry edit up to 3 times.
-    Do not fail hard on:
-    - message is not modified
-    - message not found / to edit not found (message removed manually)
-    """
-    for _ in range(3):
-        try:
-            return await asyncio.wait_for(
-                bot.edit_message_text(**kwargs),
-                timeout=_TELEGRAM_CALL_TIMEOUT_SEC,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("edit_message_text timeout after %.1fs", _TELEGRAM_CALL_TIMEOUT_SEC)
-            continue
-        except TelegramBadRequest as e:
-            msg = str(e).lower()
-            if "message is not modified" in msg:
-                return None
-            if "message to edit not found" in msg or "message not found" in msg or "message_id_invalid" in msg:
-                return None
-            raise
-        except Exception as e:
-            if await _safe_sleep_on_retry(e):
-                continue
-            raise
-    raise TimeoutError("edit_message_text failed after retries")
-
-
 async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> None:
     with db_session(session_factory) as db:
-        chats = db.scalars(select(Chat).where(Chat.is_enabled == True)).all()
+        chat_ids = list(db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all())
 
-    for chat in chats:
+    for chat_id in chat_ids:
         try:
             await asyncio.wait_for(
-                _process_chat(bot, session_factory, chat.chat_id),
+                _process_chat(bot, session_factory, int(chat_id)),
                 timeout=_CHAT_PROCESS_TIMEOUT_SEC,
             )
         except asyncio.TimeoutError:
-            logger.error("Scheduler chat processing timeout chat_id=%s (>%ss)", chat.chat_id, _CHAT_PROCESS_TIMEOUT_SEC)
+            logger.error("Scheduler chat processing timeout chat_id=%s (>%ss)", chat_id, _CHAT_PROCESS_TIMEOUT_SEC)
         except TelegramForbiddenError:
             # Bot no longer has access to this chat (kicked/blocked): stop scheduling it.
             with db_session(session_factory) as db:
-                stale_chat = db.get(Chat, chat.chat_id)
+                stale_chat = db.get(Chat, int(chat_id))
                 if stale_chat is not None:
                     stale_chat.is_enabled = False
-            logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat.chat_id)
+            logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat_id)
         except TelegramMigrateToChat as e:
             with db_session(session_factory) as db:
-                migrated = migrate_chat_settings(db, chat.chat_id, e.migrate_to_chat_id)
+                migrated = migrate_chat_settings(db, int(chat_id), e.migrate_to_chat_id)
             logger.warning(
                 "Chat migrated to supergroup: old_chat_id=%s new_chat_id=%s migrated=%s",
-                chat.chat_id,
+                chat_id,
                 e.migrate_to_chat_id,
                 migrated is not None,
             )
         except Exception:
-            logger.exception("Scheduler chat processing failed chat_id=%s", chat.chat_id)
+            logger.exception("Scheduler chat processing failed chat_id=%s", chat_id)
         if chat_throttle_sec > 0:
             await asyncio.sleep(chat_throttle_sec)
 
@@ -273,10 +203,10 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         # Периодические отчеты отправляем утром следующего дня (после закрытия периода).
         # Catch-up: если 09:00 было пропущено, отправим позже в тот же день один раз.
         if notifications_enabled and now_min >= periodic_min:
-            await _send_periodic_stats(bot, db, chat_id, local_date)
+            await send_periodic_stats(bot, db, chat_id, local_date)
 
         if notifications_enabled:
-            await _send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
+            await send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
 
 
 async def _post_q1(
@@ -296,7 +226,7 @@ async def _post_q1(
                 if chat_id > 0
                 else "🎉 Доступен рекап года. Забирай итоги!"
             )
-            recap_sent = await _safe_send_message(
+            recap_sent = await safe_send_message(
                 bot,
                 chat_id=chat_id,
                 text=recap_text,
@@ -305,15 +235,18 @@ async def _post_q1(
             # System marker: sent once per chat/day
             set_command_message_id(db, chat_id, 0, "recap_announce", session_date, recap_sent.message_id)
 
-    member_count = db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id)) or 0
-    has_any_members = member_count > 0
+    has_any_members = bool(
+        db.scalar(
+            select(ChatMember.user_id).where(ChatMember.chat_id == chat_id).limit(1)
+        )
+    )
 
     text = (
         render_q1_private(db, chat_id=chat_id, session_id=session_id, user_id=chat_id, session_date=session_date)
         if chat_id > 0
         else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
     )
-    sent = await _safe_send_message(
+    sent = await safe_send_message(
         bot,
         chat_id=chat_id,
         text=text,
@@ -354,7 +287,7 @@ async def _send_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> No
     if not text:
         return
 
-    sent = await _safe_send_message(
+    sent = await safe_send_message(
         bot,
         chat_id=chat_id,
         text=text,
@@ -420,7 +353,7 @@ async def _lock_q1(bot: Bot, db, chat_id: int, session_id: int) -> None:
         else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date)
     )
     text = f"{LOCK_LINE}\n\n{text}"
-    await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+    await safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
 
 
 async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, body_text: str) -> None:
@@ -428,7 +361,7 @@ async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, b
     if not mid:
         return
     text = f"{LOCK_LINE}\n\n{body_text}"
-    await _safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+    await safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
 
 
 async def _lock_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> None:
@@ -441,7 +374,7 @@ async def _lock_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> No
 
     body = build_late_reminder_text(db, session_id) or "⏳ Финальная напоминалка неактуальна."
     text = f"{LOCK_LINE}\n\n{body}"
-    await _safe_edit_message_text(
+    await safe_edit_message_text(
         bot,
         chat_id=chat_id,
         message_id=mid,
@@ -477,7 +410,7 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
     if chat is not None:
         show_remind = now_in_tz(chat.timezone).time() < time(22, 0)
         show_q2_q3_button = not bool(chat.q2_q3_enabled)
-    await _safe_edit_message_text(
+    await safe_edit_message_text(
         bot,
         chat_id=chat_id,
         message_id=q1_id,
@@ -545,191 +478,3 @@ def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
 
         streak.last_poop_date = last_day
         streak.current_streak = trailing if last_day == yesterday else 0
-
-
-def _is_last_day_of_month(d: date) -> bool:
-    return (d + timedelta(days=1)).month != d.month
-
-
-def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, title: str) -> str:
-    def _trend_line(label: str, curr: int, prev: int) -> str:
-        delta = curr - prev
-        if delta > 0:
-            sign = "📈"
-        elif delta < 0:
-            sign = "📉"
-        else:
-            sign = "➖"
-        if prev > 0:
-            pct = (float(delta) / float(prev)) * 100.0
-            return f"- {label}: {curr} ({sign} {delta:+d}, {pct:+.1f}% к прошлому периоду)"
-        if curr > 0:
-            return f"- {label}: {curr} (🆕 в прошлом периоде было 0)"
-        return f"- {label}: {curr} (➖ без изменений)"
-
-    def _rank_line(curr_rank: int | None, prev_rank: int | None, total_chats: int) -> str:
-        if curr_rank is None or total_chats <= 0:
-            return "- Место чата среди чатов: нет данных за период"
-        if prev_rank is None:
-            return f"- Место чата среди чатов: #{curr_rank} из {total_chats}"
-        delta = prev_rank - curr_rank
-        if delta > 0:
-            trend = f"📈 +{delta}"
-        elif delta < 0:
-            trend = f"📉 {delta}"
-        else:
-            trend = "➖ 0"
-        return f"- Место чата среди чатов: #{curr_rank} из {total_chats} ({trend} к прошлому периоду)"
-
-    is_private = chat_id > 0
-    report_user_id = None
-    if is_private:
-        report_user_id = db.scalar(
-            select(ChatMember.user_id)
-            .where(ChatMember.chat_id == chat_id)
-            .order_by(ChatMember.joined_at.asc())
-            .limit(1)
-        )
-        if report_user_id is None:
-            report_user_id = chat_id
-    curr_r = period_to_range(local_date, period)
-    prev_r = previous_period_range(local_date, period)
-
-    text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period, user_id=report_user_id)
-
-    curr_metrics = compute_chat_period_metrics(db, chat_id, curr_r, user_id=report_user_id)
-    prev_metrics = compute_chat_period_metrics(db, chat_id, prev_r, user_id=report_user_id)
-
-    trend_lines = ["Тенденция к прошлому периоду:"]
-    trend_lines.append(_trend_line("Всего 💩", curr_metrics.total_poops, prev_metrics.total_poops))
-    trend_lines.append(
-        _trend_line(
-            "Активных дней",
-            curr_metrics.active_days_count,
-            prev_metrics.active_days_count,
-        )
-    )
-    if not is_private:
-        trend_lines.append(
-            _trend_line(
-                "Активных участников",
-                curr_metrics.active_participants,
-                prev_metrics.active_participants,
-            )
-        )
-        curr_rank, total_chats = rank_chat_among_groups_by_total(db, chat_id, curr_r)
-        prev_rank, _ = rank_chat_among_groups_by_total(db, chat_id, prev_r)
-        trend_lines.append(_rank_line(curr_rank, prev_rank, total_chats))
-
-    text = text + "\n\n" + "\n".join(trend_lines)
-
-    mass_g, water_l, water_gal = estimate_waste_metrics(curr_metrics.total_poops)
-    if is_private:
-        waste_lines = [
-            "Сколько насрано и сколько воды на смыв (оценка):",
-            f"- Насрано примерно: {format_mass(mass_g)} (по 💩({curr_metrics.total_poops})).",
-            f"- Воды на смыв: {format_water(water_l, water_gal)}.",
-        ]
-    else:
-        waste_lines = [
-            "Сколько насрано и сколько воды на смыв (оценка):",
-            f"- В этом чате насрано примерно: {format_mass(mass_g)} (по 💩({curr_metrics.total_poops})).",
-            f"- Воды на смыв в этом чате: {format_water(water_l, water_gal)}.",
-        ]
-    text = text + "\n\n" + "\n".join(waste_lines)
-
-    if not is_private:
-        praise_block = _build_streak_praise_block(db, chat_id, local_date)
-        if praise_block:
-            text = text + "\n\n" + praise_block
-    return text
-
-
-async def _send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> None:
-    # Отправляем на следующий день утром за только что завершившийся период.
-    report_for_date = local_date - timedelta(days=1)
-
-    # используем user_id=0 как системную метку, чтобы не дублировать отправки
-    def _already_sent(kind: str, anchor_date: date) -> bool:
-        return get_command_message_id(db, chat_id, 0, kind, anchor_date) is not None
-
-    async def _send(kind: str, period: str, title: str, anchor_date: date) -> None:
-        if _already_sent(kind, anchor_date):
-            return
-        text = build_periodic_report_text(db, chat_id=chat_id, local_date=anchor_date, period=period, title=title)
-        sent = await _safe_send_message(bot, chat_id=chat_id, text=text)
-        set_command_message_id(db, chat_id, 0, kind, anchor_date, sent.message_id)
-
-    # Неделя: понедельник утром за прошлую неделю (закрылась в воскресенье).
-    if report_for_date.weekday() == 6:
-        await _send("weekly_stats", "week", "📉 Итоги недели", report_for_date)
-
-    # Месяц: 1-го числа утром за прошлый месяц.
-    if _is_last_day_of_month(report_for_date):
-        await _send("monthly_stats", "month", "📉 Итоги месяца", report_for_date)
-
-    # Год: 1 января утром за прошлый год.
-    if report_for_date.month == 12 and report_for_date.day == 31:
-        await _send("yearly_stats", "year", "📉 Итоги года", report_for_date)
-
-
-def _streak_rank_label(days: int) -> str:
-    if days >= 365:
-        return "🌟 Легенда стрика"
-    if days >= 180:
-        return "👑 Полугодовой чемпион"
-    if days >= 90:
-        return "💪 Квартальный титан"
-    if days >= 30:
-        return "🏅 Месячный монолит"
-    if days >= 7:
-        return "🔥 Железная неделя"
-    return "👏 Держит ритм"
-
-
-def _build_streak_praise_block(db, chat_id: int, today: date) -> str | None:
-    streaks_by_user = _compute_chat_user_streaks_live(db, [chat_id], today)
-    rank = sorted(
-        [(uid, days) for (cid, uid), days in streaks_by_user.items() if cid == chat_id and days > 0],
-        key=lambda x: (-x[1], x[0]),
-    )[:10]
-    if not rank:
-        return None
-    users = {
-        int(u.user_id): u
-        for u in db.scalars(select(User).where(User.user_id.in_([uid for uid, _ in rank]))).all()
-    }
-
-    lines = ["👏 Кто держит стрик:"]
-    for user_id, streak_days in rank:
-        days = int(streak_days or 0)
-        if days <= 0:
-            continue
-        user = users.get(int(user_id))
-        if user is None:
-            continue
-        lines.append(f"- {_streak_rank_label(days)}: {mention(user)} — {days} дн.")
-
-    return "\n".join(lines) if len(lines) > 1 else None
-
-async def _send_holiday_notice_if_needed(bot: Bot, db, chat_id: int, session_id: int, local_date: date) -> None:
-    holiday_text = None
-    if local_date.month == 2 and local_date.day == 9:
-        holiday_text = "Сегодня Национальный день какашек (National Poop Day)."
-    elif local_date.month == 11 and local_date.day == 19:
-        holiday_text = "Сегодня Всемирный день туалета (World Toilet Day)."
-
-    if holiday_text is None:
-        return
-
-    q1_id = get_session_message_id(db, session_id, "Q1")
-    q2_id = get_session_message_id(db, session_id, "Q2")
-    q3_id = get_session_message_id(db, session_id, "Q3")
-    if not (q1_id and q2_id and q3_id):
-        return
-
-    if get_command_message_id(db, chat_id, 0, "holiday_notice", local_date) is not None:
-        return
-
-    sent = await _safe_send_message(bot, chat_id=chat_id, text=holiday_text)
-    set_command_message_id(db, chat_id, 0, "holiday_notice", local_date, sent.message_id)

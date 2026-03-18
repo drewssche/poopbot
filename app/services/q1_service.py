@@ -124,8 +124,8 @@ def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
 def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) -> str:
     date_str = session_date.strftime("%d.%m.%y")
 
-    members = db.scalars(
-        select(ChatMember).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
+    member_rows = db.execute(
+        select(ChatMember.user_id).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
     ).all()
 
     header = (
@@ -133,14 +133,19 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         "Чтобы попасть в список участников — нажми +1💩."
     )
 
-    if not members:
+    if not member_rows:
         return header + "\n(Пока никто не участвует)"
 
-    user_ids = [m.user_id for m in members]
+    user_ids = [int(user_id) for (user_id,) in member_rows]
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()}
     states = {
         s.user_id: s
-        for s in db.scalars(select(SessionUserState).where(SessionUserState.session_id == session_id)).all()
+        for s in db.scalars(
+            select(SessionUserState).where(
+                SessionUserState.session_id == session_id,
+                SessionUserState.user_id.in_(user_ids),
+            )
+        ).all()
     }
     chat_today_positive_user_ids = {
         int(uid)

@@ -6,12 +6,13 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from app.bot.handlers.debug_content import action_label, explain_text, holiday_text
 from app.bot.keyboards.debug import debug_explain_kb, debug_kb, debug_recap_nav_kb
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.reminder_service import build_late_reminder_text
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
-from app.services.scheduler_service import build_periodic_report_text
+from app.services.scheduler_reports import build_periodic_report_text
 from app.services.stats_service import build_stats_raw_debug_text
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1
@@ -42,120 +43,6 @@ def _is_owner(settings, user_id: int) -> bool:
     return settings.bot_owner_id is not None and int(settings.bot_owner_id) == int(user_id)
 
 
-def _holiday_text(kind: str) -> str:
-    if kind == "feb9":
-        return "Сегодня Национальный день какашек (National Poop Day)."
-    if kind == "nov19":
-        return "Сегодня Всемирный день туалета (World Toilet Day)."
-    return "Holiday notice не найден."
-
-
-def _explain_text(action: str) -> str:
-    texts = {
-        "q1": (
-            "ℹ️ Q1 автопост\n\n"
-            "Когда: по времени автопоста чата (10:00/14:00/19:00).\n"
-            "Условия: уведомления включены, активная сессия, не техокно 23:55–00:05.\n"
-            "Не сработает: если Q1 уже есть или сессия закрыта."
-        ),
-        "q2q3": (
-            "ℹ️ Q2/Q3\n\n"
-            "Когда: автоматически после Q1, если включены уточняющие вопросы.\n"
-            "Условия: есть активная сессия и сообщение Q1.\n"
-            "Не сработает: если сессия закрыта/неактуальна."
-        ),
-        "late": (
-            "ℹ️ Финалка 23:30\n\n"
-            "Когда: ежедневно в 23:30 по таймзоне чата.\n"
-            "Условия: включены уведомления и финалка 23:30, сессия активна, есть Q1.\n"
-            "Отправляется: только если есть те, кто не отметился."
-        ),
-        "week": (
-            "ℹ️ Итоги недели\n\n"
-            "Когда: в понедельник в 09:00.\n"
-            "Период: Пн–Вс прошлой недели.\n"
-            "Включает: сравнение с прошлой неделей и место чата среди чатов (для групп)."
-        ),
-        "month": (
-            "ℹ️ Итоги месяца\n\n"
-            "Когда: 1-го числа в 09:00.\n"
-            "Период: прошлый календарный месяц.\n"
-            "Включает: сравнение с прошлым месяцем и место чата среди чатов (для групп)."
-        ),
-        "year": (
-            "ℹ️ Итоги года\n\n"
-            "Когда: 1 января в 09:00.\n"
-            "Период: 01.01–31.12 прошлого года.\n"
-            "Включает: сравнение с прошлым годом и место чата среди чатов (для групп)."
-        ),
-        "stats_raw": (
-            "ℹ️ Сырые метрики\n\n"
-            "Что это: технический дамп дат и рассчитанных стриков.\n"
-            "Показывает: origin-дни, chat-state дни, global-state дни.\n"
-            "Назначение: быстро найти источник расхождения в /stats и Q1."
-        ),
-        "holiday:feb9": (
-            "ℹ️ Holiday 9 Feb\n\n"
-            "Когда: 9 февраля.\n"
-            "Условия: включены уведомления, активная сессия, есть Q1/Q2/Q3.\n"
-            "Отправляется один раз за день."
-        ),
-        "holiday:nov19": (
-            "ℹ️ Holiday 19 Nov\n\n"
-            "Когда: 19 ноября.\n"
-            "Условия: включены уведомления, активная сессия, есть Q1/Q2/Q3.\n"
-            "Отправляется один раз за день."
-        ),
-        "recap_announce": (
-            "ℹ️ Анонс рекапа\n\n"
-            "Когда: 30 декабря при автопосте Q1.\n"
-            "Условия: анонс за день ещё не отправлялся.\n"
-            "Назначение: подсказать, что доступен годовой рекап."
-        ),
-        "recap_chat": (
-            "ℹ️ Рекап чата\n\n"
-            "Что это: карточки итогов выбранного чата за целевой год.\n"
-            "Источник: исторические данные сессий/событий чата."
-        ),
-        "recap_my_chat": (
-            "ℹ️ Рекап личный (текущий чат)\n\n"
-            "Что это: личные карточки за год, но только в рамках выбранного чата.\n"
-            "Источник: твои отметки и события в этом чате."
-        ),
-        "recap_my_all": (
-            "ℹ️ Рекап личный (все чаты)\n\n"
-            "Что это: личные карточки за год по всем твоим групповым чатам.\n"
-            "Источник: агрегированные личные данные по всем чатам."
-        ),
-        "all": (
-            "ℹ️ Прогнать все\n\n"
-            "Что делает: последовательно запускает ключевые debug-события.\n"
-            "Назначение: быстро проверить весь поток сообщений."
-        ),
-    }
-    return texts.get(action, f"ℹ️ Пояснение для `{action}` пока не добавлено.")
-
-
-def _action_label(action: str) -> str:
-    labels = {
-        "q1": "Q1 автопост",
-        "q2q3": "Q2/Q3",
-        "late": "Финалка 23:30",
-        "week": "Итоги недели",
-        "month": "Итоги месяца",
-        "year": "Итоги года",
-        "stats_raw": "Сырые метрики",
-        "recap_announce": "Анонс рекапа",
-        "recap_chat": "Рекап чата",
-        "recap_my_chat": "Рекап личный (текущий чат)",
-        "recap_my_all": "Рекап личный (все чаты)",
-        "holiday:feb9": "Holiday 9 Feb",
-        "holiday:nov19": "Holiday 19 Nov",
-        "all": "Прогнать все",
-    }
-    return labels.get(action, action)
-
-
 def _actor_label(cb: CallbackQuery) -> str:
     if cb.from_user is None:
         return "unknown"
@@ -181,7 +68,7 @@ def _build_menu_text(today: date | None, chat_id: int, mode: str) -> str:
 def _remember_last_action(chat_id: int, actor: str, action: str, mode: str) -> None:
     mode_ru = "Превью" if mode == "preview" else "Отправка"
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _debug_last_by_chat[chat_id] = f"{ts} • {actor} • {_action_label(action)} • {mode_ru}"
+    _debug_last_by_chat[chat_id] = f"{ts} • {actor} • {action_label(action)} • {mode_ru}"
 
 
 async def _send_output(
@@ -343,7 +230,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
 
         if action.startswith("holiday:"):
             kind = action.split(":")[1]
-            await _send_output(cb, mode, _holiday_text(kind), explain_action=action)
+            await _send_output(cb, mode, holiday_text(kind), explain_action=action)
             return True
 
         if action == "all":
@@ -352,7 +239,7 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             for sub_action in sub_actions:
                 ok = await _send_debug_action(cb, sub_action, mode)
                 if ok:
-                    done.append(_action_label(sub_action))
+                    done.append(action_label(sub_action))
             summary_lines = [
                 "✅ Прогон завершен.",
                 f"Режим: {'Превью' if mode == 'preview' else 'Отправка'}",
@@ -500,5 +387,5 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
 
     if parts[1] == "explain" and len(parts) >= 3:
         action = ":".join(parts[2:])
-        await cb.message.answer(_explain_text(action))
+        await cb.message.answer(explain_text(action))
         await cb.answer()

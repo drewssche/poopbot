@@ -6,16 +6,24 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
+from app.bot.handlers.help_actions import (
+    refresh_q1_after_settings_change,
+    render_global_visibility_panel,
+    render_notifications_panel,
+)
+from app.bot.handlers.help_content import (
+    ABOUT_TEXT,
+    root_text,
+    settings_text,
+)
 from app.bot.keyboards.help import (
     help_delete_chat_confirm_kb,
     help_delete_confirm_kb,
-    help_global_visibility_kb,
-    help_notifications_kb,
     help_root_kb,
     help_settings_kb,
 )
-from app.bot.keyboards.q1 import q1_keyboard
 from app.db.engine import make_engine, make_session_factory
+from app.db.models import User
 from app.db.session import db_session
 from app.services.help_service import (
     delete_user_everywhere,
@@ -27,11 +35,7 @@ from app.services.help_service import (
     set_chat_q2_q3_enabled,
     set_user_disable_mentions,
 )
-from app.services.q1_service import render_q1, render_q1_private
-from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
-from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
-from app.db.models import User
-from app.services.time_service import get_session_window, now_in_tz
+from app.services.repo_service import upsert_chat
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -54,112 +58,6 @@ def init_db(database_url: str) -> None:
 
 def _parse_owner(data: str) -> int:
     return int(data.split(":")[-1])
-
-
-def _root_text(tz_name: str) -> str:
-    return (
-        "ℹ️ Помощь\n\n"
-        "Как пользоваться ботом:\n"
-        "• `+💩` / `-💩` — увеличить или уменьшить количество за текущую сессию.\n"
-        "• Уточняющие вопросы доступны, когда у тебя есть хотя бы одно `+💩` в текущей сессии.\n"
-        "• В уточняющих вопросах выбор применяется к твоему последнему походу.\n\n"
-        "Где что смотреть:\n"
-        "• `/stats` — личная, чатовая, глобальная и межчатовая статистика.\n"
-        "• `⚙️ Настройки` — уведомления, удаление данных, видимость чата в рейтингах.\n"
-        "• `🤖 О боте` — кратко о проекте и ссылка на репозиторий.\n\n"
-        "Как работает сессия:\n"
-        f"• Таймзона этого чата: `{tz_name}`.\n"
-        "• Активная сессия: `00:05–23:55` по локальному времени чата.\n"
-        "• Техническое окно: `23:55–00:05` — сессия закрывается/открывается, кнопки могут быть недоступны.\n"
-        "• Автопост вопросов и автонопоминание в 23:30 работают в таймзоне чата.\n"
-    )
-
-
-def _settings_text(is_private_chat: bool) -> str:
-    base = (
-        "⚙️ Настройки\n\n"
-        "Что можно настроить:\n"
-        "• `🗑️ Удалить меня` — полное удаление твоего профиля и статистики из базы во всех чатах.\n"
-        "  После этого вернуться можно через `+💩` или включение напоминания, но уже с новой статистикой.\n"
-    )
-    if not is_private_chat:
-        base += (
-            "• `🧹 Удалить меня из этого чата` — удаляет только участие в текущем чате.\n"
-            "  Данные в других чатах и личке остаются.\n"
-            "• `👁️ Видимость чата в рейтингах` — скрывает/показывает этот чат в межчатовых топах.\n"
-        )
-    base += (
-        "• `🔔 Уведомления` — включить/выключить автопосты и напоминания, плюс выбрать время публикации.\n"
-        "  Если выключить — бот не отправляет плановые сообщения в этот чат, но команды остаются рабочими.\n"
-        "• `⬅️ Назад` — вернуться в главное меню помощи.\n"
-    )
-    return base
-
-
-def _notifications_text(
-    enabled: bool,
-    post_time_text: str,
-    late_reminder_enabled: bool,
-    q2_q3_enabled: bool,
-    disable_mentions: bool,
-) -> str:
-    notifications_status = "включены" if enabled else "выключены"
-    late_status = "включена" if late_reminder_enabled else "выключена"
-    q2_q3_status = "включены" if q2_q3_enabled else "выключены"
-    mention_status = "включена" if disable_mentions else "выключена"
-    q2_q3_extra = (
-        "Уточняющие вопросы публикуются автоматически после основного вопроса."
-        if q2_q3_enabled
-        else "Автопост уточняющих вопросов выключен: их можно открыть вручную кнопкой «🧻 Уточняющие вопросы» в основном вопросе."
-    )
-    return (
-        "🔔 Уведомления\n\n"
-        f"Текущий статус уведомлений: <b>{notifications_status}</b> "
-        f"(время публикации основного вопроса: <b>{post_time_text}</b>).\n"
-        f"Финальная напоминалка в 23:30: <b>{late_status}</b>.\n"
-        f"Уточняющие вопросы: <b>{q2_q3_status}</b>.\n\n"
-        f"Не тегать меня: <b>{mention_status}</b>.\n\n"
-        "Что включает этот раздел:\n"
-        "• Автопост ежедневного вопроса.\n"
-        "• Финальную напоминалку должникам в 23:30 (отдельный переключатель).\n"
-        f"• {q2_q3_extra}\n"
-        "• Персональный режим «Не тегать меня»: вместо @username/кликабельного упоминания будет просто имя.\n"
-        "• Отвечать в уточняющих вопросах можно, когда у тебя есть хотя бы один `+💩` за текущую сессию.\n"
-        "• Плановые итоговые сообщения по расписанию.\n\n"
-        "Если выключить `🔔 Уведомления`, отключаются: автопост Q1, финалка 23:30, плановые итоги недели/месяца/года.\n"
-        "Команды `/start`, `/help`, `/stats` работают независимо от этого переключателя."
-    )
-
-
-def _global_visibility_text(enabled: bool) -> str:
-    state = "включена" if enabled else "выключена"
-    return (
-        "👁️ Видимость чата в рейтингах\n\n"
-        f"Текущий статус: <b>{state}</b>.\n\n"
-        "На что влияет:\n"
-        "• Раздел «Среди чатов» в /stats: этот чат будет скрыт.\n"
-        "• Межчатовые рейтинги (топы, рекорд дня, «самый жидкий/сухой чат»): чат исключается из расчета.\n\n"
-        "На что не влияет:\n"
-        "• Локальная статистика этого чата (Моя / В этом чате).\n"
-        "• Глобальная статистика пользователей внутри чата.\n"
-        "• Ежедневные вопросы и напоминания.\n"
-        "• Личный и чатовый рекапы.\n\n"
-        "Итог: переключатель скрывает чат только из межчатовой витрины, "
-        "но не отключает работу бота в самом чате."
-    )
-
-
-ABOUT_TEXT = (
-    "🤖 О боте\n\n"
-    "Бот ведет ежедневный трекер привычки в чате: задает вопросы, напоминает и собирает статистику.\n\n"
-    "Что умеет:\n"
-    "• ежедневная сессия с кнопками\n"
-    "• уточняющие ответы по последнему походу\n"
-    "• личная/чатовая/глобальная статистика\n"
-    "• годовые рекапы карточками\n\n"
-    "Проект на GitHub:\n"
-    "https://github.com/drewssche/poopbot"
-)
 
 
 @router.callback_query(F.data.startswith("help:"))
@@ -186,7 +84,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
         try:
             if data.startswith("help:settings:"):
                 await cb.message.edit_text(
-                    _settings_text(is_private_chat),
+                    settings_text(is_private_chat),
                     reply_markup=help_settings_kb(owner_id, is_private_chat=is_private_chat),
                 )
                 await cb.answer()
@@ -196,23 +94,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer()
 
             elif data.startswith("help:notifications:") or data.startswith("help:set_time:"):
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
                 await cb.answer()
 
@@ -224,23 +110,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 set_chat_notifications_enabled(db, chat_id, not bool(chat.notifications_enabled))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
                 await cb.answer("Готово", show_alert=False)
 
@@ -248,23 +122,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 set_chat_late_reminder_enabled(db, chat_id, not bool(chat.late_reminder_enabled))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
                 await cb.answer("Готово", show_alert=False)
 
@@ -272,60 +134,19 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 set_chat_q2_q3_enabled(db, chat_id, not bool(chat.q2_q3_enabled))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
-
-                window = get_session_window(chat.timezone)
-                if not window.is_blocked_window:
-                    sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
-                    q1_id = get_session_message_id(db, sess.session_id, "Q1")
-                    if q1_id and sess.status != "closed":
-                        q1_text = (
-                            render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=actor_id, session_date=window.session_date)
-                            if is_private_chat
-                            else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-                        )
-                        has_any_members = True if is_private_chat else ("Участники:" in q1_text)
-                        try:
-                            await cb.bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=q1_id,
-                                text=q1_text,
-                                reply_markup=q1_keyboard(
-                                    has_any_members,
-                                    show_remind=now_in_tz(chat.timezone).time().hour < 22,
-                                    show_q2_q3_button=should_show_q2_q3_button(
-                                        db,
-                                        chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
-                                        session_id=sess.session_id,
-                                        is_private_chat=is_private_chat,
-                                    ),
-                                ),
-                            )
-                        except TelegramBadRequest as e:
-                            if "message is not modified" not in str(e).lower():
-                                logger.exception("Failed to edit Q1 after q2_q3 toggle: %s", e)
-                    if bool(chat.q2_q3_enabled) and not is_private_chat:
-                        try:
-                            await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-                        except Exception:
-                            logger.exception("Failed to refresh Q2/Q3 after toggle")
-
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await refresh_q1_after_settings_change(
+                    cb,
+                    db=db,
+                    chat=chat,
+                    chat_id=chat_id,
+                    actor_id=actor_id,
+                    is_private_chat=is_private_chat,
+                )
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
                 await cb.answer("Готово", show_alert=False)
 
@@ -334,23 +155,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 db.flush()
                 actor_user = db.get(User, actor_id)
                 actor_disable_mentions = bool(actor_user.disable_mentions) if actor_user is not None else False
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
                 await cb.answer("Готово", show_alert=False)
 
@@ -358,11 +167,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 if is_private_chat:
                     await cb.answer("В личке этот пункт недоступен", show_alert=False)
                     return
-                await cb.message.edit_text(
-                    _global_visibility_text(bool(chat.show_in_global)),
-                    parse_mode="HTML",
-                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
-                )
+                await render_global_visibility_panel(cb, owner_id=owner_id, chat=chat)
                 await cb.answer()
 
             elif (
@@ -376,11 +181,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 set_chat_global_visibility(db, chat_id, not bool(chat.show_in_global))
                 db.flush()
                 chat = upsert_chat(db, chat_id)
-                await cb.message.edit_text(
-                    _global_visibility_text(bool(chat.show_in_global)),
-                    parse_mode="HTML",
-                    reply_markup=help_global_visibility_kb(owner_id, bool(chat.show_in_global)),
-                )
+                await render_global_visibility_panel(cb, owner_id=owner_id, chat=chat)
                 await cb.answer("Готово", show_alert=False)
 
             elif data.startswith("help:time:"):
@@ -389,23 +190,11 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 db.flush()
                 chat = upsert_chat(db, chat_id)
                 await cb.answer("Готово", show_alert=False)
-                await cb.message.edit_text(
-                    _notifications_text(
-                        enabled=bool(chat.notifications_enabled),
-                        post_time_text=chat.post_time.strftime("%H:%M"),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=help_notifications_kb(
-                        owner_id,
-                        current_hour=chat.post_time.hour,
-                        notifications_enabled=bool(chat.notifications_enabled),
-                        late_reminder_enabled=bool(chat.late_reminder_enabled),
-                        q2_q3_enabled=bool(chat.q2_q3_enabled),
-                        disable_mentions=actor_disable_mentions,
-                    ),
+                await render_notifications_panel(
+                    cb,
+                    owner_id=owner_id,
+                    chat=chat,
+                    actor_disable_mentions=actor_disable_mentions,
                 )
 
             elif data.startswith("help:delete_me:"):
@@ -448,42 +237,14 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 else:
                     delete_user_from_chat(db, chat_id, actor_id)
 
-                window = get_session_window(chat.timezone)
-                if not window.is_blocked_window:
-                    sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
-                    q1_id = get_session_message_id(db, sess.session_id, "Q1")
-                    if q1_id and sess.status != "closed":
-                        text = (
-                            render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=actor_id, session_date=window.session_date)
-                            if is_private_chat
-                            else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
-                        )
-                        has_any_members = True if is_private_chat else ("Участники:" in text)
-                        try:
-                            await cb.bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=q1_id,
-                                text=text,
-                                reply_markup=q1_keyboard(
-                                    has_any_members,
-                                    show_remind=get_session_window(chat.timezone).is_blocked_window is False
-                                    and now_in_tz(chat.timezone).time().hour < 22,
-                                    show_q2_q3_button=should_show_q2_q3_button(
-                                        db,
-                                        chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
-                                        session_id=sess.session_id,
-                                        is_private_chat=is_private_chat,
-                                    ),
-                                ),
-                            )
-                        except TelegramBadRequest as e:
-                            if "message is not modified" not in str(e).lower():
-                                logger.exception("Failed to edit Q1 after delete_me: %s", e)
-                        if bool(chat.q2_q3_enabled) and not is_private_chat:
-                            try:
-                                await ensure_q2_q3_exist(cb.bot, db, chat_id, sess.session_id)
-                            except Exception:
-                                logger.exception("Failed to refresh Q2/Q3 after delete action")
+                await refresh_q1_after_settings_change(
+                    cb,
+                    db=db,
+                    chat=chat,
+                    chat_id=chat_id,
+                    actor_id=actor_id,
+                    is_private_chat=is_private_chat,
+                )
 
                 await cb.answer("Удалил", show_alert=False)
                 done_text = (
@@ -494,7 +255,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.message.edit_text(done_text, reply_markup=help_root_kb(owner_id))
 
             elif data.startswith("help:back:"):
-                await cb.message.edit_text(_root_text(chat.timezone), reply_markup=help_root_kb(owner_id))
+                await cb.message.edit_text(root_text(chat.timezone), reply_markup=help_root_kb(owner_id))
                 await cb.answer()
 
             else:

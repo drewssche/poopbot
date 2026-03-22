@@ -45,7 +45,7 @@ Action taken:
 - Made scheduler tick interval configurable.
 - Defaulted runtime config to 60 seconds, which still matches minute-based business logic.
 
-### 2. SQLAlchemy used default QueuePool sizing
+### 2. SQLAlchemy pool needed explicit right-sizing for real production concurrency
 
 Files:
 
@@ -55,23 +55,27 @@ Files:
 
 Impact:
 
-- Default SQLAlchemy pool can keep more DB connections than needed for a single-process bot.
-- Extra idle Postgres backends consume RAM on a small VPS.
+- Without explicit limits, SQLAlchemy can keep more connections than needed.
+- But in real production, the first aggressive low-RAM profile `pool_size=2` / `max_overflow=0` also turned out too tight:
+  - scheduler
+  - polling handlers
+  - callback/command flows
+  could contend and hit `QueuePool limit ... timed out`.
 
 Risk level: low
 
 Action taken:
 
-- Added explicit pool settings:
-  - `DB_POOL_SIZE=2`
-  - `DB_MAX_OVERFLOW=0`
+- Added explicit pool settings, then adjusted them after observing real contention:
+  - `DB_POOL_SIZE=4`
+  - `DB_MAX_OVERFLOW=2`
   - `DB_POOL_TIMEOUT_SEC=10`
   - `DB_POOL_RECYCLE_SEC=1800`
   - `pool_use_lifo=True`
 
 Expected effect:
 
-- Lower idle connection count and lower steady RAM use in Postgres.
+- Still modest DB footprint on a 2 GB VPS, but enough headroom to avoid handler starvation under normal concurrent bot activity.
 
 ### 3. Extra metrics logging loop was always on
 
@@ -398,7 +402,7 @@ If you want the low-resource profile from this audit on the VPS, those values sh
 ## What was problematic
 
 1. Scheduler tick was too frequent for minute-level logic.
-2. DB pool and Postgres connection limits were too loose for a single small bot.
+2. DB pool needed right-sizing: too loose is wasteful, but too small causes handler starvation.
 3. Production logging was noisier than necessary.
 4. Service guard loops and healthchecks were more frequent than required.
 5. Extra handled-rate loop consumed periodic CPU/logging with limited value.
@@ -410,7 +414,7 @@ For the current load of about 130 users, these are still low-risk optimizations.
 
 ## What was changed
 
-1. Added small explicit SQLAlchemy pool limits and lifo reuse.
+1. Added explicit SQLAlchemy pool sizing and lifo reuse, then adjusted it to `4 + overflow 2` after observing real production contention.
 2. Made scheduler tick configurable and set it to 60 seconds.
 3. Disabled handled-rate periodic logging.
 4. Relaxed guard and healthcheck intervals.

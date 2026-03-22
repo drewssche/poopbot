@@ -9,8 +9,8 @@ class Settings:
     log_level: str = "INFO"
     app_env: str = "dev"
     bot_owner_id: int | None = None
-    db_pool_size: int = 2
-    db_max_overflow: int = 0
+    db_pool_size: int = 4
+    db_max_overflow: int = 2
     db_pool_timeout_sec: int = 10
     db_pool_recycle_sec: int = 1800
     startup_delete_webhook: bool = True
@@ -85,8 +85,8 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO").strip(),
         app_env=os.getenv("APP_ENV", "dev").strip(),
         bot_owner_id=int(owner) if (owner := os.getenv("BOT_OWNER_ID", "").strip()).isdigit() else None,
-        db_pool_size=_env_int("DB_POOL_SIZE", 2),
-        db_max_overflow=_env_non_negative_int("DB_MAX_OVERFLOW", 0),
+        db_pool_size=_env_int("DB_POOL_SIZE", 4),
+        db_max_overflow=_env_non_negative_int("DB_MAX_OVERFLOW", 2),
         db_pool_timeout_sec=_env_int("DB_POOL_TIMEOUT_SEC", 10),
         db_pool_recycle_sec=_env_int("DB_POOL_RECYCLE_SEC", 1800),
         startup_delete_webhook=_env_bool("STARTUP_DELETE_WEBHOOK", True),

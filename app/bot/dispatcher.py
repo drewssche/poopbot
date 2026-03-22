@@ -297,7 +297,7 @@ async def run_bot(settings: Settings) -> None:
         asyncio.create_task(
             _polling_guard_loop(
                 bot=bot,
-                interval_sec=max(30, settings.webhook_guard_interval_sec),
+                interval_sec=max(30, settings.polling_guard_interval_sec),
                 stale_sec=settings.heartbeat_stale_sec,
                 pending_threshold=settings.polling_guard_pending_threshold,
                 get_last_received_ts=lambda: last_received_ts,

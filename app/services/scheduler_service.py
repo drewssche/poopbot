@@ -8,6 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
 from aiogram.exceptions import (
+    TelegramBadRequest,
     TelegramForbiddenError,
     TelegramMigrateToChat,
 )
@@ -42,7 +43,9 @@ from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
 _streak_recalc_date: dict[int, date] = {}
+_q1_catchup_skip_date: dict[int, date] = {}
 _CHAT_PROCESS_TIMEOUT_SEC = 25.0
+_Q1_CATCHUP_MAX_DELAY_MIN = 180
 
 LOCK_LINE = "🔒 Сессия закрыта."
 
@@ -68,7 +71,10 @@ def start_scheduler(
     session_factory: sessionmaker,
     chat_throttle_sec: float = 0.2,
     tick_interval_sec: int = 60,
+    q1_catchup_max_delay_min: int = 180,
 ) -> AsyncIOScheduler:
+    global _Q1_CATCHUP_MAX_DELAY_MIN
+    _Q1_CATCHUP_MAX_DELAY_MIN = max(1, q1_catchup_max_delay_min)
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         func=_tick,
@@ -101,6 +107,15 @@ async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: floa
                 if stale_chat is not None:
                     stale_chat.is_enabled = False
             logger.warning("Disabled chat after TelegramForbiddenError chat_id=%s", chat_id)
+        except TelegramBadRequest as e:
+            if _is_unreachable_chat_error(e):
+                with db_session(session_factory) as db:
+                    stale_chat = db.get(Chat, int(chat_id))
+                    if stale_chat is not None:
+                        stale_chat.is_enabled = False
+                logger.warning("Disabled chat after TelegramBadRequest chat_id=%s error=%s", chat_id, e)
+            else:
+                logger.exception("Scheduler chat bad request chat_id=%s", chat_id)
         except TelegramMigrateToChat as e:
             with db_session(session_factory) as db:
                 migrated = migrate_chat_settings(db, int(chat_id), e.migrate_to_chat_id)
@@ -180,11 +195,22 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
         if notifications_enabled and now_min >= post_min:
             q1_id = get_session_message_id(db, sess.session_id, "Q1")
             if not q1_id:
-                if now_min > post_min:
+                delay_min = now_min - post_min
+                if delay_min > _Q1_CATCHUP_MAX_DELAY_MIN:
+                    if _q1_catchup_skip_date.get(chat_id) != window.session_date:
+                        logger.warning(
+                            "Skipping stale Q1 catch-up chat_id=%s delayed_by_min=%s max_delay_min=%s",
+                            chat_id,
+                            delay_min,
+                            _Q1_CATCHUP_MAX_DELAY_MIN,
+                        )
+                        _q1_catchup_skip_date[chat_id] = window.session_date
+                    return
+                if delay_min > 0:
                     logger.warning(
                         "Q1 catch-up send chat_id=%s delayed_by_min=%s",
                         chat_id,
-                        now_min - post_min,
+                        delay_min,
                     )
                 await _post_q1(
                     bot,
@@ -271,6 +297,16 @@ async def _post_q1(
         except asyncio.TimeoutError:
             logger.warning("Q2/Q3 publish timeout chat_id=%s session_id=%s", chat_id, session_id)
     logger.info("Auto-posted Q1 chat_id=%s session_id=%s message_id=%s", chat_id, session_id, sent.message_id)
+
+
+def _is_unreachable_chat_error(exc: TelegramBadRequest) -> bool:
+    msg = str(exc).lower()
+    return (
+        "chat not found" in msg
+        or "group chat was deleted" in msg
+        or "group is deactivated" in msg
+        or "bot was kicked from the group chat" in msg
+    )
 
 
 async def _send_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> None:

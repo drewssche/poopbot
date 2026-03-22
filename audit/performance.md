@@ -283,6 +283,57 @@ Expected effect:
 
 - Fewer redundant DB round-trips on yearly recap generation.
 
+### 15. Polling self-recovery check used the wrong interval source
+
+File: `app/bot/dispatcher.py`
+
+Impact:
+
+- Polling guard existed, but it was scheduled using `WEBHOOK_GUARD_INTERVAL_SEC` instead of `POLLING_GUARD_INTERVAL_SEC`.
+- In a stalled polling situation this delayed self-restart and let the bot sit in a "sending works, commands do not" state longer than intended.
+
+Risk level: low
+
+Action taken:
+
+- Switched polling guard scheduling to `POLLING_GUARD_INTERVAL_SEC`.
+
+### 16. Scheduler did not auto-disable stale chats on `chat not found`
+
+File: `app/services/scheduler_service.py`
+
+Impact:
+
+- If a chat was deleted, lost, or otherwise unreachable, scheduler retried it every tick.
+- That created repeated errors, wasted Telegram calls, and background CPU/network churn.
+
+Risk level: low
+
+Action taken:
+
+- Added auto-disable behavior for unreachable chat errors like:
+  - `chat not found`
+  - `group chat was deleted`
+  - `group is deactivated`
+  - `bot was kicked from the group chat`
+
+### 17. Q1 catch-up could fire many hours late after a reboot or long outage
+
+File: `app/services/scheduler_service.py`
+
+Impact:
+
+- After long downtime, scheduler could try to "catch up" Q1 absurdly late in the same day.
+- This is operationally noisy and can be user-hostile.
+
+Risk level: low
+
+Action taken:
+
+- Added `SCHEDULER_Q1_CATCHUP_MAX_DELAY_MIN`.
+- Defaulted it to `180` minutes.
+- If the delay is larger, scheduler logs once and skips that stale Q1 catch-up for the session date.
+
 ## What was checked and not found
 
 - No multiple worker processes like Gunicorn/Uvicorn workers.
@@ -353,6 +404,7 @@ If you want the low-resource profile from this audit on the VPS, those values sh
 5. Extra handled-rate loop consumed periodic CPU/logging with limited value.
 6. Scheduler and message render hot paths did some avoidable ORM/SQL work.
 7. Stats and recap paths had a few redundant or overly broad reads.
+8. Polling recovery and stale-chat handling were not defensive enough for reboot/outage scenarios.
 
 For the current load of about 130 users, these are still low-risk optimizations. Nothing in the audit indicates an immediate need for Redis, queues, or process sharding yet.
 
@@ -371,6 +423,9 @@ For the current load of about 130 users, these are still low-risk optimizations.
 11. Replaced one `count(*)` member check with an existence query.
 12. Filtered zero-value `SessionUserState` rows out of stats hot paths.
 13. Removed redundant holiday count queries from yearly recap generation.
+14. Fixed polling guard to use its own interval setting.
+15. Added auto-disable for unreachable stale chats in scheduler.
+16. Added a max-delay cap for Q1 catch-up after long downtime.
 
 ## What to check on the server
 

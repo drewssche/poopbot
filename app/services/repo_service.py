@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, time, date
+import logging
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Chat, User, ChatMember, Session as DaySession, SessionMessage, SessionUserState, UserStreak
+
+logger = logging.getLogger(__name__)
 
 
 def upsert_chat(db: Session, chat_id: int) -> Chat:
@@ -16,6 +19,7 @@ def upsert_chat(db: Session, chat_id: int) -> Chat:
         db.add(chat)
     elif not chat.is_enabled:
         chat.is_enabled = True
+        logger.warning("Re-enabled chat after fresh inbound activity chat_id=%s", chat_id)
     return chat
 
 

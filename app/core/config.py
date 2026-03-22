@@ -22,6 +22,7 @@ class Settings:
     polling_guard_network_failures_to_restart: int = 5
     scheduler_chat_throttle_sec: float = 0.2
     scheduler_tick_interval_sec: int = 60
+    scheduler_q1_catchup_max_delay_min: int = 180
     webhook_guard_enabled: bool = True
     webhook_guard_interval_sec: int = 180
     polling_guard_enabled: bool = True
@@ -97,6 +98,7 @@ def load_settings() -> Settings:
         polling_guard_network_failures_to_restart=_env_int("POLLING_GUARD_NETWORK_FAILURES_TO_RESTART", 5),
         scheduler_chat_throttle_sec=_env_float("SCHEDULER_CHAT_THROTTLE_SEC", 0.2),
         scheduler_tick_interval_sec=_env_int("SCHEDULER_TICK_INTERVAL_SEC", 60),
+        scheduler_q1_catchup_max_delay_min=_env_int("SCHEDULER_Q1_CATCHUP_MAX_DELAY_MIN", 180),
         webhook_guard_enabled=_env_bool("WEBHOOK_GUARD_ENABLED", True),
         webhook_guard_interval_sec=_env_int("WEBHOOK_GUARD_INTERVAL_SEC", 180),
         polling_guard_enabled=_env_bool("POLLING_GUARD_ENABLED", True),

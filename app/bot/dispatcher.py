@@ -16,7 +16,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
 
 from app.core.config import Settings
 from app.db.engine import make_engine, make_session_factory
-from app.services.scheduler_service import start_scheduler
+from app.services.scheduler_service import recover_missing_q1_on_startup, start_scheduler
 
 from app.bot.handlers.commands import router as commands_router
 from app.bot.handlers.callbacks_q1 import router as callbacks_q1_router
@@ -266,11 +266,19 @@ async def run_bot(settings: Settings) -> None:
 
     dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_received, _touch_handled))
 
+    if settings.startup_recover_missing_q1:
+        await recover_missing_q1_on_startup(
+            bot,
+            session_factory,
+            chat_throttle_sec=settings.scheduler_chat_throttle_sec,
+        )
+
     start_scheduler(
         bot,
         session_factory,
         chat_throttle_sec=settings.scheduler_chat_throttle_sec,
         tick_interval_sec=settings.scheduler_tick_interval_sec,
+        q1_catchup_max_delay_min=settings.scheduler_q1_catchup_max_delay_min,
     )
 
     hb_task = asyncio.create_task(

@@ -15,6 +15,7 @@ class Settings:
     db_pool_recycle_sec: int = 1800
     startup_delete_webhook: bool = True
     drop_pending_updates_on_start: bool = False
+    startup_recover_missing_q1: bool = True
     heartbeat_interval_sec: int = 60
     heartbeat_stale_sec: int = 300
     polling_guard_interval_sec: int = 60
@@ -91,6 +92,7 @@ def load_settings() -> Settings:
         db_pool_recycle_sec=_env_int("DB_POOL_RECYCLE_SEC", 1800),
         startup_delete_webhook=_env_bool("STARTUP_DELETE_WEBHOOK", True),
         drop_pending_updates_on_start=_env_bool("DROP_PENDING_UPDATES_ON_START", False),
+        startup_recover_missing_q1=_env_bool("STARTUP_RECOVER_MISSING_Q1", True),
         heartbeat_interval_sec=_env_int("HEARTBEAT_INTERVAL_SEC", 60),
         heartbeat_stale_sec=_env_int("HEARTBEAT_STALE_SEC", 300),
         polling_guard_interval_sec=_env_int("POLLING_GUARD_INTERVAL_SEC", 60),

@@ -88,6 +88,47 @@ def start_scheduler(
     logger.info("Scheduler started")
     return scheduler
 
+
+async def recover_missing_q1_on_startup(
+    bot: Bot,
+    session_factory: sessionmaker,
+    chat_throttle_sec: float = 0.2,
+) -> None:
+    with db_session(session_factory) as db:
+        chat_ids = list(db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all())
+
+    recovered = 0
+    for chat_id in chat_ids:
+        try:
+            posted = await asyncio.wait_for(
+                _recover_chat_q1_on_startup(bot, session_factory, int(chat_id)),
+                timeout=_CHAT_PROCESS_TIMEOUT_SEC,
+            )
+            if posted:
+                recovered += 1
+        except TelegramForbiddenError:
+            with db_session(session_factory) as db:
+                stale_chat = db.get(Chat, int(chat_id))
+                if stale_chat is not None:
+                    stale_chat.is_enabled = False
+            logger.warning("Disabled chat during startup Q1 recovery after TelegramForbiddenError chat_id=%s", chat_id)
+        except TelegramBadRequest as e:
+            if _is_unreachable_chat_error(e):
+                with db_session(session_factory) as db:
+                    stale_chat = db.get(Chat, int(chat_id))
+                    if stale_chat is not None:
+                        stale_chat.is_enabled = False
+                logger.warning("Disabled chat during startup Q1 recovery chat_id=%s error=%s", chat_id, e)
+            else:
+                logger.exception("Startup Q1 recovery bad request chat_id=%s", chat_id)
+        except Exception:
+            logger.exception("Startup Q1 recovery failed chat_id=%s", chat_id)
+        if chat_throttle_sec > 0:
+            await asyncio.sleep(chat_throttle_sec)
+
+    logger.info("Startup Q1 recovery finished recovered=%s scanned=%s", recovered, len(chat_ids))
+
+
 async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> None:
     with db_session(session_factory) as db:
         chat_ids = list(db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all())
@@ -233,6 +274,57 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
 
         if notifications_enabled:
             await send_holiday_notice_if_needed(bot, db, chat_id, sess.session_id, local_date)
+
+
+async def _recover_chat_q1_on_startup(bot: Bot, session_factory: sessionmaker, chat_id: int) -> bool:
+    with db_session(session_factory) as db:
+        chat = db.get(Chat, chat_id)
+        if chat is None or not chat.is_enabled or not bool(chat.notifications_enabled):
+            return False
+
+        window = get_session_window(chat.timezone)
+        now_local = now_in_tz(chat.timezone)
+        local_time = now_local.time()
+        now_min = local_time.hour * 60 + local_time.minute
+        post_min = chat.post_time.hour * 60 + chat.post_time.minute
+        close_cutoff = time(23, 55)
+
+        active_sessions = db.scalars(
+            select(DaySession)
+            .where(DaySession.chat_id == chat_id, DaySession.status == "active")
+            .order_by(DaySession.session_date.asc())
+        ).all()
+        for active_sess in active_sessions:
+            is_past_day = active_sess.session_date < window.session_date
+            is_today_after_cutoff = active_sess.session_date == window.session_date and local_time >= close_cutoff
+            if is_past_day or is_today_after_cutoff:
+                await _close_session(bot, db, chat_id, active_sess.session_id, chat.timezone)
+
+        sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
+
+        if local_time >= close_cutoff or sess.status == "closed" or window.is_blocked_window:
+            return False
+        if now_min < post_min:
+            return False
+        if get_session_message_id(db, sess.session_id, "Q1"):
+            return False
+
+        await _post_q1(
+            bot,
+            db,
+            chat_id,
+            sess.session_id,
+            window.session_date,
+            q2_q3_enabled=bool(chat.q2_q3_enabled),
+            show_remind=(local_time < time(22, 0)),
+        )
+        logger.warning(
+            "Recovered missing Q1 on startup chat_id=%s session_id=%s delayed_by_min=%s",
+            chat_id,
+            sess.session_id,
+            max(0, now_min - post_min),
+        )
+        return True
 
 
 async def _post_q1(

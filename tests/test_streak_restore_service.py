@@ -148,9 +148,9 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(bot.calls), 1)
         self.assertEqual(bot.calls[0]["chat_id"], 42)
-        self.assertIn("22.03.2026", bot.calls[0]["text"])
+        self.assertIn("последние 7 дней", bot.calls[0]["text"])
         markup = bot.calls[0]["reply_markup"]
-        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim:2026-03-22")
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim")
 
     async def test_lists_only_active_groups(self) -> None:
         with self.SessionLocal() as db:

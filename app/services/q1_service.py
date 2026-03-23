@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 from app.services.poop_event_service import create_event, delete_event, reconcile_events_count
 
+RESTORE_WINDOW_DAYS = 7
+RESTORE_MARKER = "__streak_restore_recent__"
 
 BRISTOL_EMOJI = {
     1: "🧱",
@@ -236,6 +238,125 @@ def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_ses
     if not changed:
         return changed, message
     return True, "Стрик за вчера восстановлен"
+
+
+def restore_recent_streak_window(
+    db: Session,
+    *,
+    chat_id: int,
+    user_id: int,
+    current_session_date: date,
+    days_back: int = RESTORE_WINDOW_DAYS,
+) -> tuple[bool, str]:
+    window_start = current_session_date - timedelta(days=max(1, days_back))
+    restore_days: list[date] = []
+    for offset in range(max(1, days_back), 0, -1):
+        restore_date = current_session_date - timedelta(days=offset)
+        has_mark = bool(
+            db.scalar(
+                select(PoopEvent.id)
+                .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+                .where(
+                    DaySession.chat_id == chat_id,
+                    DaySession.session_date == restore_date,
+                    PoopEvent.user_id == user_id,
+                    PoopEvent.origin_chat_id == chat_id,
+                )
+                .limit(1)
+            )
+        )
+        if not has_mark:
+            restore_days.append(restore_date)
+
+    if not restore_days:
+        return False, f"За последние {days_back} дней пропусков нет"
+
+    for restore_date in restore_days:
+        sess = db.scalar(
+            select(DaySession).where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == restore_date,
+            )
+        )
+        if sess is None:
+            sess = DaySession(
+                chat_id=chat_id,
+                session_date=restore_date,
+                status="closed",
+                start_at=datetime.utcnow(),
+                end_at=datetime.utcnow(),
+            )
+            db.add(sess)
+            db.flush()
+
+        state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user_id})
+        if state is None:
+            state = SessionUserState(session_id=sess.session_id, user_id=user_id, poops_n=1, achievement_text=RESTORE_MARKER)
+            db.add(state)
+        else:
+            state.poops_n = max(1, int(state.poops_n or 0))
+            state.achievement_text = RESTORE_MARKER
+            state.bristol = None
+            state.feeling = None
+
+        reconcile_events_count(
+            db,
+            session_id=sess.session_id,
+            user_id=user_id,
+            poops_n=int(state.poops_n or 0),
+            origin_chat_id=chat_id,
+        )
+
+    _refresh_user_streak_cache_before_current_day(
+        db,
+        chat_id=chat_id,
+        user_id=user_id,
+        current_session_date=current_session_date,
+    )
+    return True, f"Восстановлено {len(restore_days)} дн. за последние {days_back} дней"
+
+
+def undo_recent_streak_window(
+    db: Session,
+    *,
+    chat_id: int,
+    user_id: int,
+    current_session_date: date,
+    days_back: int = RESTORE_WINDOW_DAYS,
+) -> tuple[bool, str]:
+    undone_days = 0
+    for offset in range(max(1, days_back), 0, -1):
+        restore_date = current_session_date - timedelta(days=offset)
+        sess = db.scalar(
+            select(DaySession).where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == restore_date,
+            )
+        )
+        if sess is None:
+            continue
+        state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user_id})
+        if state is None or state.achievement_text != RESTORE_MARKER or int(state.poops_n or 0) <= 0:
+            continue
+
+        while int(state.poops_n or 0) > 0:
+            delete_event(db, session_id=sess.session_id, user_id=user_id, event_n=int(state.poops_n))
+            state.poops_n -= 1
+        state.achievement_text = None
+        state.bristol = None
+        state.feeling = None
+        undone_days += 1
+
+    if undone_days == 0:
+        return False, f"За последние {days_back} дней нечего отменять"
+
+    _refresh_user_streak_cache_before_current_day(
+        db,
+        chat_id=chat_id,
+        user_id=user_id,
+        current_session_date=current_session_date,
+    )
+    return True, f"Отменено {undone_days} дн. восстановления"
 
 
 def mention(u: User) -> str:

@@ -16,10 +16,10 @@ from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.q1_service import undo_restore_for_date
+from app.services.q1_service import undo_recent_streak_window
 from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.streak_restore_service import (
     collect_streak_restore_incident_stats,
-    detect_suspected_streak_incident_dates,
     list_active_group_chat_ids,
     send_streak_restore_battle_message,
     send_streak_restore_incident_message_to_chat,
@@ -80,31 +80,10 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
     action = parts[1]
 
     try:
-        if action == "date":
-            if parts[2] == "auto":
-                with db_session(_session_factory) as db:
-                    candidates = detect_suspected_streak_incident_dates(db, today=date.today())
-                if candidates:
-                    target_date = date.fromisoformat(str(candidates[0]["date"]))
-                else:
-                    target_date = date.today()
-            else:
-                target_date = date.fromisoformat(parts[2])
-            with db_session(_session_factory) as db:
-                candidates = detect_suspected_streak_incident_dates(db, today=date.today())
-            await cb.message.edit_text(
-                streak_admin_text(target_date, candidates=candidates),
-                reply_markup=streak_admin_kb(target_date),
-                parse_mode="Markdown",
-            )
-            await cb.answer()
-            return
         if action == "panel":
             target_date = date.fromisoformat(parts[2])
-            with db_session(_session_factory) as db:
-                candidates = detect_suspected_streak_incident_dates(db, today=date.today())
             await cb.message.edit_text(
-                streak_admin_text(target_date, candidates=candidates),
+                streak_admin_text(target_date),
                 reply_markup=streak_admin_kb(target_date),
                 parse_mode="Markdown",
             )
@@ -136,10 +115,15 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
         if action == "undo":
             with db_session(_session_factory) as db:
                 chat = upsert_chat(db, chat_id=cb.message.chat.id)
-                changed, message = undo_restore_for_date(db, cb.message.chat.id, cb.from_user.id, target_date)
+                current_session_date = get_session_window(chat.timezone).session_date
+                changed, message = undo_recent_streak_window(
+                    db,
+                    chat_id=cb.message.chat.id,
+                    user_id=cb.from_user.id,
+                    current_session_date=current_session_date,
+                )
                 db.commit()
                 if changed:
-                    current_session_date = get_session_window(chat.timezone).session_date
                     await _refresh_current_q1_view(cb.bot, db, cb.message.chat.id, current_session_date)
             await cb.answer(message, show_alert=not changed)
             return

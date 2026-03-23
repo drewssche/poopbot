@@ -19,18 +19,20 @@ STREAK_RESTORE_INCIDENT_COMMAND = "streak_restore_incident"
 
 
 def streak_restore_message_text(target_date: date) -> str:
+    _ = target_date
     return (
         "⚠️ Из-за сбоя бот мог пропустить входящие сообщения.\n\n"
-        f"Если у тебя сломался стрик из-за пропуска за {target_date.strftime('%d.%m.%Y')}, "
-        "нажми кнопку ниже. Бот проверит, можно ли восстановить день именно тебе."
+        "Если у тебя сломался стрик, нажми кнопку ниже. "
+        "Бот восстановит пропуски за последние 7 дней именно для тебя."
     )
 
 
 def streak_restore_preview_text(target_date: date) -> str:
+    _ = target_date
     return (
         "👀 Превью сообщения восстановления\n\n"
-        f"Дата инцидента: {target_date.strftime('%d.%m.%Y')}\n\n"
         "Ниже показано, как будет выглядеть сообщение в чате. "
+        "В боевой версии кнопка восстановит пропуски за последние 7 дней. "
         "Кнопка в превью не восстанавливает стрик."
     )
 
@@ -142,7 +144,7 @@ async def send_streak_restore_preview_message(bot: Bot, *, owner_chat_id: int, t
         bot,
         chat_id=owner_chat_id,
         text=streak_restore_preview_text(target_date),
-        reply_markup=streak_restore_preview_keyboard(target_date.isoformat()),
+        reply_markup=streak_restore_preview_keyboard(),
     )
     return int(sent.message_id)
 
@@ -152,7 +154,7 @@ async def send_streak_restore_battle_message(bot: Bot, *, owner_chat_id: int, ta
         bot,
         chat_id=owner_chat_id,
         text=streak_restore_message_text(target_date),
-        reply_markup=streak_restore_keyboard(target_date.isoformat()),
+        reply_markup=streak_restore_keyboard(),
     )
     return int(sent.message_id)
 
@@ -172,7 +174,7 @@ async def send_streak_restore_incident_message_to_chat(
                 bot,
                 chat_id=int(chat_id),
                 text=streak_restore_message_text(target_date),
-                reply_markup=streak_restore_keyboard(target_date.isoformat()),
+                reply_markup=streak_restore_keyboard(),
             )
             set_command_message_id(
                 db,
@@ -223,7 +225,7 @@ async def send_streak_restore_incident_messages(
                     bot,
                     chat_id=int(chat_id),
                     text=streak_restore_message_text(target_date),
-                    reply_markup=streak_restore_keyboard(target_date.isoformat()),
+                    reply_markup=streak_restore_keyboard(),
                 )
                 set_command_message_id(
                     db,

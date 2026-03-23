@@ -15,7 +15,7 @@ async def restore_preview_callbacks(cb: CallbackQuery) -> None:
     action = cb.data.split(":")[1]
     try:
         if action == "noop":
-            await cb.answer("Это превью. В боевой рассылке кнопка будет рабочей.", show_alert=False)
+            await cb.answer("Это превью. В боевой рассылке кнопка восстановит пропуски за 7 дней.", show_alert=False)
             return
         if action == "delete":
             await cb.message.delete()

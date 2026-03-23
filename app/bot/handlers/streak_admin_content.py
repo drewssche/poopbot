@@ -44,3 +44,14 @@ def streak_admin_result_text(scope_label: str, target_date: date, *, sent: int, 
         f"Пропущено как дубликат/неподходящее: {skipped}\n"
         f"Ошибок: {failed}"
     )
+
+
+def streak_admin_group_picker_text(target_date: date, *, page: int, total_groups: int) -> str:
+    return (
+        "🛠 Выбор группы для точечной рассылки\n\n"
+        f"Дата инцидента: `{target_date.isoformat()}`\n"
+        f"Активных групп: {total_groups}\n"
+        f"Страница: {page + 1}\n\n"
+        "Нажми на нужную группу, и бот отправит туда одно сервисное сообщение "
+        "с кнопкой восстановления. Повторная отправка в ту же группу не задублируется."
+    )

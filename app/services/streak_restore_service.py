@@ -70,6 +70,23 @@ def detect_suspected_streak_incident_dates(db, *, today: date, lookback_days: in
             else:
                 bucket["private"] += 1
 
+    # Fresh incidents are under-observed by the exact-gap heuristic because
+    # there may be no D+1 data yet. Add a softer candidate for yesterday when
+    # users had activity on D-1 but still have no mark on D.
+    recent_target = today - timedelta(days=1)
+    if recent_target > start_date:
+        recent_prev = recent_target - timedelta(days=1)
+        for (chat_id, _user_id), days in days_by_actor.items():
+            day_set = set(days)
+            if recent_prev not in day_set or recent_target in day_set:
+                continue
+            bucket = counters.setdefault(recent_target, {"total": 0, "groups": 0, "private": 0})
+            bucket["total"] += 1
+            if chat_id < 0:
+                bucket["groups"] += 1
+            else:
+                bucket["private"] += 1
+
     ranked = sorted(
         (
             {
@@ -111,6 +128,15 @@ def collect_streak_restore_incident_stats(db, *, target_date: date) -> dict[str,
     }
 
 
+def list_active_group_chat_ids(db) -> list[int]:
+    return list(
+        int(chat_id)
+        for chat_id in db.scalars(
+            select(Chat.chat_id).where(Chat.is_enabled == True, Chat.chat_id < 0).order_by(Chat.chat_id.asc())
+        ).all()
+    )
+
+
 async def send_streak_restore_preview_message(bot: Bot, *, owner_chat_id: int, target_date: date) -> int:
     sent = await safe_send_message(
         bot,
@@ -131,6 +157,37 @@ async def send_streak_restore_battle_message(bot: Bot, *, owner_chat_id: int, ta
     return int(sent.message_id)
 
 
+async def send_streak_restore_incident_message_to_chat(
+    bot: Bot,
+    session_factory: sessionmaker,
+    *,
+    chat_id: int,
+    target_date: date,
+) -> dict[str, int | bool]:
+    with db_session(session_factory) as db:
+        if get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None:
+            return {"sent": 0, "skipped": 1, "failed": 0, "duplicate": True}
+        try:
+            sent = await safe_send_message(
+                bot,
+                chat_id=int(chat_id),
+                text=streak_restore_message_text(target_date),
+                reply_markup=streak_restore_keyboard(target_date.isoformat()),
+            )
+            set_command_message_id(
+                db,
+                int(chat_id),
+                0,
+                STREAK_RESTORE_INCIDENT_COMMAND,
+                target_date,
+                sent.message_id,
+            )
+            return {"sent": 1, "skipped": 0, "failed": 0, "duplicate": False}
+        except Exception:
+            logger.exception("Failed to send streak restore incident message chat_id=%s", chat_id)
+            return {"sent": 0, "skipped": 0, "failed": 1, "duplicate": False}
+
+
 async def send_streak_restore_incident_messages(
     bot: Bot,
     session_factory: sessionmaker,
@@ -148,11 +205,7 @@ async def send_streak_restore_incident_messages(
 
     with db_session(session_factory) as db:
         if scope == "groups":
-            chat_ids = list(
-                db.scalars(
-                    select(Chat.chat_id).where(Chat.is_enabled == True, Chat.chat_id < 0).order_by(Chat.chat_id.asc())
-                ).all()
-            )
+            chat_ids = list_active_group_chat_ids(db)
         else:
             chat_ids = list(
                 db.scalars(

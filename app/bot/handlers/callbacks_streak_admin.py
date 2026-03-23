@@ -6,8 +6,12 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
-from app.bot.handlers.streak_admin_content import streak_admin_result_text, streak_admin_text
-from app.bot.keyboards.streak_admin import streak_admin_kb
+from app.bot.handlers.streak_admin_content import (
+    streak_admin_group_picker_text,
+    streak_admin_result_text,
+    streak_admin_text,
+)
+from app.bot.keyboards.streak_admin import streak_admin_group_picker_kb, streak_admin_kb
 from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
@@ -16,7 +20,9 @@ from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.streak_restore_service import (
     collect_streak_restore_incident_stats,
     detect_suspected_streak_incident_dates,
+    list_active_group_chat_ids,
     send_streak_restore_battle_message,
+    send_streak_restore_incident_message_to_chat,
     send_streak_restore_incident_messages,
     send_streak_restore_preview_message,
 )
@@ -38,6 +44,25 @@ def init_db(database_url: str) -> None:
 
 def _is_owner(settings, user_id: int) -> bool:
     return settings.bot_owner_id is not None and int(settings.bot_owner_id) == int(user_id)
+
+
+def _format_chat_title(raw: str, fallback_index: int) -> str:
+    title = (raw or "").strip()
+    if not title:
+        title = f"Группа {fallback_index}"
+    return title[:48]
+
+
+async def _resolve_group_options(cb: CallbackQuery, chat_ids: list[int]) -> list[tuple[int, str]]:
+    options: list[tuple[int, str]] = []
+    for idx, cid in enumerate(chat_ids, start=1):
+        try:
+            chat = await cb.bot.get_chat(cid)
+            title = getattr(chat, "title", None) or getattr(chat, "full_name", None) or ""
+        except Exception:
+            title = ""
+        options.append((cid, _format_chat_title(str(title), idx)))
+    return options
 
 
 @router.callback_query(F.data.startswith("streakadmin:"))
@@ -74,6 +99,30 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
             )
             await cb.answer()
             return
+        if action == "panel":
+            target_date = date.fromisoformat(parts[2])
+            with db_session(_session_factory) as db:
+                candidates = detect_suspected_streak_incident_dates(db, today=date.today())
+            await cb.message.edit_text(
+                streak_admin_text(target_date, candidates=candidates),
+                reply_markup=streak_admin_kb(target_date),
+                parse_mode="Markdown",
+            )
+            await cb.answer()
+            return
+        if action == "groupmenu":
+            page = max(0, int(parts[2]))
+            target_date = date.fromisoformat(parts[3])
+            with db_session(_session_factory) as db:
+                group_chat_ids = list_active_group_chat_ids(db)
+            group_options = await _resolve_group_options(cb, group_chat_ids)
+            await cb.message.edit_text(
+                streak_admin_group_picker_text(target_date, page=page, total_groups=len(group_options)),
+                reply_markup=streak_admin_group_picker_kb(target_date, group_options, page),
+                parse_mode="Markdown",
+            )
+            await cb.answer()
+            return
 
         target_date = date.fromisoformat(parts[-1])
         if action == "preview":
@@ -101,6 +150,21 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
                 f"groups sent={stats['groups_sent']} private sent={stats['private_sent']}",
                 show_alert=True,
             )
+            return
+        if action == "groupsend":
+            chat_id = int(parts[2])
+            result = await send_streak_restore_incident_message_to_chat(
+                cb.bot,
+                _session_factory,
+                chat_id=chat_id,
+                target_date=target_date,
+            )
+            if result["failed"]:
+                await cb.answer("Ошибка отправки", show_alert=True)
+            elif result["duplicate"]:
+                await cb.answer("В эту группу уже отправляли", show_alert=False)
+            else:
+                await cb.answer(f"Отправлено в {chat_id}", show_alert=False)
             return
 
         if action == "send":

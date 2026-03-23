@@ -13,7 +13,9 @@ from app.services.command_message_service import get_command_message_id
 from app.services.streak_restore_service import (
     STREAK_RESTORE_INCIDENT_COMMAND,
     detect_suspected_streak_incident_dates,
+    list_active_group_chat_ids,
     send_streak_restore_battle_message,
+    send_streak_restore_incident_message_to_chat,
     send_streak_restore_incident_messages,
 )
 
@@ -111,6 +113,35 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidates[0]["date"], "2026-03-22")
         self.assertEqual(candidates[0]["total"], 3)
 
+    async def test_detects_yesterday_as_candidate_even_without_next_day_activity(self) -> None:
+        with self.SessionLocal() as db:
+            from app.db.models import PoopEvent, Session as DaySession
+
+            sessions: dict[tuple[int, date], int] = {}
+            for chat_id in (-100, -200):
+                session_date = date(2026, 3, 21)
+                sess = DaySession(chat_id=chat_id, session_date=session_date, status="closed")
+                db.add(sess)
+                db.flush()
+                sessions[(chat_id, session_date)] = int(sess.session_id)
+
+            for chat_id, user_id in [(-100, 10), (-100, 11), (-200, 20)]:
+                db.add(
+                    PoopEvent(
+                        session_id=sessions[(chat_id, date(2026, 3, 21))],
+                        user_id=user_id,
+                        event_n=1,
+                        origin_chat_id=chat_id,
+                    )
+                )
+            db.commit()
+
+            candidates = detect_suspected_streak_incident_dates(db, today=date(2026, 3, 23))
+
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0]["date"], "2026-03-22")
+        self.assertEqual(candidates[0]["total"], 3)
+
     async def test_battle_message_uses_real_restore_callback(self) -> None:
         bot = _FakeBot()
         await send_streak_restore_battle_message(bot, owner_chat_id=42, target_date=date(2026, 3, 22))
@@ -120,6 +151,31 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("22.03.2026", bot.calls[0]["text"])
         markup = bot.calls[0]["reply_markup"]
         self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim:2026-03-22")
+
+    async def test_lists_only_active_groups(self) -> None:
+        with self.SessionLocal() as db:
+            self.assertEqual(list_active_group_chat_ids(db), [-200, -100])
+
+    async def test_sends_incident_message_to_one_selected_group_once(self) -> None:
+        bot = _FakeBot()
+        first = await send_streak_restore_incident_message_to_chat(
+            bot,
+            self.SessionLocal,
+            chat_id=-100,
+            target_date=date(2026, 3, 22),
+        )
+        second = await send_streak_restore_incident_message_to_chat(
+            bot,
+            self.SessionLocal,
+            chat_id=-100,
+            target_date=date(2026, 3, 22),
+        )
+
+        self.assertEqual(len(bot.calls), 1)
+        self.assertEqual(first["sent"], 1)
+        self.assertFalse(first["duplicate"])
+        self.assertEqual(second["skipped"], 1)
+        self.assertTrue(second["duplicate"])
 
 
 if __name__ == "__main__":

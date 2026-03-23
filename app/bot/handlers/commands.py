@@ -30,6 +30,7 @@ from app.services.repo_service import (
     upsert_chat,
     upsert_user,
 )
+from app.services.scheduler_telegram import safe_edit_message_text
 from app.services.time_service import get_session_window, now_in_tz
 
 router = Router()
@@ -131,7 +132,8 @@ async def start_cmd(message: Message) -> None:
                     else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
                 )
                 has_any_members = True if is_private_chat else ("Участники:" in text)
-                await message.bot.edit_message_text(
+                await safe_edit_message_text(
+                    message.bot,
                     chat_id=chat_id,
                     message_id=q1_msg_id,
                     text=text,
@@ -232,7 +234,8 @@ async def help_cmd(message: Message) -> None:
 
     if existing_mid:
         try:
-            await message.bot.edit_message_text(
+            await safe_edit_message_text(
+                message.bot,
                 chat_id=chat_id,
                 message_id=existing_mid,
                 text=root_text,
@@ -299,7 +302,8 @@ async def stats_cmd(message: Message) -> None:
 
     if existing_mid:
         try:
-            await message.bot.edit_message_text(
+            await safe_edit_message_text(
+                message.bot,
                 chat_id=chat_id,
                 message_id=existing_mid,
                 text=text,
@@ -364,7 +368,8 @@ async def streak_admin_cmd(message: Message) -> None:
 
     if existing_mid:
         try:
-            await message.bot.edit_message_text(
+            await safe_edit_message_text(
+                message.bot,
                 chat_id=chat_id,
                 message_id=existing_mid,
                 text=text,

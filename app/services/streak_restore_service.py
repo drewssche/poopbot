@@ -165,9 +165,10 @@ async def send_streak_restore_incident_message_to_chat(
     *,
     chat_id: int,
     target_date: date,
+    force: bool = False,
 ) -> dict[str, int | bool]:
     with db_session(session_factory) as db:
-        if get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None:
+        if not force and get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None:
             return {"sent": 0, "skipped": 1, "failed": 0, "duplicate": True}
         try:
             sent = await safe_send_message(
@@ -197,6 +198,7 @@ async def send_streak_restore_incident_messages(
     target_date: date,
     scope: str,
     chat_throttle_sec: float = 0.2,
+    force: bool = False,
 ) -> dict[str, int]:
     if scope not in {"groups", "private"}:
         raise ValueError(f"Unsupported scope: {scope}")
@@ -217,7 +219,7 @@ async def send_streak_restore_incident_messages(
 
     for chat_id in chat_ids:
         with db_session(session_factory) as db:
-            if get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None:
+            if not force and get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None:
                 skipped_count += 1
                 continue
             try:

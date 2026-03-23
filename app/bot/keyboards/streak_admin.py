@@ -18,7 +18,9 @@ def streak_admin_kb(target_date: date) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="↩️ Отменить восстановление себе", callback_data=f"streakadmin:undo:{current_date}"))
     kb.row(InlineKeyboardButton(text="🎯 Выбрать группу", callback_data=f"streakadmin:groupmenu:0:{current_date}"))
     kb.row(InlineKeyboardButton(text="📨 Отправить во все группы", callback_data=f"streakadmin:send:groups:{current_date}"))
+    kb.row(InlineKeyboardButton(text="🔁 Повторно во все группы", callback_data=f"streakadmin:resend:groups:{current_date}"))
     kb.row(InlineKeyboardButton(text="💬 Отправить во все личные", callback_data=f"streakadmin:send:private:{current_date}"))
+    kb.row(InlineKeyboardButton(text="🔁 Повторно во все личные", callback_data=f"streakadmin:resend:private:{current_date}"))
     kb.row(InlineKeyboardButton(text="📊 Показать статус", callback_data=f"streakadmin:status:{current_date}"))
     return kb.as_markup()
 

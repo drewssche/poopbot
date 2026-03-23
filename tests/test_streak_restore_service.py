@@ -177,6 +177,53 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["skipped"], 1)
         self.assertTrue(second["duplicate"])
 
+    async def test_force_resend_selected_group_overwrites_mapping_and_sends_again(self) -> None:
+        bot = _FakeBot()
+        await send_streak_restore_incident_message_to_chat(
+            bot,
+            self.SessionLocal,
+            chat_id=-100,
+            target_date=date(2026, 3, 22),
+        )
+        resent = await send_streak_restore_incident_message_to_chat(
+            bot,
+            self.SessionLocal,
+            chat_id=-100,
+            target_date=date(2026, 3, 22),
+            force=True,
+        )
+
+        self.assertEqual(len(bot.calls), 2)
+        self.assertEqual(resent["sent"], 1)
+        self.assertFalse(resent["duplicate"])
+        with self.SessionLocal() as db:
+            self.assertEqual(
+                get_command_message_id(db, -100, 0, STREAK_RESTORE_INCIDENT_COMMAND, date(2026, 3, 22)),
+                2,
+            )
+
+    async def test_force_resend_all_groups_ignores_existing_dedup(self) -> None:
+        bot = _FakeBot()
+        await send_streak_restore_incident_messages(
+            bot,
+            self.SessionLocal,
+            target_date=date(2026, 3, 22),
+            scope="groups",
+            chat_throttle_sec=0,
+        )
+        resent = await send_streak_restore_incident_messages(
+            bot,
+            self.SessionLocal,
+            target_date=date(2026, 3, 22),
+            scope="groups",
+            chat_throttle_sec=0,
+            force=True,
+        )
+
+        self.assertEqual(len(bot.calls), 4)
+        self.assertEqual(resent["sent"], 2)
+        self.assertEqual(resent["skipped"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,6 @@ from app.bot.keyboards.streak_admin import streak_admin_group_picker_kb, streak_
 from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
-from app.services.q1_service import undo_restore_for_date
 from app.services.q1_service import undo_recent_streak_window
 from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.streak_restore_service import (
@@ -142,16 +141,15 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
                 _session_factory,
                 chat_id=chat_id,
                 target_date=target_date,
+                force=True,
             )
             if result["failed"]:
                 await cb.answer("Ошибка отправки", show_alert=True)
-            elif result["duplicate"]:
-                await cb.answer("В эту группу уже отправляли", show_alert=False)
             else:
-                await cb.answer(f"Отправлено в {chat_id}", show_alert=False)
+                await cb.answer("Сообщение отправлено в выбранную группу", show_alert=False)
             return
 
-        if action == "send":
+        if action in {"send", "resend"}:
             scope = parts[2]
             result = await send_streak_restore_incident_messages(
                 cb.bot,
@@ -159,8 +157,10 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
                 target_date=target_date,
                 scope=scope,
                 chat_throttle_sec=settings.scheduler_chat_throttle_sec,
+                force=(action == "resend"),
             )
-            scope_label = "все группы" if scope == "groups" else "все лички"
+            prefix = "повторно " if action == "resend" else ""
+            scope_label = f"{prefix}все группы" if scope == "groups" else f"{prefix}все лички"
             await cb.message.edit_text(
                 streak_admin_result_text(
                     scope_label,

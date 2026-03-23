@@ -25,7 +25,7 @@ from app.services.repo_service import (
     set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
-from app.services.q1_service import mention, render_q1, render_q1_private
+from app.services.q1_service import mention, render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.scheduler_reports import (
     build_periodic_report_text,
@@ -371,6 +371,13 @@ async def _post_q1(
         reply_markup=q1_keyboard(
             has_any_members,
             show_remind=show_remind,
+            show_restore_streak_button=should_show_restore_streak_button(
+                db,
+                chat_id=chat_id,
+                session_date=session_date,
+                viewer_user_id=chat_id if chat_id > 0 else None,
+                is_private_chat=chat_id > 0,
+            ),
             show_q2_q3_button=should_show_q2_q3_button(
                 db,
                 chat_q2_q3_enabled=bool(q2_q3_enabled),
@@ -546,6 +553,13 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
         reply_markup=q1_keyboard(
             has_any_members,
             show_remind=show_remind,
+            show_restore_streak_button=should_show_restore_streak_button(
+                db,
+                chat_id=chat_id,
+                session_date=session_date,
+                viewer_user_id=chat_id if chat_id > 0 else None,
+                is_private_chat=chat_id > 0,
+            ),
             show_q2_q3_button=should_show_q2_q3_button(
                 db,
                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled) if chat is not None else False,

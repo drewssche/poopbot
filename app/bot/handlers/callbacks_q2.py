@@ -15,7 +15,7 @@ from app.db.models import ChatMember, Session as DaySession, SessionMessage, Ses
 from app.db.session import db_session
 from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import ensure_events_count, list_events
-from app.services.q1_service import render_q1, render_q1_private
+from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import render_q2_text, render_q3_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.repo_service import (
@@ -220,6 +220,13 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                         reply_markup=q1_keyboard(
                             has_any_members=True,
                             show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                            show_restore_streak_button=should_show_restore_streak_button(
+                                db,
+                                chat_id=chat_id,
+                                session_date=sess.session_date,
+                                viewer_user_id=user.id,
+                                is_private_chat=True,
+                            ),
                             show_q2_q3_button=False,
                         ),
                     )
@@ -263,6 +270,13 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                     reply_markup=q1_keyboard(
                         has_any_members,
                         show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                        show_restore_streak_button=should_show_restore_streak_button(
+                            db,
+                            chat_id=chat_id,
+                            session_date=sess.session_date,
+                            viewer_user_id=None,
+                            is_private_chat=is_private_chat,
+                        ),
                         show_q2_q3_button=should_show_q2_q3_button(
                             db,
                             chat_q2_q3_enabled=bool(chat.q2_q3_enabled),

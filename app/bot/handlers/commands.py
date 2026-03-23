@@ -16,7 +16,7 @@ from app.services.command_message_service import (
     get_command_message_id,
     set_command_message_id,
 )
-from app.services.q1_service import render_q1, render_q1_private
+from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.recap_service import is_recap_available
 from app.services.repo_service import (
@@ -142,6 +142,13 @@ async def start_cmd(message: Message) -> None:
             text,
             reply_markup=q1_keyboard(
                 has_any_members,
+                show_restore_streak_button=should_show_restore_streak_button(
+                    db,
+                    chat_id=chat_id,
+                    session_date=window.session_date,
+                    viewer_user_id=user.id if is_private_chat else None,
+                    is_private_chat=is_private_chat,
+                ),
                 show_q2_q3_button=should_show_q2_q3_button(
                     db,
                     chat_q2_q3_enabled=bool(chat.q2_q3_enabled),

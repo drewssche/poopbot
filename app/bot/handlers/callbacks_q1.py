@@ -18,7 +18,14 @@ from app.services.command_message_service import (
 )
 from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import reconcile_events_count
-from app.services.q1_service import apply_minus, apply_plus, render_q1, render_q1_private
+from app.services.q1_service import (
+    apply_minus,
+    apply_plus,
+    render_q1,
+    render_q1_private,
+    restore_streak_for_user,
+    should_show_restore_streak_button,
+)
 from app.services.q2_q3_service import ensure_q2_q3_exist, render_q2_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.reminder_service import LATE_REMINDER_COMMAND
@@ -76,7 +83,7 @@ def _resolve_reminder_context(db, chat_id: int, current_sess, cb: CallbackQuery,
     return is_current_by_msg_id or is_current_by_reply or is_current_by_mapping
 
 
-@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:plus_late"}))
+@router.callback_query(F.data.in_({"q1:plus", "q1:minus", "q1:plus_late", "q1:restore_streak"}))
 async def q1_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
         return
@@ -99,7 +106,15 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 await cb.answer("Новая сессия начнётся в 00:05", show_alert=False)
                 return
 
-            if not check_rate_limit(db, chat_id=chat_id, user_id=user.id, scope="Q1", cooldown_seconds=2):
+            rate_limit_scope = "Q1_RESTORE" if cb.data == "q1:restore_streak" else "Q1"
+            cooldown_seconds = 4 if cb.data == "q1:restore_streak" else 2
+            if not check_rate_limit(
+                db,
+                chat_id=chat_id,
+                user_id=user.id,
+                scope=rate_limit_scope,
+                cooldown_seconds=cooldown_seconds,
+            ):
                 await cb.answer("Не так быстро, здоровяк", show_alert=False)
                 return
 
@@ -149,7 +164,11 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
 
             touched_sessions: list[tuple[int, int]] = []
 
-            if cb.data == "q1:minus":
+            if cb.data == "q1:restore_streak":
+                ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
+                changed, popup = restore_streak_for_user(db, chat_id, user.id, current_sess.session_date)
+                await cb.answer(popup, show_alert=False)
+            elif cb.data == "q1:minus":
                 changed, popup = apply_minus(db, sess.session_id, user.id)
                 await cb.answer(popup, show_alert=False)
             else:
@@ -159,16 +178,17 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     popup = "Кофейку и цигарку бахнул? Красава"
                 await cb.answer(popup, show_alert=False)
 
-            state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
-            reconcile_events_count(
-                db,
-                session_id=sess.session_id,
-                user_id=user.id,
-                poops_n=int(state.poops_n) if state else 0,
-                origin_chat_id=chat_id,
-            )
+            if cb.data != "q1:restore_streak":
+                state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
+                reconcile_events_count(
+                    db,
+                    session_id=sess.session_id,
+                    user_id=user.id,
+                    poops_n=int(state.poops_n) if state else 0,
+                    origin_chat_id=chat_id,
+                )
 
-            if changed:
+            if changed and cb.data != "q1:restore_streak":
                 touched_sessions = sync_user_state_across_member_chats(
                     db,
                     source_chat_id=chat_id,
@@ -193,6 +213,13 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         reply_markup=q1_keyboard(
                             has_any_members,
                             show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                            show_restore_streak_button=should_show_restore_streak_button(
+                                db,
+                                chat_id=chat_id,
+                                session_date=sess.session_date,
+                                viewer_user_id=user.id if is_private_chat else None,
+                                is_private_chat=is_private_chat,
+                            ),
                             show_q2_q3_button=should_show_q2_q3_button(
                                 db,
                                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
@@ -208,6 +235,13 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         reply_markup=q1_keyboard(
                             has_any_members,
                             show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                            show_restore_streak_button=should_show_restore_streak_button(
+                                db,
+                                chat_id=chat_id,
+                                session_date=sess.session_date,
+                                viewer_user_id=user.id if is_private_chat else None,
+                                is_private_chat=is_private_chat,
+                            ),
                             show_q2_q3_button=should_show_q2_q3_button(
                                 db,
                                 chat_q2_q3_enabled=bool(chat.q2_q3_enabled),
@@ -221,7 +255,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
 
-            if is_private_chat and cb.data != "q1:minus" and changed:
+            if is_private_chat and cb.data not in {"q1:minus", "q1:restore_streak"} and changed:
                 state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
                 target_n = max(1, int(state.poops_n)) if state is not None else 1
                 try:
@@ -320,6 +354,13 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
                         text=q1_text,
                         reply_markup=q1_keyboard(
                             has_any_members,
+                            show_restore_streak_button=should_show_restore_streak_button(
+                                db,
+                                chat_id=chat_id,
+                                session_date=sess.session_date,
+                                viewer_user_id=cb.from_user.id if cb.message.chat.type == "private" else None,
+                                is_private_chat=cb.message.chat.type == "private",
+                            ),
                             show_q2_q3_button=False,
                         ),
                     )
@@ -341,6 +382,13 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
                         text=q1_text,
                         reply_markup=q1_keyboard(
                             has_any_members,
+                            show_restore_streak_button=should_show_restore_streak_button(
+                                db,
+                                chat_id=chat_id,
+                                session_date=sess.session_date,
+                                viewer_user_id=cb.from_user.id if cb.message.chat.type == "private" else None,
+                                is_private_chat=cb.message.chat.type == "private",
+                            ),
                             show_q2_q3_button=False,
                         ),
                     )

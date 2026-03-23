@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -69,11 +69,32 @@ def create_event(db: Session, session_id: int, user_id: int, event_n: int, origi
 
         origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
 
+    dialect_name = db.bind.dialect.name if db.bind is not None else ""
+    if dialect_name == "postgresql":
+        db.execute(
+            pg_insert(PoopEvent)
+            .values(session_id=session_id, user_id=user_id, event_n=event_n, origin_chat_id=origin_chat_id)
+            .on_conflict_do_nothing(
+                index_elements=["session_id", "user_id", "event_n"]
+            )
+        )
+        return
+
+    exists = db.scalar(
+        select(PoopEvent.id).where(
+            PoopEvent.session_id == session_id,
+            PoopEvent.user_id == user_id,
+            PoopEvent.event_n == event_n,
+        ).limit(1)
+    )
+    if exists is not None:
+        return
     db.execute(
-        pg_insert(PoopEvent)
-        .values(session_id=session_id, user_id=user_id, event_n=event_n, origin_chat_id=origin_chat_id)
-        .on_conflict_do_nothing(
-            index_elements=["session_id", "user_id", "event_n"]
+        insert(PoopEvent).values(
+            session_id=session_id,
+            user_id=user_id,
+            event_n=event_n,
+            origin_chat_id=origin_chat_id,
         )
     )
 

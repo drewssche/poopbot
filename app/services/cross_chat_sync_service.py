@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.models import Chat, ChatMember, Session as DaySession, SessionUserState
 from app.services.poop_event_service import list_events, reconcile_events_count
-from app.services.q1_service import render_q1, render_q1_private
+from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.repo_service import get_or_create_session, get_or_create_session_user_state, get_session_message_id
 from app.services.time_service import get_session_window
@@ -108,6 +108,13 @@ async def refresh_synced_chats_views(bot: Bot, db: Session, touched_sessions: li
                     text=text,
                     reply_markup=q1_keyboard(
                         has_any_members,
+                        show_restore_streak_button=should_show_restore_streak_button(
+                            db,
+                            chat_id=chat_id,
+                            session_date=sess.session_date,
+                            viewer_user_id=chat_id if chat_id > 0 else None,
+                            is_private_chat=chat_id > 0,
+                        ),
                         show_q2_q3_button=should_show_q2_q3_button(
                             db,
                             chat_q2_q3_enabled=bool(chat.q2_q3_enabled) if chat is not None else False,

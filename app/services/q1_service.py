@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User
-from app.services.poop_event_service import create_event, delete_event
+from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
+from app.services.poop_event_service import create_event, delete_event, reconcile_events_count
 
 
 BRISTOL_EMOJI = {
@@ -39,6 +39,141 @@ def _streak_until_yesterday(days: list[date], day: date) -> int:
         run += 1
         idx -= 1
     return run
+
+
+def _trailing_streak(days: list[date]) -> int:
+    if not days:
+        return 0
+    run = 1
+    idx = len(days) - 2
+    while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
+        run += 1
+        idx -= 1
+    return run
+
+
+def _chat_origin_days_before(db: Session, chat_id: int, user_id: int, before_date: date) -> list[date]:
+    return [
+        d
+        for d in db.scalars(
+            select(DaySession.session_date)
+            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date < before_date,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .group_by(DaySession.session_date)
+            .order_by(DaySession.session_date.asc())
+        ).all()
+    ]
+
+
+def restore_streak_target_date(db: Session, chat_id: int, user_id: int, current_session_date: date) -> date | None:
+    days = _chat_origin_days_before(db, chat_id, user_id, current_session_date)
+    if not days:
+        return None
+
+    day_before_yesterday = current_session_date - timedelta(days=2)
+    if days[-1] != day_before_yesterday:
+        return None
+
+    return current_session_date - timedelta(days=1)
+
+
+def should_show_restore_streak_button(
+    db: Session,
+    *,
+    chat_id: int,
+    session_date: date,
+    viewer_user_id: int | None,
+    is_private_chat: bool,
+) -> bool:
+    if is_private_chat:
+        if viewer_user_id is None:
+            return False
+        return restore_streak_target_date(db, chat_id, viewer_user_id, session_date) is not None
+
+    user_ids = db.scalars(select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)).all()
+    return any(
+        restore_streak_target_date(db, chat_id, int(user_id), session_date) is not None
+        for user_id in user_ids
+    )
+
+
+def _refresh_user_streak_cache_before_current_day(
+    db: Session,
+    *,
+    chat_id: int,
+    user_id: int,
+    current_session_date: date,
+) -> None:
+    streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": user_id})
+    if streak is None:
+        streak = UserStreak(chat_id=chat_id, user_id=user_id, current_streak=0, last_poop_date=None)
+        db.add(streak)
+        db.flush()
+
+    days = _chat_origin_days_before(db, chat_id, user_id, current_session_date)
+    if not days:
+        streak.current_streak = 0
+        streak.last_poop_date = None
+        return
+
+    last_day = days[-1]
+    streak.last_poop_date = last_day
+    streak.current_streak = _trailing_streak(days) if last_day == (current_session_date - timedelta(days=1)) else 0
+
+
+def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_session_date: date) -> tuple[bool, str]:
+    restore_date = restore_streak_target_date(db, chat_id, user_id, current_session_date)
+    if restore_date is None:
+        return False, "Тебе нечего восстанавливать"
+
+    sess = db.scalar(
+        select(DaySession).where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date == restore_date,
+        )
+    )
+    if sess is None:
+        sess = DaySession(
+            chat_id=chat_id,
+            session_date=restore_date,
+            status="closed",
+            start_at=datetime.utcnow(),
+            end_at=datetime.utcnow(),
+        )
+        db.add(sess)
+        db.flush()
+
+    state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user_id})
+    if state is None:
+        state = SessionUserState(session_id=sess.session_id, user_id=user_id, poops_n=1)
+        db.add(state)
+    elif int(state.poops_n or 0) > 0:
+        return False, "За вчера уже есть отметка"
+    else:
+        state.poops_n = 1
+        state.achievement_text = None
+        state.bristol = None
+        state.feeling = None
+
+    reconcile_events_count(
+        db,
+        session_id=sess.session_id,
+        user_id=user_id,
+        poops_n=int(state.poops_n or 0),
+        origin_chat_id=chat_id,
+    )
+    _refresh_user_streak_cache_before_current_day(
+        db,
+        chat_id=chat_id,
+        user_id=user_id,
+        current_session_date=current_session_date,
+    )
+    return True, "Стрик за вчера восстановлен"
 
 
 def mention(u: User) -> str:

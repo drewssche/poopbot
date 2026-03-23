@@ -9,7 +9,7 @@ from app.bot.handlers.help_content import global_visibility_text, notifications_
 from app.bot.keyboards.help import help_global_visibility_kb, help_notifications_kb
 from app.bot.keyboards.q1 import q1_keyboard
 from app.db.session import db_session
-from app.services.q1_service import render_q1, render_q1_private
+from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.repo_service import get_or_create_session, get_session_message_id
 from app.services.time_service import get_session_window, now_in_tz
@@ -97,6 +97,13 @@ async def refresh_q1_after_settings_change(
                 reply_markup=q1_keyboard(
                     has_any_members,
                     show_remind=now_in_tz(chat.timezone).time().hour < 22,
+                    show_restore_streak_button=should_show_restore_streak_button(
+                        db,
+                        chat_id=chat_id,
+                        session_date=sess.session_date,
+                        viewer_user_id=actor_id if is_private_chat else None,
+                        is_private_chat=is_private_chat,
+                    ),
                     show_q2_q3_button=should_show_q2_q3_button(
                         db,
                         chat_q2_q3_enabled=bool(chat.q2_q3_enabled),

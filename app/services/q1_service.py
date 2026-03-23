@@ -197,6 +197,37 @@ def restore_streak_for_date(db: Session, chat_id: int, user_id: int, restore_dat
     return True, f"Стрик за {restore_date.strftime('%d.%m')} восстановлен"
 
 
+def undo_restore_for_date(db: Session, chat_id: int, user_id: int, restore_date: date) -> tuple[bool, str]:
+    sess = db.scalar(
+        select(DaySession).where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date == restore_date,
+        )
+    )
+    if sess is None:
+        return False, "За этот день нечего отменять"
+
+    state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user_id})
+    if state is None or int(state.poops_n or 0) <= 0:
+        return False, "За этот день нечего отменять"
+
+    while int(state.poops_n or 0) > 0:
+        delete_event(db, session_id=sess.session_id, user_id=user_id, event_n=int(state.poops_n))
+        state.poops_n -= 1
+
+    state.achievement_text = None
+    state.bristol = None
+    state.feeling = None
+
+    _refresh_user_streak_cache_before_current_day(
+        db,
+        chat_id=chat_id,
+        user_id=user_id,
+        current_session_date=restore_date + timedelta(days=1),
+    )
+    return True, f"Восстановление за {restore_date.strftime('%d.%m')} отменено"
+
+
 def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_session_date: date) -> tuple[bool, str]:
     restore_date = restore_streak_target_date(db, chat_id, user_id, current_session_date)
     if restore_date is None:

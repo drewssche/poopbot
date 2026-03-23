@@ -12,6 +12,8 @@ from app.db.models import Chat
 from app.services.command_message_service import get_command_message_id
 from app.services.streak_restore_service import (
     STREAK_RESTORE_INCIDENT_COMMAND,
+    detect_suspected_streak_incident_dates,
+    send_streak_restore_battle_message,
     send_streak_restore_incident_messages,
 )
 
@@ -78,6 +80,46 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(bot.calls), 2)
+
+    async def test_detects_single_missing_day_as_top_candidate(self) -> None:
+        with self.SessionLocal() as db:
+            from app.db.models import PoopEvent, Session as DaySession
+
+            sessions: dict[tuple[int, date], int] = {}
+            for chat_id in (-100, -200):
+                for session_date in (date(2026, 3, 21), date(2026, 3, 23)):
+                    sess = DaySession(chat_id=chat_id, session_date=session_date, status="closed")
+                    db.add(sess)
+                    db.flush()
+                    sessions[(chat_id, session_date)] = int(sess.session_id)
+
+            for chat_id, user_id in [(-100, 10), (-100, 11), (-200, 20)]:
+                for session_date in (date(2026, 3, 21), date(2026, 3, 23)):
+                    db.add(
+                        PoopEvent(
+                            session_id=sessions[(chat_id, session_date)],
+                            user_id=user_id,
+                            event_n=1,
+                            origin_chat_id=chat_id,
+                        )
+                    )
+            db.commit()
+
+            candidates = detect_suspected_streak_incident_dates(db, today=date(2026, 3, 24))
+
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0]["date"], "2026-03-22")
+        self.assertEqual(candidates[0]["total"], 3)
+
+    async def test_battle_message_uses_real_restore_callback(self) -> None:
+        bot = _FakeBot()
+        await send_streak_restore_battle_message(bot, owner_chat_id=42, target_date=date(2026, 3, 22))
+
+        self.assertEqual(len(bot.calls), 1)
+        self.assertEqual(bot.calls[0]["chat_id"], 42)
+        self.assertIn("22.03.2026", bot.calls[0]["text"])
+        markup = bot.calls[0]["reply_markup"]
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim:2026-03-22")
 
 
 if __name__ == "__main__":

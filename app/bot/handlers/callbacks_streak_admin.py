@@ -11,10 +11,17 @@ from app.bot.keyboards.streak_admin import streak_admin_kb
 from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
+from app.services.q1_service import undo_restore_for_date
+from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.streak_restore_service import (
     collect_streak_restore_incident_stats,
+    detect_suspected_streak_incident_dates,
+    send_streak_restore_battle_message,
     send_streak_restore_incident_messages,
+    send_streak_restore_preview_message,
 )
+from app.services.time_service import get_session_window
+from app.services.repo_service import upsert_chat
 
 router = Router()
 
@@ -49,9 +56,19 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
 
     try:
         if action == "date":
-            target_date = date.fromisoformat(parts[2])
+            if parts[2] == "auto":
+                with db_session(_session_factory) as db:
+                    candidates = detect_suspected_streak_incident_dates(db, today=date.today())
+                if candidates:
+                    target_date = date.fromisoformat(str(candidates[0]["date"]))
+                else:
+                    target_date = date.today()
+            else:
+                target_date = date.fromisoformat(parts[2])
+            with db_session(_session_factory) as db:
+                candidates = detect_suspected_streak_incident_dates(db, today=date.today())
             await cb.message.edit_text(
-                streak_admin_text(target_date),
+                streak_admin_text(target_date, candidates=candidates),
                 reply_markup=streak_admin_kb(target_date),
                 parse_mode="Markdown",
             )
@@ -59,6 +76,24 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
             return
 
         target_date = date.fromisoformat(parts[-1])
+        if action == "preview":
+            await send_streak_restore_preview_message(cb.bot, owner_chat_id=cb.message.chat.id, target_date=target_date)
+            await cb.answer("Превью отправлено в эту личку", show_alert=False)
+            return
+        if action == "battle":
+            await send_streak_restore_battle_message(cb.bot, owner_chat_id=cb.message.chat.id, target_date=target_date)
+            await cb.answer("Боевое сообщение отправлено в эту личку", show_alert=False)
+            return
+        if action == "undo":
+            with db_session(_session_factory) as db:
+                chat = upsert_chat(db, chat_id=cb.message.chat.id)
+                changed, message = undo_restore_for_date(db, cb.message.chat.id, cb.from_user.id, target_date)
+                db.commit()
+                if changed:
+                    current_session_date = get_session_window(chat.timezone).session_date
+                    await _refresh_current_q1_view(cb.bot, db, cb.message.chat.id, current_session_date)
+            await cb.answer(message, show_alert=not changed)
+            return
         if action == "status":
             with db_session(_session_factory) as db:
                 stats = collect_streak_restore_incident_stats(db, target_date=target_date)

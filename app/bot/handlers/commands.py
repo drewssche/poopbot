@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
@@ -358,8 +358,12 @@ async def streak_admin_cmd(message: Message) -> None:
         today = now_in_tz(chat.timezone).date()
         target_date = today - timedelta(days=1)
         existing_mid = get_command_message_id(db, chat_id, user.id, "streak_admin", today)
+        from app.services.streak_restore_service import detect_suspected_streak_incident_dates
+        candidates = detect_suspected_streak_incident_dates(db, today=today)
+        if candidates:
+            target_date = date.fromisoformat(str(candidates[0]["date"]))
 
-    text = streak_admin_text(target_date)
+    text = streak_admin_text(target_date, candidates=candidates)
     kb = streak_admin_kb(target_date)
 
     if existing_mid:

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from aiogram import Bot
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.bot.keyboards.streak_restore import streak_restore_keyboard
-from app.db.models import Chat
+from app.bot.keyboards.streak_restore import streak_restore_keyboard, streak_restore_preview_keyboard
+from app.db.models import Chat, PoopEvent, Session as DaySession
 from app.db.session import db_session
 from app.services.command_message_service import get_command_message_id, set_command_message_id
 from app.services.scheduler_telegram import safe_send_message
@@ -24,6 +24,66 @@ def streak_restore_message_text(target_date: date) -> str:
         f"Если у тебя сломался стрик из-за пропуска за {target_date.strftime('%d.%m.%Y')}, "
         "нажми кнопку ниже. Бот проверит, можно ли восстановить день именно тебе."
     )
+
+
+def streak_restore_preview_text(target_date: date) -> str:
+    return (
+        "👀 Превью сообщения восстановления\n\n"
+        f"Дата инцидента: {target_date.strftime('%d.%m.%Y')}\n\n"
+        "Ниже показано, как будет выглядеть сообщение в чате. "
+        "Кнопка в превью не восстанавливает стрик."
+    )
+
+
+def detect_suspected_streak_incident_dates(db, *, today: date, lookback_days: int = 21, limit: int = 5) -> list[dict[str, int | str]]:
+    start_date = today - timedelta(days=max(3, lookback_days))
+    rows = db.execute(
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.session_date >= start_date,
+            DaySession.session_date <= today,
+            PoopEvent.origin_chat_id == DaySession.chat_id,
+        )
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+    ).all()
+
+    days_by_actor: dict[tuple[int, int], list[date]] = {}
+    for chat_id, user_id, session_date in rows:
+        days_by_actor.setdefault((int(chat_id), int(user_id)), []).append(session_date)
+
+    counters: dict[date, dict[str, int]] = {}
+    for (chat_id, _user_id), days in days_by_actor.items():
+        for idx in range(1, len(days)):
+            prev_day = days[idx - 1]
+            next_day = days[idx]
+            if next_day - prev_day != timedelta(days=2):
+                continue
+            missing_day = prev_day + timedelta(days=1)
+            if missing_day >= today:
+                continue
+            bucket = counters.setdefault(missing_day, {"total": 0, "groups": 0, "private": 0})
+            bucket["total"] += 1
+            if chat_id < 0:
+                bucket["groups"] += 1
+            else:
+                bucket["private"] += 1
+
+    ranked = sorted(
+        (
+            {
+                "date": day.isoformat(),
+                "total": counts["total"],
+                "groups": counts["groups"],
+                "private": counts["private"],
+            }
+            for day, counts in counters.items()
+            if counts["total"] > 0
+        ),
+        key=lambda item: (-int(item["total"]), str(item["date"])),
+    )
+    return ranked[:limit]
 
 
 def collect_streak_restore_incident_stats(db, *, target_date: date) -> dict[str, int]:
@@ -49,6 +109,26 @@ def collect_streak_restore_incident_stats(db, *, target_date: date) -> dict[str,
             if get_command_message_id(db, int(chat_id), 0, STREAK_RESTORE_INCIDENT_COMMAND, target_date) is not None
         ),
     }
+
+
+async def send_streak_restore_preview_message(bot: Bot, *, owner_chat_id: int, target_date: date) -> int:
+    sent = await safe_send_message(
+        bot,
+        chat_id=owner_chat_id,
+        text=streak_restore_preview_text(target_date),
+        reply_markup=streak_restore_preview_keyboard(target_date.isoformat()),
+    )
+    return int(sent.message_id)
+
+
+async def send_streak_restore_battle_message(bot: Bot, *, owner_chat_id: int, target_date: date) -> int:
+    sent = await safe_send_message(
+        bot,
+        chat_id=owner_chat_id,
+        text=streak_restore_message_text(target_date),
+        reply_markup=streak_restore_keyboard(target_date.isoformat()),
+    )
+    return int(sent.message_id)
 
 
 async def send_streak_restore_incident_messages(

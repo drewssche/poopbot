@@ -14,6 +14,7 @@ from app.services.q1_service import (
     restore_streak_for_user,
     restore_streak_target_date,
     should_show_restore_streak_button,
+    undo_restore_for_date,
 )
 
 
@@ -199,6 +200,36 @@ class RestoreStreakTests(unittest.TestCase):
 
         assert changed is True
         assert "Стрик в этой личке: 3 дн." in text
+
+    def test_undo_restore_removes_backfilled_day_and_live_streak_falls_back(self) -> None:
+        chat_id = 7
+        today = date(2026, 3, 23)
+        self._add_chat(chat_id)
+        self._add_user(chat_id)
+        self._add_day(chat_id=chat_id, user_id=chat_id, session_date=date(2026, 3, 21), with_event=True)
+        self._add_day(chat_id=chat_id, user_id=chat_id, session_date=today, with_event=True)
+        self.db.commit()
+
+        changed, _message = restore_streak_for_user(self.db, chat_id, chat_id, today)
+        self.db.commit()
+        self.assertTrue(changed)
+
+        undone, undo_message = undo_restore_for_date(self.db, chat_id, chat_id, date(2026, 3, 22))
+        self.db.commit()
+
+        today_sess = self.db.query(DaySession).filter_by(chat_id=chat_id, session_date=today).one()
+        restored_sess = self.db.query(DaySession).filter_by(chat_id=chat_id, session_date=date(2026, 3, 22)).one()
+        restored_state = self.db.get(SessionUserState, {"session_id": restored_sess.session_id, "user_id": chat_id})
+        text = render_q1_private(self.db, chat_id=chat_id, session_id=today_sess.session_id, user_id=chat_id, session_date=today)
+
+        self.assertTrue(undone)
+        self.assertEqual(undo_message, "Восстановление за 22.03 отменено")
+        self.assertEqual(int(restored_state.poops_n), 0)
+        self.assertEqual(
+            self.db.query(PoopEvent).filter_by(session_id=restored_sess.session_id, user_id=chat_id).count(),
+            0,
+        )
+        self.assertIn("Стрик в этой личке: 1 дн.", text)
 
     def test_group_restore_button_visible_when_any_member_is_eligible(self) -> None:
         chat_id = -100

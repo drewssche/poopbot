@@ -22,6 +22,8 @@ from app.bot.handlers.commands import router as commands_router
 from app.bot.handlers.callbacks_q1 import router as callbacks_q1_router
 from app.bot.handlers.callbacks_q2 import router as callbacks_q2_router
 from app.bot.handlers.callbacks_q3 import router as callbacks_q3_router
+from app.bot.handlers.callbacks_restore import router as callbacks_restore_router
+from app.bot.handlers.callbacks_streak_admin import router as callbacks_streak_admin_router
 from app.bot.handlers.callbacks_help import router as callbacks_help_router
 from app.bot.handlers.callbacks_recap import router as callbacks_recap_router
 from app.bot.handlers.callbacks_stats import router as callbacks_stats_router
@@ -240,6 +242,8 @@ async def run_bot(settings: Settings) -> None:
     dp.include_router(callbacks_q1_router)
     dp.include_router(callbacks_q2_router)
     dp.include_router(callbacks_q3_router)
+    dp.include_router(callbacks_restore_router)
+    dp.include_router(callbacks_streak_admin_router)
     dp.include_router(callbacks_help_router)
     dp.include_router(callbacks_recap_router)
     dp.include_router(callbacks_stats_router)

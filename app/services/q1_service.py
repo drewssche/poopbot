@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import random
 from datetime import date, datetime, timedelta
 
@@ -70,16 +71,33 @@ def _chat_origin_days_before(db: Session, chat_id: int, user_id: int, before_dat
     ]
 
 
-def restore_streak_target_date(db: Session, chat_id: int, user_id: int, current_session_date: date) -> date | None:
-    days = _chat_origin_days_before(db, chat_id, user_id, current_session_date)
+def can_restore_streak_for_date(db: Session, chat_id: int, user_id: int, restore_date: date) -> bool:
+    days = _chat_origin_days_before(db, chat_id, user_id, restore_date)
     if not days:
-        return None
+        return False
 
-    day_before_yesterday = current_session_date - timedelta(days=2)
-    if days[-1] != day_before_yesterday:
-        return None
+    day_before_target = restore_date - timedelta(days=1)
+    if days[-1] != day_before_target:
+        return False
 
-    return current_session_date - timedelta(days=1)
+    return not bool(
+        db.scalar(
+            select(PoopEvent.id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == restore_date,
+                PoopEvent.user_id == user_id,
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .limit(1)
+        )
+    )
+
+
+def restore_streak_target_date(db: Session, chat_id: int, user_id: int, current_session_date: date) -> date | None:
+    restore_date = current_session_date - timedelta(days=1)
+    return restore_date if can_restore_streak_for_date(db, chat_id, user_id, restore_date) else None
 
 
 def should_show_restore_streak_button(
@@ -90,6 +108,9 @@ def should_show_restore_streak_button(
     viewer_user_id: int | None,
     is_private_chat: bool,
 ) -> bool:
+    if (os.getenv("Q1_RESTORE_BUTTON_ENABLED") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+
     if is_private_chat:
         if viewer_user_id is None:
             return False
@@ -126,11 +147,11 @@ def _refresh_user_streak_cache_before_current_day(
     streak.current_streak = _trailing_streak(days) if last_day == (current_session_date - timedelta(days=1)) else 0
 
 
-def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_session_date: date) -> tuple[bool, str]:
-    restore_date = restore_streak_target_date(db, chat_id, user_id, current_session_date)
-    if restore_date is None:
+def restore_streak_for_date(db: Session, chat_id: int, user_id: int, restore_date: date) -> tuple[bool, str]:
+    if not can_restore_streak_for_date(db, chat_id, user_id, restore_date):
         return False, "Тебе нечего восстанавливать"
 
+    current_session_date = restore_date + timedelta(days=1)
     sess = db.scalar(
         select(DaySession).where(
             DaySession.chat_id == chat_id,
@@ -153,7 +174,7 @@ def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_ses
         state = SessionUserState(session_id=sess.session_id, user_id=user_id, poops_n=1)
         db.add(state)
     elif int(state.poops_n or 0) > 0:
-        return False, "За вчера уже есть отметка"
+        return False, "За нужный день уже есть отметка"
     else:
         state.poops_n = 1
         state.achievement_text = None
@@ -173,6 +194,16 @@ def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_ses
         user_id=user_id,
         current_session_date=current_session_date,
     )
+    return True, f"Стрик за {restore_date.strftime('%d.%m')} восстановлен"
+
+
+def restore_streak_for_user(db: Session, chat_id: int, user_id: int, current_session_date: date) -> tuple[bool, str]:
+    restore_date = restore_streak_target_date(db, chat_id, user_id, current_session_date)
+    if restore_date is None:
+        return False, "Тебе нечего восстанавливать"
+    changed, message = restore_streak_for_date(db, chat_id, user_id, restore_date)
+    if not changed:
+        return changed, message
     return True, "Стрик за вчера восстановлен"
 
 

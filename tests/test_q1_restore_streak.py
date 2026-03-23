@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.db.models import Chat, ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
-from app.services.q1_service import restore_streak_for_user, restore_streak_target_date, should_show_restore_streak_button
+from app.services.q1_service import (
+    render_q1_private,
+    restore_streak_for_user,
+    restore_streak_target_date,
+    should_show_restore_streak_button,
+)
 
 
 class RestoreStreakTests(unittest.TestCase):
@@ -16,8 +22,11 @@ class RestoreStreakTests(unittest.TestCase):
         self.engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
         Base.metadata.create_all(self.engine)
         self.db = Session(self.engine)
+        self.env_patch = patch.dict("os.environ", {"Q1_RESTORE_BUTTON_ENABLED": "true"}, clear=False)
+        self.env_patch.start()
 
     def tearDown(self) -> None:
+        self.env_patch.stop()
         self.db.close()
         self.engine.dispose()
 
@@ -172,6 +181,24 @@ class RestoreStreakTests(unittest.TestCase):
         assert first_changed is True
         assert second_changed is False
         assert second_message == "Тебе нечего восстанавливать"
+
+    def test_restore_streak_preserves_today_positive_answer_in_live_streak(self) -> None:
+        chat_id = 7
+        today = date(2026, 3, 23)
+        self._add_chat(chat_id)
+        self._add_user(chat_id)
+        self._add_day(chat_id=chat_id, user_id=chat_id, session_date=date(2026, 3, 21), with_event=True)
+        self._add_day(chat_id=chat_id, user_id=chat_id, session_date=today, with_event=True)
+        self.db.commit()
+
+        changed, _message = restore_streak_for_user(self.db, chat_id, chat_id, today)
+        self.db.commit()
+
+        today_sess = self.db.query(DaySession).filter_by(chat_id=chat_id, session_date=today).one()
+        text = render_q1_private(self.db, chat_id=chat_id, session_id=today_sess.session_id, user_id=chat_id, session_date=today)
+
+        assert changed is True
+        assert "Стрик в этой личке: 3 дн." in text
 
     def test_group_restore_button_visible_when_any_member_is_eligible(self) -> None:
         chat_id = -100

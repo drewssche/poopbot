@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import SessionUserState, User
+from app.db.models import PoopEvent, SessionUserState, User
 from app.services.stats_common import (
     Range,
     estimate_waste_metrics,

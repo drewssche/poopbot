@@ -20,10 +20,12 @@ from app.db.models import Chat, User, ChatMember, Session as DaySession, Session
 from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.repo_service import get_or_create_session, get_session_message_id, set_session_message_id
 from app.services.time_service import get_session_window
+import os
 
-BOT_TOKEN = "8773583504:AAHOnDTuydTeRiwUSB_sHF-75zyT3e1lqe4"
+# Токен и ID берутся из переменных окружения для безопасности
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = "postgresql+psycopg://poopbot:super_strong_password@db:5432/poopbot"
-TEST_OWNER_ID = 281896361  # Из .env
+TEST_OWNER_ID = int(os.getenv("TEST_OWNER_ID", "0"))
 
 
 async def test_bot_connection(bot: Bot) -> bool:

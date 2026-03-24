@@ -39,6 +39,7 @@ from app.services.stats_service import (
     format_mass,
     format_water,
 )
+from app.services.stats_rankings import collect_among_chats_slot_patterns
 from app.services.time_service import now_in_tz
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ async def stats_callbacks(cb: CallbackQuery) -> None:
 async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, offset: int = 0) -> str:
     from app.db.models import Chat
     from app.db.models import Session as DaySession
+    from app.services.time_service import get_slot_emoji
 
     cur_chat = db.get(Chat, cb.message.chat.id)
     tz = cur_chat.timezone if cur_chat else "Europe/Minsk"
@@ -258,6 +260,9 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
         r = period_to_range(anchor, period)
         snap = collect_among_chats_snapshot(db, today=anchor, r=r)
         period_text = f"Период: {period_label(period)} ({r.start.strftime('%d.%m.%y')}–{r.end.strftime('%d.%m.%y')})"
+        
+        # Собираем паттерны по слотам
+        chat_slot_counts, total_slot_counts = collect_among_chats_slot_patterns(db, r)
     else:
         snap = collect_among_chats_snapshot(db, today)
         bot_start = db.scalar(select(func.min(DaySession.session_date)))
@@ -266,6 +271,7 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
             if bot_start is not None
             else "Период: за всё время"
         )
+        chat_slot_counts, total_slot_counts = {}, {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
 
     ids = set()
     ids.update(chat_id for chat_id, _ in snap["top_total"])
@@ -339,6 +345,23 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
         lines.append(f"- {chat_name(cid)} — {d.strftime('%d.%m.%y')} (💩({poops}))")
     else:
         lines.append("- пока нет данных")
+
+    # Добавляем блок паттернов по всем чатам
+    total_all = sum(total_slot_counts.values())
+    if total_all > 0:
+        lines.extend(["", "🕐 Всего по слотам (все чаты):"])
+        labels = [
+            ("night", "🌙 Ночь (00–06)"),
+            ("morning", "🌅 Утро (06–12)"),
+            ("afternoon", "☀️ День (12–18)"),
+            ("evening", "🌆 Вечер (18–24)"),
+        ]
+        peak_slot = max(total_slot_counts.keys(), key=lambda s: total_slot_counts.get(s, 0))
+        for slot, label in labels:
+            count = total_slot_counts.get(slot, 0)
+            pct = (count / total_all * 100) if total_all > 0 else 0
+            peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
+            lines.append(f"{label}:   {count} раз ({pct:.0f}%){peak_marker}")
 
     lines.extend(["", "Бристоль-экстрим:"])
     most_liquid = snap.get("most_liquid")

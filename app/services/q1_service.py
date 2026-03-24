@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 from app.services.poop_event_service import create_event, delete_event, reconcile_events_count
+from app.services.time_service import (
+    get_time_slot,
+    get_slot_emoji,
+    get_slot_title,
+    get_dominant_slot,
+)
 
 RESTORE_WINDOW_DAYS = 7
 RESTORE_MARKER = "__streak_restore_recent__"
@@ -28,6 +34,46 @@ FEELING_EMOJI = {
     "ok": "😐",
     "bad": "😫",
 }
+
+
+def _get_user_slot_counts(db: Session, session_id: int, user_id: int, tz_name: str = "Europe/Minsk") -> dict[str, int]:
+    """Подсчитывает события пользователя по временным слотам."""
+    events = db.scalars(
+        select(PoopEvent).where(
+            PoopEvent.session_id == session_id,
+            PoopEvent.user_id == user_id
+        ).order_by(PoopEvent.created_at.asc())
+    ).all()
+    
+    slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    for ev in events:
+        if ev.created_at:
+            slot = get_time_slot(ev.created_at, tz_name)
+            slot_counts[slot] = slot_counts.get(slot, 0) + 1
+    
+    return slot_counts
+
+
+def _format_slot_counts(slot_counts: dict[str, int]) -> str:
+    """Форматирует счётчики слотов для отображения."""
+    parts = []
+    for slot in ["night", "morning", "afternoon", "evening"]:
+        count = slot_counts.get(slot, 0)
+        if count > 0:
+            emoji = get_slot_emoji(slot)
+            parts.append(f"{emoji} {count}")
+    
+    return " • ".join(parts) if parts else ""
+
+
+def _get_user_title(slot_counts: dict[str, int]) -> str:
+    """Определяет титул пользователя по слотам."""
+    dominant = get_dominant_slot(slot_counts)
+    if dominant is None:
+        return ""
+    if dominant == "all_day":
+        return "Круглосуточный 🕐"
+    return get_slot_title(dominant) + " " + get_slot_emoji(dominant)
 
 
 def _streak_until_yesterday(days: list[date], day: date) -> int:
@@ -504,14 +550,20 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         st = states.get(uid)
         poops = int(st.poops_n) if st else 0
 
-        status_bits: list[str] = [f"💩({poops})"]
+        # Получаем слоты пользователя
+        slot_counts = _get_user_slot_counts(db, session_id, int(uid), "Europe/Minsk")
+        slot_display = _format_slot_counts(slot_counts)
+        title = _get_user_title(slot_counts)
 
-        streak_val = _streak_until_yesterday(chat_days_by_user.get(int(uid), []), session_date)
-        if int(uid) in chat_today_positive_user_ids:
-            streak_val += 1 if streak_val > 0 else 1
-        status_bits.append(f"чатовый стрик {streak_val} дн.")
-
-        lines.append(f"{mention(u)} — {' • '.join(status_bits)}")
+        if poops == 0:
+            # Нет отметок
+            lines.append(f"{mention(u)} — — | —")
+        elif slot_display:
+            # Есть слоты — показываем с титулом
+            lines.append(f"{mention(u)} — {slot_display} | {title}")
+        else:
+            # Нет слотов (ошибка)
+            lines.append(f"{mention(u)} — 💩({poops}) | —")
 
     return "\n".join(lines)
 

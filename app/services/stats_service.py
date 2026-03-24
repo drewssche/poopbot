@@ -54,7 +54,64 @@ from app.services.stats_streaks import (
     build_stats_raw_debug_text,
     streak_nickname as _streak_nickname,
 )
-from app.services.time_service import now_in_tz
+from app.services.time_service import now_in_tz, get_time_slot, get_slot_emoji, get_slot_title, get_dominant_slot
+
+
+def _compute_slot_patterns(db: Session, session_ids: list[int], user_id: int, tz_name: str = "Europe/Minsk") -> dict[str, int]:
+    """Подсчитывает события пользователя по временным слотам."""
+    if not session_ids:
+        return {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    
+    events = db.scalars(
+        select(PoopEvent).where(
+            PoopEvent.session_id.in_(session_ids),
+            PoopEvent.user_id == user_id
+        )
+    ).all()
+    
+    slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    for ev in events:
+        if ev.created_at:
+            slot = get_time_slot(ev.created_at, tz_name)
+            slot_counts[slot] = slot_counts.get(slot, 0) + 1
+    
+    return slot_counts
+
+
+def _format_slot_patterns(slot_counts: dict[str, int], total: int) -> list[str]:
+    """Форматирует паттерны для отображения в статистике."""
+    if total == 0:
+        return ["Пока нет данных для анализа паттернов."]
+    
+    lines = []
+    labels = [
+        ("night", "🌙 Ночь (00–06)"),
+        ("morning", "🌅 Утро (06–12)"),
+        ("afternoon", "☀️ День (12–18)"),
+        ("evening", "🌆 Вечер (18–24)"),
+    ]
+    
+    peak_slot = max(slot_counts.keys(), key=lambda s: slot_counts.get(s, 0)) if total > 0 else None
+    
+    for slot, label in labels:
+        count = slot_counts.get(slot, 0)
+        pct = (count / total * 100) if total > 0 else 0
+        peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
+        lines.append(f"{label}:   {count} раз  ({pct:.0f}%){peak_marker}")
+    
+    return lines
+
+
+def _get_pattern_title(slot_counts: dict[str, int], total: int) -> str | None:
+    """Определяет титул по паттернам."""
+    if total == 0:
+        return None
+    
+    dominant = get_dominant_slot(slot_counts)
+    if dominant is None or dominant == "all_day":
+        return None
+    
+    return get_slot_title(dominant)
 
 
 def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, period: str) -> str:
@@ -139,6 +196,10 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     streak_val = _compute_user_global_streak_live(db, user_id, today)
 
+    # Вычисляем паттерны по слотам
+    slot_counts = _compute_slot_patterns(db, session_ids, user_id)
+    pattern_title = _get_pattern_title(slot_counts, total_poops)
+
     lines = [
         "🙋 Моя статистика",
         f"Период: {period_label(period)} (по всем чатам, {format_period(r)})",
@@ -149,6 +210,18 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         f"- Текущий глобальный стрик (по всем чатам): {streak_val} дн.",
         f"- Лучший стрик: {best_streak_live} дн.",
         "",
+    ]
+
+    # Добавляем блок паттернов
+    if total_poops > 0:
+        lines.append("🕐 Твои паттерны:")
+        lines.extend(_format_slot_patterns(slot_counts, total_poops))
+        if pattern_title:
+            lines.append("")
+            lines.append(f"💡 Титул: «{pattern_title}»")
+        lines.append("")
+
+    lines.extend([
         "Твоя динамика:",
         f"- Среднее за календарный день: {avg_per_day:.2f}",
         f"- Среднее за день с отметкой: {avg_per_active_day:.2f}",
@@ -163,7 +236,7 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
             else "- Последняя отметка: нет данных"
         ),
         "",
-    ]
+    ])
     mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
     lines.extend(
         [
@@ -178,6 +251,39 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
     return "\n".join(lines)
 
+
+
+def _compute_chat_slot_patterns(db: Session, chat_id: int, r: Range) -> tuple[dict[str, int], dict[int, dict[str, int]]]:
+    """Подсчитывает паттерны чата и пользователей по слотам."""
+    sessions = _sessions_in_range(db, chat_id, r)
+    if not sessions:
+        return {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}, {}
+    
+    session_ids = [int(s.session_id) for s in sessions]
+    
+    # Получаем все события чата
+    events = db.scalars(
+        select(PoopEvent).where(
+            PoopEvent.session_id.in_(session_ids),
+            PoopEvent.origin_chat_id == chat_id
+        )
+    ).all()
+    
+    # Считаем общий паттерн чата
+    chat_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    user_slot_counts: dict[int, dict[str, int]] = {}
+    
+    for ev in events:
+        if ev.created_at:
+            slot = get_time_slot(ev.created_at, "Europe/Minsk")
+            chat_slot_counts[slot] = chat_slot_counts.get(slot, 0) + 1
+            
+            uid = int(ev.user_id)
+            if uid not in user_slot_counts:
+                user_slot_counts[uid] = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+            user_slot_counts[uid][slot] = user_slot_counts[uid].get(slot, 0) + 1
+    
+    return chat_slot_counts, user_slot_counts
 
 
 def build_stats_text_chat(
@@ -287,6 +393,10 @@ def build_stats_text_chat(
     user_ids = sorted({uid for uid in by_user.keys()} | {uid for uid, _ in streak_top3})
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()} if user_ids else {}
 
+    # Вычисляем паттерны чата
+    chat_slot_counts, user_slot_counts = _compute_chat_slot_patterns(db, chat_id, r)
+    chat_pattern_title = _get_pattern_title(chat_slot_counts, total_poops)
+
     lines = [
         "👥 В этом чате",
         f"Период: {period_label(period)} ({format_period(r)})",
@@ -303,14 +413,35 @@ def build_stats_text_chat(
             else "- Пиковый день: нет данных"
         ),
         "",
-        "Топ-5 по количеству:",
     ]
+
+    # Добавляем блок паттернов чата
+    if total_poops > 0:
+        lines.append("🕐 Паттерны чата:")
+        lines.extend(_format_slot_patterns(chat_slot_counts, total_poops))
+        if chat_pattern_title:
+            lines.append("")
+            lines.append(f"💡 Чат — «{chat_pattern_title}»")
+        lines.append("")
+
+    lines.append("Топ-5 по количеству:")
 
     if top_rows:
         for idx, (uid, cnt) in enumerate(top_rows, start=1):
             user = users.get(uid)
             role = TOP5_ROLES[idx - 1] if idx - 1 < len(TOP5_ROLES) else "Участник рейтинга"
-            lines.append(f"- {idx}) {role} — {_display_name(user, uid)} • 💩({cnt})")
+            
+            # Добавляем разбивку по слотам
+            user_slots = user_slot_counts.get(uid, {"night": 0, "morning": 0, "afternoon": 0, "evening": 0})
+            slot_parts = []
+            for slot in ["night", "morning", "afternoon", "evening"]:
+                count = user_slots.get(slot, 0)
+                if count > 0:
+                    emoji = get_slot_emoji(slot)
+                    slot_parts.append(f"{emoji}{count}")
+            
+            slot_str = " " + " ".join(slot_parts) if slot_parts else ""
+            lines.append(f"- {idx}) {role} — {_display_name(user, uid)} • 💩({cnt}){slot_str}")
     else:
         lines.append("- пока никого в рейтинге")
 
@@ -452,6 +583,9 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     me = db.get(User, user_id)
     me_name = _display_name(me, user_id)
 
+    # Вычисляем глобальные паттерны для титулов
+    user_slot_counts = _compute_global_slot_patterns(db, r)
+
     lines = [
         "🌍 Глобальная статистика",
         f"Период: {period_label(period)} ({format_period(r)})",
@@ -461,8 +595,26 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         f"- Всего: 💩({int(total_poops)})",
         f"- 💩 на 1 участника: {avg_per_user:.2f}",
         "",
-        "Топ-5:",
     ]
+
+    # Добавляем титулы месяца (обезличенные)
+    if user_slot_counts:
+        lines.append("🏆 Титулы месяца:")
+        for slot, title in [("night", "Ночной серун"), ("morning", "Утренний жаворонок"), 
+                            ("afternoon", "Дневной трудяга"), ("evening", "Вечерний философ")]:
+            top_users = _get_top_slot_users(user_slot_counts, slot, limit=1)
+            if top_users and top_users[0][1] > 0:
+                top_uid, top_count = top_users[0]
+                # Проверяем, это текущий пользователь или нет
+                if top_uid == user_id:
+                    lines.append(f"{get_slot_emoji(slot)} {title} — ТЫ — {top_count} {slot}ных походов 👑")
+                else:
+                    lines.append(f"{get_slot_emoji(slot)} {title} — {top_count} {slot}ных походов")
+        lines.append("")
+
+    lines.extend([
+        "Топ-5:",
+    ])
 
     if top5:
         for role, poops in top5:

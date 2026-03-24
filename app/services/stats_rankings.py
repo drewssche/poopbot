@@ -9,7 +9,7 @@ from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
 from app.db.models import SessionUserState
 from app.services.stats_common import Range, estimate_waste_metrics
-from app.services.time_service import now_in_tz
+from app.services.time_service import now_in_tz, get_time_slot, get_slot_emoji
 
 
 def visible_group_chat_ids(db: Session) -> list[int]:
@@ -201,3 +201,48 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
         "most_dry": most_dry,
         "min_bristol_samples": min_bristol_samples,
     }
+
+
+def collect_among_chats_slot_patterns(db: Session, r: Range) -> tuple[dict[int, dict[str, int]], dict[str, int]]:
+    """Собирает паттерны по слотам для всех чатов.
+    
+    Возвращает:
+        - chat_slot_counts: {chat_id: {slot: count}}
+        - total_slot_counts: {slot: total_count}
+    """
+    chat_ids = visible_group_chat_ids(db)
+    if not chat_ids:
+        return {}, {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    
+    sessions = db.scalars(
+        select(DaySession).where(
+            DaySession.chat_id.in_(chat_ids),
+            DaySession.session_date >= r.start,
+            DaySession.session_date <= r.end
+        )
+    ).all()
+    
+    session_ids = [int(s.session_id) for s in sessions]
+    
+    events = db.scalars(
+        select(PoopEvent).where(
+            PoopEvent.session_id.in_(session_ids),
+            PoopEvent.origin_chat_id.in_(chat_ids)
+        )
+    ).all()
+    
+    chat_slot_counts: dict[int, dict[str, int]] = {}
+    total_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    
+    for ev in events:
+        if ev.created_at:
+            slot = get_time_slot(ev.created_at, "Europe/Minsk")
+            cid = int(ev.origin_chat_id)
+            
+            if cid not in chat_slot_counts:
+                chat_slot_counts[cid] = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+            
+            chat_slot_counts[cid][slot] = chat_slot_counts[cid].get(slot, 0) + 1
+            total_slot_counts[slot] = total_slot_counts.get(slot, 0) + 1
+    
+    return chat_slot_counts, total_slot_counts

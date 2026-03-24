@@ -29,6 +29,7 @@ from app.services.q1_service import (
 from app.services.q2_q3_service import ensure_q2_q3_exist, render_q2_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
 from app.services.reminder_service import LATE_REMINDER_COMMAND
+from app.services.time_service import get_time_slot, get_slot_popup
 from app.services.repo_service import (
     ensure_chat_member,
     get_or_create_session,
@@ -174,8 +175,16 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             else:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 changed, popup = apply_plus(db, sess.session_id, user.id, origin_chat_id=chat_id)
-                if changed and now_in_tz(chat.timezone).time().hour < 11:
-                    popup = "Кофейку и цигарку бахнул? Красава"
+                
+                # Контекстный попап по времени
+                if changed:
+                    now = now_in_tz(chat.timezone)
+                    current_hour = now.hour
+                    current_slot = get_time_slot(now, chat.timezone)
+                    slot_popup = get_slot_popup(current_slot, current_hour)
+                    if slot_popup:
+                        popup = slot_popup
+                
                 await cb.answer(popup, show_alert=False)
 
             if cb.data != "q1:restore_streak":

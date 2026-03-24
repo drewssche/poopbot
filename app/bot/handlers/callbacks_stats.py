@@ -271,7 +271,12 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
             if bot_start is not None
             else "Период: за всё время"
         )
-        chat_slot_counts, total_slot_counts = {}, {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+        # Собираем паттерны за всё время
+        if bot_start:
+            all_r = Range(bot_start, today)
+            chat_slot_counts, total_slot_counts = collect_among_chats_slot_patterns(db, all_r)
+        else:
+            chat_slot_counts, total_slot_counts = {}, {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
 
     ids = set()
     ids.update(chat_id for chat_id, _ in snap["top_total"])

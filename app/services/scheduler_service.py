@@ -571,33 +571,35 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
 
 
 def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
+    """Инкрементальная пересчитка стриков.
+    
+    Вместо чтения всей истории — проверяем только вчерашний день.
+    Это корректно, т.к. стрик — это последовательная цепочка дней.
+    """
     member_user_ids = db.scalars(
         select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
     ).all()
     if not member_user_ids:
         return
 
-    rows = db.execute(
-        select(DaySession.session_date, PoopEvent.user_id)
-        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-        .where(
-            DaySession.chat_id == chat_id,
-            DaySession.session_date < today,
-            PoopEvent.origin_chat_id == chat_id,
-            PoopEvent.user_id.in_(member_user_ids),
-        )
-        .group_by(DaySession.session_date, PoopEvent.user_id)
-        .order_by(DaySession.session_date.asc())
-    ).all()
-
-    days_by_user: dict[int, list[date]] = {int(uid): [] for uid in member_user_ids}
-    for session_date, user_id in rows:
-        uid = int(user_id)
-        day = session_date
-        if not days_by_user[uid] or days_by_user[uid][-1] != day:
-            days_by_user[uid].append(day)
-
     yesterday = today - timedelta(days=1)
+    
+    # Получаем только тех, кто отметился вчера в этом чате
+    positive_user_ids = {
+        int(uid)
+        for uid in db.scalars(
+            select(PoopEvent.user_id)
+            .join(DaySession, DaySession.session_id == PoopEvent.session_id)
+            .where(
+                DaySession.chat_id == chat_id,
+                DaySession.session_date == yesterday,
+                PoopEvent.origin_chat_id == chat_id,
+                PoopEvent.user_id.in_(member_user_ids),
+            )
+            .distinct()
+        ).all()
+    }
+
     for uid in member_user_ids:
         uid_int = int(uid)
         streak = db.get(UserStreak, {"chat_id": chat_id, "user_id": uid_int})
@@ -605,18 +607,16 @@ def _recalculate_streaks_from_history(db, chat_id: int, today: date) -> None:
             streak = UserStreak(chat_id=chat_id, user_id=uid_int, current_streak=0, last_poop_date=None)
             db.add(streak)
 
-        days = days_by_user[uid_int]
-        if not days:
+        if uid_int in positive_user_ids:
+            # Была отметка вчера — продолжаем стрик
+            if streak.last_poop_date == yesterday:
+                streak.current_streak += 1
+            elif streak.last_poop_date is None or streak.last_poop_date < yesterday:
+                # Разрыв был, но вчера отметился — начинаем новый стрик
+                streak.current_streak = 1
+            # else: last_poop_date == today (уже обновлено ранее) — не меняем
+            streak.last_poop_date = yesterday
+        else:
+            # Не было отметки вчера — сбрасываем стрик
             streak.current_streak = 0
-            streak.last_poop_date = None
-            continue
-
-        last_day = days[-1]
-        trailing = 1
-        idx = len(days) - 2
-        while idx >= 0 and days[idx] == (days[idx + 1] - timedelta(days=1)):
-            trailing += 1
-            idx -= 1
-
-        streak.last_poop_date = last_day
-        streak.current_streak = trailing if last_day == yesterday else 0
+            # last_poop_date не сбрасываем — это история последней отметки

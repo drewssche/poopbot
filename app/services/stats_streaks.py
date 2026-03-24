@@ -59,41 +59,49 @@ def current_streak_from_days(days: list[date], today: date) -> int:
 
 
 def compute_user_chat_streak_live(db: Session, chat_id: int, user_id: int, today: date) -> int:
-    days = [
-        d
-        for d in db.scalars(
-            select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                DaySession.session_date <= today,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == chat_id,
-            )
-            .group_by(DaySession.session_date)
-            .order_by(DaySession.session_date.asc())
-        ).all()
-    ]
-    return current_streak_from_days(days, today)
+    days = _fetch_chat_origin_days(db, chat_id, [user_id], today)
+    user_days = days.get((chat_id, user_id), [])
+    return current_streak_from_days(user_days, today)
 
 
 def compute_user_chat_best_streak_live(db: Session, chat_id: int, user_id: int, today: date) -> int:
-    days = [
-        d
-        for d in db.scalars(
-            select(DaySession.session_date)
-            .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
-            .where(
-                DaySession.chat_id == chat_id,
-                DaySession.session_date <= today,
-                PoopEvent.user_id == user_id,
-                PoopEvent.origin_chat_id == chat_id,
-            )
-            .group_by(DaySession.session_date)
-            .order_by(DaySession.session_date.asc())
-        ).all()
-    ]
-    return best_streak_from_days(days)
+    days = _fetch_chat_origin_days(db, chat_id, [user_id], today)
+    user_days = days.get((chat_id, user_id), [])
+    return best_streak_from_days(user_days)
+
+
+def _fetch_chat_origin_days(
+    db: Session,
+    chat_id: int,
+    user_ids: list[int],
+    today: date,
+) -> dict[tuple[int, int], list[date]]:
+    """Batch-запрос для получения дней активностей пользователей в чате.
+    
+    Возвращает dict {(chat_id, user_id): [dates]} для избежания N+1 запросов.
+    """
+    if not user_ids:
+        return {}
+    
+    rows = db.execute(
+        select(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date <= today,
+            PoopEvent.user_id.in_(user_ids),
+            PoopEvent.origin_chat_id == chat_id,
+        )
+        .group_by(DaySession.chat_id, PoopEvent.user_id, DaySession.session_date)
+        .order_by(DaySession.chat_id.asc(), PoopEvent.user_id.asc(), DaySession.session_date.asc())
+    ).all()
+
+    days_by_user_chat: dict[tuple[int, int], list[date]] = {}
+    for cid, uid, d in rows:
+        key = (int(cid), int(uid))
+        days_by_user_chat.setdefault(key, []).append(d)
+    
+    return days_by_user_chat
 
 
 def compute_chat_user_streaks_live(db: Session, chat_ids: list[int], today: date) -> dict[tuple[int, int], int]:
@@ -246,6 +254,29 @@ def chat_streak_leader(db: Session, chat_id: int, today: date) -> tuple[User | N
     if best_user_id is None or best_streak <= 0:
         return None
     return db.get(User, best_user_id), best_streak, best_user_id
+
+
+def compute_chat_user_streaks_batch(
+    db: Session,
+    chat_id: int,
+    user_ids: list[int],
+    today: date,
+) -> dict[int, int]:
+    """Batch-версия для получения стриков всех пользователей чата одним запросом.
+    
+    Возвращает dict {user_id: streak} для избежания N+1 запросов.
+    """
+    if not user_ids:
+        return {}
+    
+    days_map = _fetch_chat_origin_days(db, chat_id, user_ids, today)
+    result: dict[int, int] = {}
+    
+    for uid in user_ids:
+        user_days = days_map.get((chat_id, uid), [])
+        result[uid] = current_streak_from_days(user_days, today)
+    
+    return result
 
 
 def build_stats_raw_debug_text(db: Session, chat_id: int, user_id: int, today: date) -> str:

@@ -550,6 +550,11 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         st = states.get(uid)
         poops = int(st.poops_n) if st else 0
 
+        # Считаем стрик
+        streak_val = _streak_until_yesterday(chat_days_by_user.get(int(uid), []), session_date)
+        if int(uid) in chat_today_positive_user_ids:
+            streak_val += 1 if streak_val > 0 else 1
+
         # Получаем слоты пользователя
         slot_counts = _get_user_slot_counts(db, session_id, int(uid), "Europe/Minsk")
         slot_display = _format_slot_counts(slot_counts)
@@ -559,8 +564,8 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             # Нет отметок
             lines.append(f"{mention(u)} — — | —")
         elif slot_display:
-            # Есть слоты — показываем с титулом
-            lines.append(f"{mention(u)} — {slot_display} | {title}")
+            # Есть слоты — показываем с титулом и стриком
+            lines.append(f"{mention(u)} — {slot_display} | {title} • стрик {streak_val} дн.")
         else:
             # Нет слотов (ошибка)
             lines.append(f"{mention(u)} — 💩({poops}) | —")
@@ -611,13 +616,25 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
     if chat_today_positive:
         chat_streak += 1 if chat_streak > 0 else 1
 
+    # Считаем слоты для лички
+    slot_counts = _get_user_slot_counts(db, session_id, user_id, "Europe/Minsk")
+    slot_display = _format_slot_counts(slot_counts)
+    title = _get_user_title(slot_counts)
+
     lines = [
         f"💩 Твоя личная сессия ({date_str})",
         "Нажми +💩, чтобы добавить отметку.",
         "",
         f"Итого: 💩({poops})",
-        f"Стрик в этой личке: {chat_streak} дн.",
     ]
+
+    # Добавляем слоты если есть
+    if poops > 0 and slot_display:
+        lines.append(f"Паттерны: {slot_display}")
+        if title and title != "Участник":
+            lines.append(f"Титул: {title}")
+
+    lines.append(f"Стрик в этой личке: {chat_streak} дн.")
 
     if poops <= 0:
         lines.extend(["", "Сегодня пока без отметок."])

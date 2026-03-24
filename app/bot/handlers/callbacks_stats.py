@@ -28,6 +28,7 @@ from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.recap_service import is_recap_available
 from app.services.repo_service import upsert_chat, upsert_user
+from app.services.stats_common import Range
 from app.services.stats_service import (
     build_stats_text_chat,
     build_stats_text_global,

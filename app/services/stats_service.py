@@ -286,6 +286,37 @@ def _compute_chat_slot_patterns(db: Session, chat_id: int, r: Range) -> tuple[di
     return chat_slot_counts, user_slot_counts
 
 
+def _compute_global_slot_patterns(db: Session, r: Range) -> dict[int, dict[str, int]]:
+    """Подсчитывает паттерны всех пользователей глобально."""
+    sessions = _sessions_in_range(db, None, r)
+    if not sessions:
+        return {}
+    
+    session_ids = [int(s.session_id) for s in sessions]
+    
+    events = db.scalars(
+        select(PoopEvent).where(PoopEvent.session_id.in_(session_ids))
+    ).all()
+    
+    user_slot_counts: dict[int, dict[str, int]] = {}
+    for ev in events:
+        if ev.created_at:
+            slot = get_time_slot(ev.created_at, "Europe/Minsk")
+            uid = int(ev.user_id)
+            if uid not in user_slot_counts:
+                user_slot_counts[uid] = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+            user_slot_counts[uid][slot] = user_slot_counts[uid].get(slot, 0) + 1
+    
+    return user_slot_counts
+
+
+def _get_top_slot_users(user_slot_counts: dict[int, dict[str, int]], target_slot: str, limit: int = 1) -> list[tuple[int, int]]:
+    """Возвращает топ пользователей по слоту."""
+    ranked = [(uid, counts.get(target_slot, 0)) for uid, counts in user_slot_counts.items()]
+    ranked.sort(key=lambda x: (-x[1], x[0]))
+    return ranked[:limit]
+
+
 def build_stats_text_chat(
     db: Session, chat_id: int, today: date, period: str, user_id: int | None = None
 ) -> str:

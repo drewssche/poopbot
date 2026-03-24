@@ -643,6 +643,12 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
 
     # Вычисляем глобальные паттерны для титулов
     user_slot_counts = _compute_global_slot_patterns(db, r)
+    
+    # Считаем общее по слотам
+    total_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    for counts in user_slot_counts.values():
+        for slot, count in counts.items():
+            total_slot_counts[slot] += count
 
     lines = [
         "🌍 Глобальная статистика",
@@ -654,6 +660,24 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         f"- 💩 на 1 участника: {avg_per_user:.2f}",
         "",
     ]
+
+    # Добавляем блок паттернов по всем
+    slot_total = sum(total_slot_counts.values())
+    if slot_total > 0:
+        lines.append("🕐 Всего по слотам (все участники):")
+        labels = [
+            ("night", "🌙 Ночь (00–06)"),
+            ("morning", "🌅 Утро (06–12)"),
+            ("afternoon", "☀️ День (12–18)"),
+            ("evening", "🌆 Вечер (18–24)"),
+        ]
+        peak_slot = max(total_slot_counts.keys(), key=lambda s: total_slot_counts.get(s, 0))
+        for slot, label in labels:
+            count = total_slot_counts.get(slot, 0)
+            pct = (count / slot_total * 100) if slot_total > 0 else 0
+            peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
+            lines.append(f"{label}:   {count} раз ({pct:.0f}%){peak_marker}")
+        lines.append("")
 
     # Добавляем титулы месяца (обезличенные)
     if user_slot_counts:

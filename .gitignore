@@ -19,3 +19,21 @@ poopbot_pgdata/
 
 # OS
 .DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Audit / reports
+audit/*.md
+!audit/.gitkeep
+
+# Local backups
+backups/
+*.sql.gz
+*.sql
+
+# Docker local overrides
+docker-compose.override.yml

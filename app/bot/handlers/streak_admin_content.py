@@ -14,12 +14,18 @@ def _candidate_block(candidates: list[dict[str, int | str]] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def streak_admin_text(target_date: date, *, candidates: list[dict[str, int | str]] | None = None) -> str:
+def streak_admin_text(
+    target_date: date,
+    *,
+    candidates: list[dict[str, int | str]] | None = None,
+    restore_enabled: bool = False,
+) -> str:
     _ = target_date
     _ = candidates
     return (
         "🛠 Управление восстановлением стрика\n\n"
         "Окно восстановления: последние 7 дней\n\n"
+        f"Статус кнопки восстановления: {'ВКЛ' if restore_enabled else 'ВЫКЛ'}\n\n"
         "Что делает панель:\n"
         "• рассылает сервисное сообщение с кнопкой восстановления;\n"
         "• отдельно по всем группам или по всем личкам;\n"

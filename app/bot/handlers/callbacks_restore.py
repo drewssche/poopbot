@@ -9,8 +9,11 @@ from aiogram.types import CallbackQuery
 from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
+from app.services.app_setting_service import RESTORE_CLAIM_ENABLED_KEY, get_bool_setting
+from app.services.q1_service import restore_recent_streak_window
 from app.services.rate_limit_service import check_rate_limit
 from app.services.repo_service import ensure_chat_member, upsert_chat, upsert_user
+from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.time_service import get_session_window
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,9 @@ async def restore_streak_claim(cb: CallbackQuery) -> None:
     try:
         with db_session(_session_factory) as db:
             chat = upsert_chat(db, chat_id=cb.message.chat.id)
+            if not get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False):
+                await cb.answer("Восстановление сейчас отключено", show_alert=True)
+                return
             upsert_user(
                 db,
                 user_id=cb.from_user.id,
@@ -51,8 +57,17 @@ async def restore_streak_claim(cb: CallbackQuery) -> None:
                 await cb.answer("Не так быстро, здоровяк", show_alert=False)
                 return
 
-            _ = get_session_window(chat.timezone).session_date
-            await cb.answer("Восстановление сейчас отключено", show_alert=True)
+            current_session_date = get_session_window(chat.timezone).session_date
+            changed, message = restore_recent_streak_window(
+                db,
+                chat_id=chat.chat_id,
+                user_id=cb.from_user.id,
+                current_session_date=current_session_date,
+            )
+            db.commit()
+            if changed:
+                await _refresh_current_q1_view(cb.bot, db, chat.chat_id, current_session_date)
+            await cb.answer(message, show_alert=not changed)
     except TelegramBadRequest:
         raise
     except Exception:

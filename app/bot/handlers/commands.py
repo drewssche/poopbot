@@ -30,6 +30,7 @@ from app.services.repo_service import (
     upsert_chat,
     upsert_user,
 )
+from app.services.app_setting_service import RESTORE_CLAIM_ENABLED_KEY, get_bool_setting
 from app.services.scheduler_telegram import safe_edit_message_text
 from app.services.time_service import get_session_window, now_in_tz
 
@@ -362,9 +363,10 @@ async def streak_admin_cmd(message: Message) -> None:
         today = now_in_tz(chat.timezone).date()
         target_date = today - timedelta(days=1)
         existing_mid = get_command_message_id(db, chat_id, user.id, "streak_admin", today)
+        restore_enabled = get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False)
 
-    text = streak_admin_text(target_date)
-    kb = streak_admin_kb(target_date)
+    text = streak_admin_text(target_date, restore_enabled=restore_enabled)
+    kb = streak_admin_kb(target_date, restore_enabled=restore_enabled)
 
     if existing_mid:
         try:

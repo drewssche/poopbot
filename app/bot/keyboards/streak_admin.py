@@ -9,10 +9,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 GROUP_PAGE_SIZE = 6
 
 
-def streak_admin_kb(target_date: date) -> InlineKeyboardMarkup:
+def streak_admin_kb(target_date: date, *, restore_enabled: bool) -> InlineKeyboardMarkup:
     current_date = target_date.isoformat()
 
     kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text="🟢 Восстановление: ВКЛ" if restore_enabled else "🔴 Восстановление: ВЫКЛ",
+            callback_data="streakadmin:toggle",
+        )
+    )
     kb.row(InlineKeyboardButton(text="👀 Превью в личку", callback_data=f"streakadmin:preview:{current_date}"))
     kb.row(InlineKeyboardButton(text="🧪 Боевое себе в личку", callback_data=f"streakadmin:battle:{current_date}"))
     kb.row(InlineKeyboardButton(text="↩️ Отменить восстановление себе", callback_data=f"streakadmin:undo:{current_date}"))

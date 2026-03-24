@@ -16,6 +16,11 @@ from app.core.config import load_settings
 from app.db.engine import make_engine, make_session_factory
 from app.db.session import db_session
 from app.services.q1_service import undo_recent_streak_window
+from app.services.app_setting_service import (
+    RESTORE_CLAIM_ENABLED_KEY,
+    get_bool_setting,
+    set_bool_setting,
+)
 from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.streak_restore_service import (
     collect_streak_restore_incident_stats,
@@ -64,6 +69,13 @@ async def _resolve_group_options(cb: CallbackQuery, chat_ids: list[int]) -> list
     return options
 
 
+def _render_admin_panel(target_date: date, *, restore_enabled: bool) -> tuple[str, object]:
+    return (
+        streak_admin_text(target_date, restore_enabled=restore_enabled),
+        streak_admin_kb(target_date, restore_enabled=restore_enabled),
+    )
+
+
 @router.callback_query(F.data.startswith("streakadmin:"))
 async def streak_admin_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
@@ -79,11 +91,25 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
     action = parts[1]
 
     try:
+        if action == "toggle":
+            with db_session(_session_factory) as db:
+                restore_enabled = get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False)
+                restore_enabled = not restore_enabled
+                set_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, restore_enabled)
+                db.commit()
+            target_date = date.today()
+            text, kb = _render_admin_panel(target_date, restore_enabled=restore_enabled)
+            await cb.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await cb.answer("Переключено", show_alert=False)
+            return
         if action == "panel":
             target_date = date.fromisoformat(parts[2])
+            with db_session(_session_factory) as db:
+                restore_enabled = get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False)
+            text, kb = _render_admin_panel(target_date, restore_enabled=restore_enabled)
             await cb.message.edit_text(
-                streak_admin_text(target_date),
-                reply_markup=streak_admin_kb(target_date),
+                text,
+                reply_markup=kb,
                 parse_mode="Markdown",
             )
             await cb.answer()
@@ -161,6 +187,8 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
             )
             prefix = "повторно " if action == "resend" else ""
             scope_label = f"{prefix}все группы" if scope == "groups" else f"{prefix}все лички"
+            with db_session(_session_factory) as db:
+                restore_enabled = get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False)
             await cb.message.edit_text(
                 streak_admin_result_text(
                     scope_label,
@@ -169,7 +197,7 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
                     skipped=result["skipped"],
                     failed=result["failed"],
                 ),
-                reply_markup=streak_admin_kb(target_date),
+                reply_markup=streak_admin_kb(target_date, restore_enabled=restore_enabled),
                 parse_mode="Markdown",
             )
             await cb.answer("Готово", show_alert=False)

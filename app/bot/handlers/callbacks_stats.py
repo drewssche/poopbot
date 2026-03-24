@@ -363,6 +363,23 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
             peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
             lines.append(f"{label}:   {count} раз ({pct:.0f}%){peak_marker}")
 
+    # Добавляем топы по слотам (лидеры)
+    if chat_slot_counts and total_all > 0:
+        lines.extend(["", "🏆 Топы в паттернах:"])
+        slot_labels = [
+            ("night", "🌙 Ночные серуны", "ночных"),
+            ("morning", "🌅 Утренние жаворонки", "утренних"),
+            ("afternoon", "☀️ Дневные трудяги", "дневных"),
+            ("evening", "🌆 Вечерние философы", "вечерних"),
+        ]
+        for slot, title, adj in slot_labels:
+            # Находим чат с максимальным количеством в этом слоте
+            top_chat = max(chat_slot_counts.items(), key=lambda x: x[1].get(slot, 0))
+            if top_chat and top_chat[1].get(slot, 0) > 0:
+                cid, counts = top_chat
+                count = counts.get(slot, 0)
+                lines.append(f"{title} — {chat_name(cid)} ({count} {adj} походов)")
+
     lines.extend(["", "Бристоль-экстрим:"])
     most_liquid = snap.get("most_liquid")
     most_dry = snap.get("most_dry")

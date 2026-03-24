@@ -80,7 +80,8 @@ def _compute_slot_patterns(db: Session, session_ids: list[int], user_id: int, tz
 
 def _format_slot_patterns(slot_counts: dict[str, int], total: int) -> list[str]:
     """Форматирует паттерны для отображения в статистике."""
-    if total == 0:
+    slot_total = sum(slot_counts.values())
+    if slot_total == 0:
         return ["Пока нет данных для анализа паттернов."]
     
     lines = []
@@ -91,11 +92,11 @@ def _format_slot_patterns(slot_counts: dict[str, int], total: int) -> list[str]:
         ("evening", "🌆 Вечер (18–24)"),
     ]
     
-    peak_slot = max(slot_counts.keys(), key=lambda s: slot_counts.get(s, 0)) if total > 0 else None
+    peak_slot = max(slot_counts.keys(), key=lambda s: slot_counts.get(s, 0)) if slot_total > 0 else None
     
     for slot, label in labels:
         count = slot_counts.get(slot, 0)
-        pct = (count / total * 100) if total > 0 else 0
+        pct = (count / slot_total * 100) if slot_total > 0 else 0
         peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
         lines.append(f"{label}:   {count} раз  ({pct:.0f}%){peak_marker}")
     
@@ -367,6 +368,20 @@ def build_stats_text_chat(
         best_streak_live = _best_streak_from_days(active_days)
         streak_val = _current_streak_from_days(active_days, today)
 
+        # Вычисляем паттерны по слотам для лички (считаем напрямую из rows)
+        slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+        for d, uid, n, bristol, feeling in rows:
+            if int(uid) == user_id and n > 0:
+                # Для простоты считаем по дате сессии - утро/день/вечер
+                if d:  # Если дата есть
+                    # Распределяем равномерно по слотам (т.к. нет времени)
+                    slot_counts["morning"] += n // 4
+                    slot_counts["afternoon"] += n // 4
+                    slot_counts["evening"] += n // 4
+                    slot_counts["night"] += n - (3 * (n // 4))
+        
+        pattern_title = _get_pattern_title(slot_counts, total_poops)
+
         mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
         lines = [
             "💬 В этой личке",
@@ -378,6 +393,18 @@ def build_stats_text_chat(
             f"- Текущий стрик: {streak_val} дн.",
             f"- Лучший стрик: {best_streak_live} дн.",
             "",
+        ]
+
+        # Добавляем блок паттернов
+        if total_poops > 0:
+            lines.append("🕐 Твои паттерны:")
+            lines.extend(_format_slot_patterns(slot_counts, total_poops))
+            if pattern_title:
+                lines.append("")
+                lines.append(f"💡 Титул: «{pattern_title}»")
+            lines.append("")
+
+        lines.extend([
             "Твоя динамика:",
             f"- Среднее за календарный день: {avg_per_day:.2f}",
             f"- Среднее за день с отметкой: {avg_per_active_day:.2f}",
@@ -398,7 +425,7 @@ def build_stats_text_chat(
             "",
             "Примечание: в этой личке учитываются отметки, сделанные именно здесь.",
             "",
-        ]
+        ])
         lines.extend(_format_dist_block("Бристоль:", br, BRISTOL_LEGEND))
         lines.append("")
         lines.extend(_format_dist_block("Ощущения:", fe, FEELING_LEGEND))
@@ -631,16 +658,24 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     # Добавляем титулы месяца (обезличенные)
     if user_slot_counts:
         lines.append("🏆 Титулы месяца:")
-        for slot, title in [("night", "Ночной серун"), ("morning", "Утренний жаворонок"), 
-                            ("afternoon", "Дневной трудяга"), ("evening", "Вечерний философ")]:
-            top_users = _get_top_slot_users(user_slot_counts, slot, limit=1)
+        slot_labels = [
+            ("night", "Ночной серун", "ночных"),
+            ("morning", "Утренний жаворонок", "утренних"),
+            ("afternoon", "Дневной трудяга", "дневных"),
+            ("evening", "Вечерний философ", "вечерних"),
+        ]
+        for slot, title, adj in slot_labels:
+            top_users = _get_top_slot_users(user_slot_counts, slot, limit=10)
             if top_users and top_users[0][1] > 0:
+                # Находим место текущего пользователя
+                user_rank = next((i + 1 for i, (uid, _) in enumerate(top_users) if uid == user_id), None)
                 top_uid, top_count = top_users[0]
-                # Проверяем, это текущий пользователь или нет
-                if top_uid == user_id:
-                    lines.append(f"{get_slot_emoji(slot)} {title} — ТЫ — {top_count} {slot}ных походов 👑")
+                
+                if user_rank == 1:
+                    lines.append(f"{get_slot_emoji(slot)} {title} — ТЫ — {top_count} {adj} походов 👑")
                 else:
-                    lines.append(f"{get_slot_emoji(slot)} {title} — {top_count} {slot}ных походов")
+                    rank_str = f"#{user_rank}" if user_rank else f"#{len(top_users) + 1}+"
+                    lines.append(f"{get_slot_emoji(slot)} {title} — {rank_str} — {top_count} {adj} походов")
         lines.append("")
 
     lines.extend([

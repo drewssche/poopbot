@@ -555,20 +555,26 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         if int(uid) in chat_today_positive_user_ids:
             streak_val += 1 if streak_val > 0 else 1
 
-        # Получаем слоты пользователя
-        slot_counts = _get_user_slot_counts(db, session_id, int(uid), "Europe/Minsk")
-        slot_display = _format_slot_counts(slot_counts)
-        title = _get_user_title(slot_counts)
-
         if poops == 0:
-            # Нет отметок
-            lines.append(f"{mention(u)} — — | —")
-        elif slot_display:
-            # Есть слоты — показываем с титулом и стриком
-            lines.append(f"{mention(u)} — {slot_display} | {title} • стрик {streak_val} дн.")
+            # Нет отметок сегодня
+            if streak_val > 0:
+                # Но стрик есть — показываем только стрик
+                lines.append(f"{mention(u)} — — | стрик {streak_val} дн.")
+            else:
+                # Нет ни отметок, ни стрика
+                lines.append(f"{mention(u)} — — | —")
         else:
-            # Нет слотов (ошибка)
-            lines.append(f"{mention(u)} — 💩({poops}) | —")
+            # Есть отметки — показываем слоты + титул + стрик
+            slot_counts = _get_user_slot_counts(db, session_id, int(uid), "Europe/Minsk")
+            slot_display = _format_slot_counts(slot_counts)
+            title = _get_user_title(slot_counts)
+            
+            if slot_display and title and title != "Участник":
+                lines.append(f"{mention(u)} — {slot_display} | {title} • стрик {streak_val} дн.")
+            elif slot_display:
+                lines.append(f"{mention(u)} — {slot_display} | стрик {streak_val} дн.")
+            else:
+                lines.append(f"{mention(u)} — 💩({poops}) | стрик {streak_val} дн.")
 
     return "\n".join(lines)
 

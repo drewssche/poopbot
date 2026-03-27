@@ -6,6 +6,12 @@ from sqlalchemy.orm import Session
 from app.db.models import RateLimit
 
 
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def check_rate_limit(
     db: Session,
     chat_id: int,
@@ -25,7 +31,7 @@ def check_rate_limit(
         db.add(rl)
         return True
 
-    if now - rl.last_action_at < timedelta(seconds=cooldown_seconds):
+    if now - _as_utc(rl.last_action_at) < timedelta(seconds=cooldown_seconds):
         return False
 
     rl.last_action_at = now

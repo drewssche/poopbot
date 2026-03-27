@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMember, Session as DaySession, SessionUserState, User
+from app.db.models import ChatMember, PoopEvent, Session as DaySession, User
 
 LATE_REMINDER_COMMAND = "late_reminder"
 
@@ -40,20 +40,22 @@ def _collect_debtors(db: Session, session_id: int) -> list[tuple[int, User | Non
 
     member_ids = [int(m.user_id) for m in members]
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(member_ids))).all()}
-    states = {
-        int(s.user_id): s
-        for s in db.scalars(
-            select(SessionUserState).where(
-                SessionUserState.session_id == session_id,
-                SessionUserState.user_id.in_(member_ids),
+    positive_user_ids = {
+        int(uid)
+        for uid in db.scalars(
+            select(PoopEvent.user_id)
+            .where(
+                PoopEvent.session_id == session_id,
+                PoopEvent.user_id.in_(member_ids),
+                PoopEvent.origin_chat_id == sess.chat_id,
             )
+            .group_by(PoopEvent.user_id)
         ).all()
     }
 
     debtors: list[tuple[int, User | None]] = []
     for uid in member_ids:
-        st = states.get(uid)
-        if st is None or int(st.poops_n or 0) <= 0:
+        if uid not in positive_user_ids:
             debtors.append((uid, users.get(uid)))
     return debtors
 

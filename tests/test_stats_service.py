@@ -159,7 +159,7 @@ class StatsServiceTests(unittest.TestCase):
         winners = {(cid, poops) for cid, _day, poops in snap["record_days"]}
         self.assertEqual(winners, {(c1, 5), (c2, 5)})
 
-    def test_my_stats_slot_patterns_follow_deduped_total(self) -> None:
+    def test_my_stats_slot_patterns_follow_canonical_day_total(self) -> None:
         user_id = 1
         c1, c2 = -1, -2
         d = date(2026, 2, 16)

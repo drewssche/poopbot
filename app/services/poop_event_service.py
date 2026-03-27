@@ -4,7 +4,7 @@ from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.models import PoopEvent
+from app.db.models import PoopEvent, SessionUserState
 
 
 def list_events(db: Session, session_id: int, user_id: int) -> list[PoopEvent]:
@@ -13,6 +13,65 @@ def list_events(db: Session, session_id: int, user_id: int) -> list[PoopEvent]:
         .where(PoopEvent.session_id == session_id, PoopEvent.user_id == user_id)
         .order_by(PoopEvent.event_n.asc())
     ).all()
+
+
+def list_origin_events(db: Session, session_id: int, user_id: int, origin_chat_id: int) -> list[PoopEvent]:
+    return db.scalars(
+        select(PoopEvent)
+        .where(
+            PoopEvent.session_id == session_id,
+            PoopEvent.user_id == user_id,
+            PoopEvent.origin_chat_id == origin_chat_id,
+        )
+        .order_by(PoopEvent.event_n.asc(), PoopEvent.id.asc())
+    ).all()
+
+
+def count_origin_events(db: Session, session_id: int, user_id: int, origin_chat_id: int) -> int:
+    return len(list_origin_events(db, session_id, user_id, origin_chat_id))
+
+
+def normalize_session_user_state_to_origin_chat(
+    db: Session,
+    *,
+    session_id: int,
+    user_id: int,
+    origin_chat_id: int,
+) -> int:
+    events = list_events(db, session_id, user_id)
+    local_events = [ev for ev in events if int(ev.origin_chat_id) == int(origin_chat_id)]
+    foreign_events = [ev for ev in events if int(ev.origin_chat_id) != int(origin_chat_id)]
+
+    for ev in foreign_events:
+        db.delete(ev)
+
+    if any(int(ev.event_n) != idx for idx, ev in enumerate(local_events, start=1)):
+        for idx, ev in enumerate(local_events, start=1):
+            ev.event_n = 1000 + idx
+        db.flush()
+        for idx, ev in enumerate(local_events, start=1):
+            ev.event_n = idx
+        db.flush()
+
+    state = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
+    if state is None:
+        if not local_events:
+            return 0
+        state = SessionUserState(session_id=session_id, user_id=user_id, poops_n=0)
+        db.add(state)
+        db.flush()
+
+    state.poops_n = len(local_events)
+    if local_events:
+        last_event = local_events[-1]
+        state.bristol = last_event.bristol
+        state.feeling = last_event.feeling
+    else:
+        state.achievement_text = None
+        state.bristol = None
+        state.feeling = None
+
+    return len(local_events)
 
 
 def ensure_events_count(db: Session, session_id: int, user_id: int, poops_n: int, origin_chat_id: int | None = None) -> None:

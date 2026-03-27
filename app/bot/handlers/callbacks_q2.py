@@ -13,8 +13,7 @@ from app.bot.keyboards.q3 import q3_keyboard
 from app.db.engine import make_engine, make_session_factory
 from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
-from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
-from app.services.poop_event_service import ensure_events_count, list_events
+from app.services.poop_event_service import ensure_events_count, list_events, normalize_session_user_state_to_origin_chat
 from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import render_q2_text, render_q3_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
@@ -162,6 +161,12 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
             await cb.answer("\u041d\u0435\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e", show_alert=False)
             return
 
+        normalize_session_user_state_to_origin_chat(
+            db,
+            session_id=sess.session_id,
+            user_id=user.id,
+            origin_chat_id=chat_id,
+        )
         state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
         if state is None or state.poops_n <= 0:
             await cb.answer("\u0422\u044b \u043d\u0435 \u043a\u0430\u043a\u0430\u043b", show_alert=False)
@@ -170,7 +175,6 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
         ensure_events_count(db, sess.session_id, user.id, state.poops_n, origin_chat_id=chat_id)
         events = list_events(db, sess.session_id, user.id)
         events_by_n = {int(e.event_n): e for e in events}
-        touched_sessions: list[tuple[int, int]] = []
         changed = False
 
         selected_n, selected_choice = _parse_q2(cb.data, int(state.poops_n))
@@ -198,14 +202,6 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
             await cb.answer("Пропустил", show_alert=False)
         else:
             await cb.answer()
-
-        if changed:
-            touched_sessions = sync_user_state_across_member_chats(
-                db,
-                source_chat_id=chat_id,
-                source_session_id=sess.session_id,
-                user_id=user.id,
-            )
 
         db.commit()
 
@@ -243,8 +239,6 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit private flow from Q2: %s", e)
 
-            if touched_sessions:
-                await refresh_synced_chats_views(cb.bot, db, touched_sessions)
             return
 
         try:
@@ -292,6 +286,3 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                 if "message to edit not found" in msg or "message not found" in msg or "message_id_invalid" in msg:
                     return
                 logger.exception("Failed to edit Q1 from Q2: %s", e)
-
-        if touched_sessions:
-            await refresh_synced_chats_views(cb.bot, db, touched_sessions)

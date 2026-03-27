@@ -16,7 +16,6 @@ from app.services.command_message_service import (
     get_any_command_message_id,
     get_command_message_id,
 )
-from app.services.cross_chat_sync_service import refresh_synced_chats_views, sync_user_state_across_member_chats
 from app.services.poop_event_service import reconcile_events_count
 from app.services.q1_service import (
     apply_minus,
@@ -163,8 +162,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     await cb.answer("Неактуально", show_alert=False)
                     return
 
-            touched_sessions: list[tuple[int, int]] = []
-
             if cb.data == "q1:restore_streak":
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 changed, popup = restore_streak_for_user(db, chat_id, user.id, current_sess.session_date)
@@ -195,14 +192,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     user_id=user.id,
                     poops_n=int(state.poops_n) if state else 0,
                     origin_chat_id=chat_id,
-                )
-
-            if changed and cb.data != "q1:restore_streak":
-                touched_sessions = sync_user_state_across_member_chats(
-                    db,
-                    source_chat_id=chat_id,
-                    source_session_id=sess.session_id,
-                    user_id=user.id,
                 )
 
             db.commit()
@@ -277,8 +266,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 except TelegramBadRequest as e:
                     if "message is not modified" not in str(e).lower():
                         logger.exception("Failed to open private Q2 flow: %s", e)
-                if touched_sessions:
-                    await refresh_synced_chats_views(cb.bot, db, touched_sessions)
                 return
 
             if bool(chat.q2_q3_enabled) and not is_private_chat:
@@ -287,8 +274,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 except Exception:
                     logger.exception("Failed to refresh Q2/Q3 after Q1 action")
 
-            if changed and touched_sessions:
-                await refresh_synced_chats_views(cb.bot, db, touched_sessions)
     except TelegramBadRequest as e:
         if _is_stale_callback_error(e):
             return

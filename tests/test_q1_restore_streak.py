@@ -218,6 +218,71 @@ class RestoreStreakTests(unittest.TestCase):
 
         self.assertIn("@u1 — — | стрик 0 дн.", text)
 
+    def test_group_q1_ignores_synced_private_state_from_same_day(self) -> None:
+        group_chat_id = -100
+        private_chat_id = 7
+        user_id = 1
+        today = date(2026, 3, 23)
+
+        self._add_chat(group_chat_id)
+        self._add_chat(private_chat_id)
+        self._add_user(user_id)
+        self._add_membership(group_chat_id, user_id)
+
+        group_sess = DaySession(chat_id=group_chat_id, session_date=today, status="active")
+        private_sess = DaySession(chat_id=private_chat_id, session_date=today, status="active")
+        self.db.add_all([group_sess, private_sess])
+        self.db.flush()
+
+        self.db.add(SessionUserState(session_id=private_sess.session_id, user_id=user_id, poops_n=1))
+        self.db.add(
+            PoopEvent(
+                session_id=private_sess.session_id,
+                user_id=user_id,
+                event_n=1,
+                origin_chat_id=private_chat_id,
+            )
+        )
+
+        # Legacy mirrored state/event left in the group session before the new rollout.
+        self.db.add(SessionUserState(session_id=group_sess.session_id, user_id=user_id, poops_n=1))
+        self.db.add(
+            PoopEvent(
+                session_id=group_sess.session_id,
+                user_id=user_id,
+                event_n=1,
+                origin_chat_id=private_chat_id,
+            )
+        )
+        self.db.commit()
+
+        text = render_q1(self.db, chat_id=group_chat_id, session_id=group_sess.session_id, session_date=today)
+        self.assertIn("@u1 — — | стрик 0 дн.", text)
+
+    def test_private_q1_ignores_foreign_mirrored_event_in_same_session(self) -> None:
+        chat_id = 7
+        today = date(2026, 3, 23)
+        self._add_chat(chat_id)
+        self._add_user(chat_id)
+
+        sess = DaySession(chat_id=chat_id, session_date=today, status="active")
+        self.db.add(sess)
+        self.db.flush()
+        self.db.add(SessionUserState(session_id=sess.session_id, user_id=chat_id, poops_n=1))
+        self.db.add(
+            PoopEvent(
+                session_id=sess.session_id,
+                user_id=chat_id,
+                event_n=1,
+                origin_chat_id=-100,
+            )
+        )
+        self.db.commit()
+
+        text = render_q1_private(self.db, chat_id=chat_id, session_id=sess.session_id, user_id=chat_id, session_date=today)
+        self.assertIn("Итого: 💩(0)", text)
+        self.assertIn("Сегодня пока без отметок.", text)
+
     def test_undo_restore_removes_backfilled_day_and_live_streak_falls_back(self) -> None:
         chat_id = 7
         today = date(2026, 3, 23)

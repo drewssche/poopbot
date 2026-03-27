@@ -176,8 +176,6 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
         d = session_date_by_id[sid]
         states_by_day.setdefault(d, []).append(st)
 
-    # Deduplicate cross-chat marks in "My" stats:
-    # for each day, use max poops_n among chats instead of sum across chats.
     daily_poops: dict[date, int] = {}
     for d, day_states in states_by_day.items():
         daily_poops[d] = max(int(s.poops_n or 0) for s in day_states)
@@ -198,8 +196,6 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
     events_map = _collect_events_map(db, session_ids, user_id=user_id)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
-    # For per-day distributions in "My", take one canonical day state
-    # (highest poops_n, then latest session_id) to avoid cross-chat duplicates.
     canonical_states: list[SessionUserState] = []
     for day_states in states_by_day.values():
         canonical_states.append(
@@ -217,7 +213,6 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     streak_val = _compute_user_global_streak_live(db, user_id, today)
 
-    # Слоты считаем по тем же каноническим сессиям, что и dedup-итоги.
     slot_counts = _compute_slot_patterns_from_state_rows(canonical_states, events_map)
     pattern_title = _get_pattern_title(slot_counts, total_poops)
 
@@ -308,13 +303,13 @@ def _compute_chat_slot_patterns(db: Session, chat_id: int, r: Range) -> tuple[di
 
 
 def _compute_global_slot_patterns(
-    canonical_state_by_user_day: dict[tuple[int, date], SessionUserState],
+    states: list[SessionUserState],
     events_map: dict[tuple[int, int], list[PoopEvent]],
     tz_name: str = "Europe/Minsk",
 ) -> dict[int, dict[str, int]]:
-    """Подсчитывает глобальные паттерны по тем же dedup-состояниям, что и общие итоги."""
+    """Подсчитывает глобальные паттерны по каноническим состояниям дня."""
     user_slot_counts: dict[int, dict[str, int]] = {}
-    for st in canonical_state_by_user_day.values():
+    for st in states:
         uid = int(st.user_id)
         user_counts = user_slot_counts.setdefault(uid, _empty_slot_counts())
         for ev in events_map.get((int(st.session_id), uid), []):
@@ -598,7 +593,6 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         new_key = (int(st.poops_n or 0), int(st.session_id))
         if new_key > curr_key:
             canonical_state_by_user_day[key] = st
-
     events_map = _collect_events_map(db, session_ids)
     br = {"🧱": 0, "🍌": 0, "🍦": 0, "💦": 0}
     fe = {"😇": 0, "😐": 0, "😫": 0}
@@ -645,7 +639,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     me_name = _display_name(me, user_id)
 
     # Вычисляем глобальные паттерны для титулов
-    user_slot_counts = _compute_global_slot_patterns(canonical_state_by_user_day, events_map)
+    user_slot_counts = _compute_global_slot_patterns(list(canonical_state_by_user_day.values()), events_map)
     
     # Считаем общее по слотам
     total_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}

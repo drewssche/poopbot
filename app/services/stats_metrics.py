@@ -165,7 +165,7 @@ def per_user_totals_dedup(db: Session, r: Range) -> dict[int, int]:
     day_user_rows = db.execute(
         select(DaySession.session_date, SessionUserState.user_id, SessionUserState.poops_n)
         .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
+        .where(SessionUserState.session_id.in_(session_ids))
     ).all()
     per_user_day_max: dict[tuple[int, date], int] = {}
     for row in day_user_rows:

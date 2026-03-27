@@ -4,11 +4,17 @@ import os
 import random
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Chat, ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
-from app.services.poop_event_service import create_event, delete_event, reconcile_events_count
+from app.services.poop_event_service import (
+    create_event,
+    delete_event,
+    list_origin_events,
+    normalize_session_user_state_to_origin_chat,
+    reconcile_events_count,
+)
 from app.services.time_service import (
     get_time_slot,
     get_slot_emoji,
@@ -36,12 +42,21 @@ FEELING_EMOJI = {
 }
 
 
-def _get_user_slot_counts(db: Session, session_id: int, user_id: int, tz_name: str = "Europe/Minsk") -> dict[str, int]:
+def _get_user_slot_counts(
+    db: Session,
+    session_id: int,
+    user_id: int,
+    tz_name: str = "Europe/Minsk",
+    origin_chat_id: int | None = None,
+) -> dict[str, int]:
     """Подсчитывает события пользователя по временным слотам."""
     events = db.scalars(
         select(PoopEvent).where(
             PoopEvent.session_id == session_id,
-            PoopEvent.user_id == user_id
+            PoopEvent.user_id == user_id,
+            *((
+                PoopEvent.origin_chat_id == origin_chat_id,
+            ) if origin_chat_id is not None else ()),
         ).order_by(PoopEvent.created_at.asc())
     ).all()
     
@@ -437,6 +452,16 @@ def _achievement_pool(n: int) -> list[str]:
 
 
 def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int | None = None) -> tuple[bool, str]:
+    if origin_chat_id is None:
+        origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
+
+    normalize_session_user_state_to_origin_chat(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        origin_chat_id=origin_chat_id,
+    )
+
     st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
     if st is None:
         st = SessionUserState(session_id=session_id, user_id=user_id, poops_n=0)
@@ -445,9 +470,6 @@ def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int |
 
     if st.poops_n >= 10:
         return False, "Я тебе не верю"
-
-    if origin_chat_id is None:
-        origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
 
     prev = st.poops_n
     st.poops_n += 1
@@ -475,6 +497,14 @@ def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int |
 
 
 def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+    origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
+    normalize_session_user_state_to_origin_chat(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        origin_chat_id=origin_chat_id,
+    )
+
     st = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
     if st is None or st.poops_n <= 0:
         return False, "Нельзя вкакаться"
@@ -506,15 +536,6 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
 
     user_ids = [int(user_id) for (user_id,) in member_rows]
     users = {u.user_id: u for u in db.scalars(select(User).where(User.user_id.in_(user_ids))).all()}
-    states = {
-        s.user_id: s
-        for s in db.scalars(
-            select(SessionUserState).where(
-                SessionUserState.session_id == session_id,
-                SessionUserState.user_id.in_(user_ids),
-            )
-        ).all()
-    }
     chat_today_positive_user_ids = {
         int(uid)
         for uid in db.scalars(
@@ -523,6 +544,18 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             .where(
                 DaySession.chat_id == chat_id,
                 DaySession.session_date == session_date,
+                PoopEvent.user_id.in_(user_ids),
+                PoopEvent.origin_chat_id == chat_id,
+            )
+            .group_by(PoopEvent.user_id)
+        ).all()
+    }
+    chat_today_counts = {
+        int(uid): int(count)
+        for uid, count in db.execute(
+            select(PoopEvent.user_id, func.count(PoopEvent.id))
+            .where(
+                PoopEvent.session_id == session_id,
                 PoopEvent.user_id.in_(user_ids),
                 PoopEvent.origin_chat_id == chat_id,
             )
@@ -551,8 +584,7 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
         u = users.get(uid)
         if not u:
             continue
-        st = states.get(uid)
-        poops = int(st.poops_n) if st else 0
+        poops = int(chat_today_counts.get(int(uid), 0))
 
         # Считаем стрик
         streak_val = _streak_until_yesterday(chat_days_by_user.get(int(uid), []), session_date)
@@ -563,7 +595,13 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             lines.append(f"{mention(u)} — — | стрик {streak_val} дн.")
         else:
             # Есть отметки — показываем слоты + титул + стрик
-            slot_counts = _get_user_slot_counts(db, session_id, int(uid), tz_name)
+            slot_counts = _get_user_slot_counts(
+                db,
+                session_id,
+                int(uid),
+                tz_name,
+                origin_chat_id=chat_id,
+            )
             slot_display = _format_slot_counts(slot_counts)
             title = _get_user_title(slot_counts)
             
@@ -580,14 +618,8 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
 def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, session_date: date) -> str:
     date_str = session_date.strftime("%d.%m.%y")
     tz_name = _chat_timezone(db, chat_id)
-    state = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
-    poops = int(state.poops_n) if state else 0
-
-    events = db.scalars(
-        select(PoopEvent)
-        .where(PoopEvent.session_id == session_id, PoopEvent.user_id == user_id)
-        .order_by(PoopEvent.event_n.asc())
-    ).all()
+    events = list_origin_events(db, session_id, user_id, chat_id)
+    poops = len(events)
 
     chat_days = [
         d
@@ -622,7 +654,7 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
         chat_streak += 1 if chat_streak > 0 else 1
 
     # Считаем слоты для лички
-    slot_counts = _get_user_slot_counts(db, session_id, user_id, tz_name)
+    slot_counts = _get_user_slot_counts(db, session_id, user_id, tz_name, origin_chat_id=chat_id)
     slot_display = _format_slot_counts(slot_counts)
     title = _get_user_title(slot_counts)
 

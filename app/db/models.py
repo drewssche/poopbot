@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, date, time
+from datetime import UTC, datetime, date, time
 from sqlalchemy import (
     BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Integer,
     String, Text, Time, UniqueConstraint, PrimaryKeyConstraint
@@ -8,6 +8,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class Chat(Base):
@@ -21,7 +25,7 @@ class Chat(Base):
     q2_q3_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_global: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     help_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     help_owner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -35,7 +39,7 @@ class User(Base):
     first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     disable_mentions: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class ChatMember(Base):
@@ -44,7 +48,7 @@ class ChatMember(Base):
 
     chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"))
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"))
-    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class Session(Base):
@@ -61,7 +65,7 @@ class Session(Base):
         nullable=False,
     )
 
-    start_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    start_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     end_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     reminded_22_sent: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -112,7 +116,7 @@ class SessionUserState(Base):
         nullable=True,
     )
 
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class PoopEvent(Base):
@@ -131,8 +135,8 @@ class PoopEvent(Base):
         Enum("great", "ok", "bad", name="feeling_kind"),
         nullable=True,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class RateLimit(Base):
@@ -142,7 +146,7 @@ class RateLimit(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger)
     user_id: Mapped[int] = mapped_column(BigInteger)
     scope: Mapped[str] = mapped_column(String(32))
-    last_action_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_action_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class CommandMessage(Base):
@@ -154,7 +158,7 @@ class CommandMessage(Base):
     command: Mapped[str] = mapped_column(String(32))  # e.g. "stats"
     session_date: Mapped[date] = mapped_column(Date, nullable=False)
     message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class AppSetting(Base):
@@ -162,4 +166,4 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)

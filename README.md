@@ -100,6 +100,36 @@ PowerShell:
 docker compose logs -f --tail=200 bot | Select-String -Pattern "ERROR|Traceback|Update id="
 ```
 
+## Тесты
+
+На VPS/в Docker:
+
+```bash
+docker compose exec bot python -m pytest tests/ -v
+```
+
+Локально для разработки:
+
+```bash
+./.venv/bin/pytest -q tests
+```
+
+Что важно:
+- runtime проекта остаётся Docker-first;
+- обычный test suite сейчас зелёный;
+- `tests/load_test.py` является opt-in и пропускается по умолчанию;
+- для запуска `load_test.py` через pytest нужно выставить `RUN_LOAD_TESTS=1`.
+
+Нагрузочный прогон:
+
+```bash
+# локально
+RUN_LOAD_TESTS=1 ./.venv/bin/pytest -q tests/load_test.py
+
+# или как отдельный скрипт в контейнере
+docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
+```
+
 ## Важно
 
 - Миграции применяются при старте контейнера бота.

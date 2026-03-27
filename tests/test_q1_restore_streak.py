@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.base import Base
 from app.db.models import Chat, ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 from app.services.q1_service import (
+    render_q1,
     render_q1_private,
     restore_recent_streak_window,
     restore_streak_for_user,
@@ -201,6 +202,21 @@ class RestoreStreakTests(unittest.TestCase):
 
         assert changed is True
         assert "Стрик в этой личке: 3 дн." in text
+
+    def test_q1_group_shows_zero_streak_for_new_member(self) -> None:
+        chat_id = -100
+        user_id = 1
+        today = date(2026, 3, 23)
+        self._add_chat(chat_id)
+        self._add_user(user_id)
+        self._add_membership(chat_id, user_id)
+        sess = DaySession(chat_id=chat_id, session_date=today, status="active")
+        self.db.add(sess)
+        self.db.commit()
+
+        text = render_q1(self.db, chat_id=chat_id, session_id=sess.session_id, session_date=today)
+
+        self.assertIn("@u1 — — | стрик 0 дн.", text)
 
     def test_undo_restore_removes_backfilled_day_and_live_streak_falls_back(self) -> None:
         chat_id = 7

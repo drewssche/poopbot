@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -392,10 +392,11 @@ async def streak_admin_cmd(message: Message) -> None:
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         today = now_in_tz(chat.timezone).date()
+        set_command_message_id(db, chat_id, user.id, "streak_admin", today, sent.message_id)
 
 
 # Игнорируем все неизвестные команды и сообщения
-@router.message()
+@router.message(~F.text.startswith("/"))
 async def ignore_unknown_messages(message: Message) -> None:
     """Игнорирует все сообщения, которые не являются известными командами."""
     # Просто игнорируем - бот реагирует только на /start, /help, /stats, /debug, /streak

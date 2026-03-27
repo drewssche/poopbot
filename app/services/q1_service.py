@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import os
 import random
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
+from app.db.models import Chat, ChatMember, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 from app.services.poop_event_service import create_event, delete_event, reconcile_events_count
 from app.services.time_service import (
     get_time_slot,
@@ -71,9 +71,12 @@ def _get_user_title(slot_counts: dict[str, int]) -> str:
     dominant = get_dominant_slot(slot_counts)
     if dominant is None:
         return ""
-    if dominant == "all_day":
-        return "Круглосуточный 🕐"
     return get_slot_title(dominant) + " " + get_slot_emoji(dominant)
+
+
+def _chat_timezone(db: Session, chat_id: int) -> str:
+    chat = db.get(Chat, chat_id)
+    return chat.timezone if chat and chat.timezone else "Europe/Minsk"
 
 
 def _streak_until_yesterday(days: list[date], day: date) -> int:
@@ -211,8 +214,8 @@ def restore_streak_for_date(db: Session, chat_id: int, user_id: int, restore_dat
             chat_id=chat_id,
             session_date=restore_date,
             status="closed",
-            start_at=datetime.utcnow(),
-            end_at=datetime.utcnow(),
+            start_at=datetime.now(UTC),
+            end_at=datetime.now(UTC),
         )
         db.add(sess)
         db.flush()
@@ -329,8 +332,8 @@ def restore_recent_streak_window(
                 chat_id=chat_id,
                 session_date=restore_date,
                 status="closed",
-                start_at=datetime.utcnow(),
-                end_at=datetime.utcnow(),
+                start_at=datetime.now(UTC),
+                end_at=datetime.now(UTC),
             )
             db.add(sess)
             db.flush()
@@ -487,6 +490,7 @@ def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
 
 def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) -> str:
     date_str = session_date.strftime("%d.%m.%y")
+    tz_name = _chat_timezone(db, chat_id)
 
     member_rows = db.execute(
         select(ChatMember.user_id).where(ChatMember.chat_id == chat_id).order_by(ChatMember.joined_at.asc())
@@ -556,16 +560,10 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
             streak_val += 1 if streak_val > 0 else 1
 
         if poops == 0:
-            # Нет отметок сегодня
-            if streak_val > 0:
-                # Но стрик есть — показываем только стрик
-                lines.append(f"{mention(u)} — — | стрик {streak_val} дн.")
-            else:
-                # Нет ни отметок, ни стрика
-                lines.append(f"{mention(u)} — — | —")
+            lines.append(f"{mention(u)} — — | стрик {streak_val} дн.")
         else:
             # Есть отметки — показываем слоты + титул + стрик
-            slot_counts = _get_user_slot_counts(db, session_id, int(uid), "Europe/Minsk")
+            slot_counts = _get_user_slot_counts(db, session_id, int(uid), tz_name)
             slot_display = _format_slot_counts(slot_counts)
             title = _get_user_title(slot_counts)
             
@@ -581,6 +579,7 @@ def render_q1(db: Session, chat_id: int, session_id: int, session_date: date) ->
 
 def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, session_date: date) -> str:
     date_str = session_date.strftime("%d.%m.%y")
+    tz_name = _chat_timezone(db, chat_id)
     state = db.get(SessionUserState, {"session_id": session_id, "user_id": user_id})
     poops = int(state.poops_n) if state else 0
 
@@ -623,7 +622,7 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
         chat_streak += 1 if chat_streak > 0 else 1
 
     # Считаем слоты для лички
-    slot_counts = _get_user_slot_counts(db, session_id, user_id, "Europe/Minsk")
+    slot_counts = _get_user_slot_counts(db, session_id, user_id, tz_name)
     slot_display = _format_slot_counts(slot_counts)
     title = _get_user_title(slot_counts)
 
@@ -636,7 +635,7 @@ def render_q1_private(db: Session, chat_id: int, session_id: int, user_id: int, 
 
     # Добавляем слоты если есть
     if poops > 0 and slot_display:
-        lines.append(f"Паттерны: {slot_display}")
+        lines.append(f"Ритм: {slot_display}")
         if title and title != "Участник":
             lines.append(f"Титул: {title}")
 

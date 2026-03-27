@@ -5,9 +5,11 @@
 Заполняет БД тестовыми данными и проверяет производительность оптимизаций.
 Масштаб: 10 чатов × 118 пользователей × 365 дней истории
 """
+import os
 import time
 from datetime import date, timedelta, time as dt_time
-from sqlalchemy import select, func
+import pytest
+from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
@@ -23,6 +25,14 @@ NUM_USERS = 118
 DAYS_HISTORY = 365
 
 DATABASE_URL = "postgresql+psycopg://poopbot:super_strong_password@db:5432/poopbot"
+
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(
+        os.getenv("RUN_LOAD_TESTS") != "1",
+        reason="load tests are disabled by default; set RUN_LOAD_TESTS=1 to enable",
+    ),
+]
 
 
 def create_test_data(
@@ -74,7 +84,7 @@ def create_test_data(
     total_memberships = 0
     for user_id in user_ids:
         # Каждый пользователь в 1-3 чатах
-        num_chats_for_user = random.randint(1, 3)
+        num_chats_for_user = random.randint(1, min(3, len(chat_ids)))
         user_chats = random.sample(chat_ids, k=num_chats_for_user)
         for chat_id in user_chats:
             db.add(ChatMember(chat_id=chat_id, user_id=user_id))
@@ -139,6 +149,38 @@ def create_test_data(
     print(f"   Дней истории: {days_history}")
 
 
+@pytest.fixture
+def engine():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def db(engine):
+    with Session(engine) as db:
+        create_test_data(db, num_chats=2, num_users=12, days_history=30)
+        yield db
+
+
+@pytest.fixture
+def today() -> date:
+    return date.today()
+
+
+@pytest.fixture
+def chat_id(db: Session) -> int:
+    return int(db.scalar(select(Chat.chat_id).where(Chat.chat_id < 0).order_by(Chat.chat_id.asc()).limit(1)))
+
+
+@pytest.fixture
+def user_id(db: Session) -> int:
+    return int(db.scalar(select(User.user_id).where(User.user_id >= 100000).order_by(User.user_id.asc()).limit(1)))
+
+
 def test_streak_recalc_performance(db: Session, chat_id: int, today: date) -> None:
     """Тест производительности пересчёта стриков."""
     print(f"\n📊 Тест пересчёта стриков для chat_id={chat_id}...")
@@ -199,7 +241,7 @@ def test_stats_rendering(db: Session, chat_id: int, user_id: int, today: date) -
     # Статистика чата
     start = time.perf_counter()
     try:
-        stats_chat = build_stats_text_chat(db, chat_id, None, today, "month")
+        stats_chat = build_stats_text_chat(db, chat_id, today, "month")
         elapsed = time.perf_counter() - start
         print(f"   /stats chat (месяц): {elapsed*1000:.1f}ms")
     except Exception as e:

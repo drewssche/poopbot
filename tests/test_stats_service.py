@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import sys
 import types
+import re
 from datetime import timezone
 
 from sqlalchemy import create_engine
@@ -21,6 +22,7 @@ if "pytz" not in sys.modules:
 from app.services.stats_service import (
     _compute_user_chat_streak_live,
     build_stats_text_chat,
+    build_stats_text_my,
     collect_among_chats_snapshot,
 )
 
@@ -81,6 +83,14 @@ class StatsServiceTests(unittest.TestCase):
                         origin_chat_id=origin,
                     )
                 )
+
+    def _extract_slot_counts(self, text: str) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for slot in ("Ночь", "Утро", "День", "Вечер"):
+            m = re.search(rf"{slot}.*?:\s+(\d+) раз", text)
+            if m:
+                out[slot] = int(m.group(1))
+        return out
 
     def test_chat_streak_uses_origin_events_for_chat_context(self) -> None:
         chat_id = -100
@@ -148,6 +158,70 @@ class StatsServiceTests(unittest.TestCase):
         snap = collect_among_chats_snapshot(self.db, d)
         winners = {(cid, poops) for cid, _day, poops in snap["record_days"]}
         self.assertEqual(winners, {(c1, 5), (c2, 5)})
+
+    def test_my_stats_slot_patterns_follow_deduped_total(self) -> None:
+        user_id = 1
+        c1, c2 = -1, -2
+        d = date(2026, 2, 16)
+        self._add_chat(c1)
+        self._add_chat(c2)
+        self._add_user(user_id, username="u1")
+
+        self._add_session_state(chat_id=c1, d=d, user_id=user_id, poops_n=2, with_events=False)
+        self._add_session_state(chat_id=c2, d=d, user_id=user_id, poops_n=3, with_events=False)
+        self.db.commit()
+
+        s1 = self.db.query(DaySession).filter(DaySession.chat_id == c1, DaySession.session_date == d).one()
+        s2 = self.db.query(DaySession).filter(DaySession.chat_id == c2, DaySession.session_date == d).one()
+        self.db.add_all(
+            [
+                PoopEvent(session_id=s1.session_id, user_id=user_id, event_n=1, origin_chat_id=c1, created_at=datetime(2026, 2, 16, 3, 0)),
+                PoopEvent(session_id=s1.session_id, user_id=user_id, event_n=2, origin_chat_id=c1, created_at=datetime(2026, 2, 16, 4, 0)),
+                PoopEvent(session_id=s2.session_id, user_id=user_id, event_n=1, origin_chat_id=c2, created_at=datetime(2026, 2, 16, 13, 0)),
+                PoopEvent(session_id=s2.session_id, user_id=user_id, event_n=2, origin_chat_id=c2, created_at=datetime(2026, 2, 16, 14, 0)),
+                PoopEvent(session_id=s2.session_id, user_id=user_id, event_n=3, origin_chat_id=c2, created_at=datetime(2026, 2, 16, 15, 0)),
+            ]
+        )
+        self.db.commit()
+
+        text = build_stats_text_my(self.db, c1, user_id, d, "all")
+        slot_counts = self._extract_slot_counts(text)
+
+        self.assertIn("- Всего: 💩(3)", text)
+        self.assertEqual(sum(slot_counts.values()), 3)
+        self.assertNotIn("Пока нет данных для анализа паттернов.", text)
+
+    def test_private_stats_slot_patterns_use_real_event_timestamps(self) -> None:
+        chat_id = 200
+        user_id = 7
+        self._add_chat(chat_id)
+        self._add_user(user_id, username="u7")
+
+        d = date(2026, 2, 16)
+        self._add_session_state(
+            chat_id=chat_id,
+            d=d,
+            user_id=user_id,
+            poops_n=2,
+            with_events=False,
+            origin_chat_id=chat_id,
+        )
+        self.db.commit()
+
+        sess = self.db.query(DaySession).filter(DaySession.chat_id == chat_id, DaySession.session_date == d).one()
+        self.db.add_all(
+            [
+                PoopEvent(session_id=sess.session_id, user_id=user_id, event_n=1, origin_chat_id=chat_id, created_at=datetime(2026, 2, 16, 9, 0)),
+                PoopEvent(session_id=sess.session_id, user_id=user_id, event_n=2, origin_chat_id=chat_id, created_at=datetime(2026, 2, 16, 19, 0)),
+            ]
+        )
+        self.db.commit()
+
+        text = build_stats_text_chat(self.db, chat_id, d, "all", user_id=user_id)
+        slot_counts = self._extract_slot_counts(text)
+
+        self.assertEqual(sum(slot_counts.values()), 2)
+        self.assertEqual(sum(1 for count in slot_counts.values() if count > 0), 2)
 
 
 if __name__ == "__main__":

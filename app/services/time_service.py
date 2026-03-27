@@ -43,13 +43,15 @@ TIME_SLOTS = {
     "morning": "🌅",
     "afternoon": "☀️",
     "evening": "🌆",
+    "all_day": "🕐",
 }
 
 SLOT_TITLES = {
     "night": "Ночной серун",
-    "morning": "Утренний жаворонок",
-    "afternoon": "Дневной трудяга",
-    "evening": "Вечерний философ",
+    "morning": "Утренний просер",
+    "afternoon": "Дневной навальщик",
+    "evening": "Вечерний сливатор",
+    "all_day": "Круглосуточный серун",
 }
 
 
@@ -82,16 +84,26 @@ def get_dominant_slot(slot_counts: dict[str, int]) -> str | None:
     """Определяет доминирующий слот по счётчикам."""
     if not slot_counts or all(v == 0 for v in slot_counts.values()):
         return None
-    
-    # Проверяем на равенство всех слотов (Круглосуточный)
+
+    total = sum(slot_counts.values())
     non_zero_slots = [k for k, v in slot_counts.items() if v > 0]
+    if len(non_zero_slots) == 1:
+        return non_zero_slots[0]
+
+    if total < 3:
+        return None
+
     if len(non_zero_slots) == 4:
         values = [slot_counts[s] for s in non_zero_slots]
         if max(values) - min(values) <= 1:  # Разница не больше 1
             return "all_day"
-    
-    # Возвращаем слот с максимальным значением
-    return max(slot_counts.keys(), key=lambda s: slot_counts.get(s, 0))
+
+    ranked = sorted(slot_counts.items(), key=lambda item: (-item[1], item[0]))
+    top_slot, top_count = ranked[0]
+    second_count = ranked[1][1] if len(ranked) > 1 else 0
+    if top_count <= 0 or top_count == second_count:
+        return None
+    return top_slot
 
 
 def get_slot_popup(slot: str, hour: int) -> str:

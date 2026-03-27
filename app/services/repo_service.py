@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, date
+from datetime import UTC, datetime, time, date
 import logging
 from typing import Optional
 
@@ -72,7 +72,7 @@ def ensure_chat_member(db: Session, chat_id: int, user_id: int) -> ChatMember:
 
     member = db.get(ChatMember, {"chat_id": chat_id, "user_id": user_id})
     if member is None:
-        member = ChatMember(chat_id=chat_id, user_id=user_id, joined_at=datetime.utcnow())
+        member = ChatMember(chat_id=chat_id, user_id=user_id, joined_at=datetime.now(UTC))
         db.add(member)
 
         # streak row (per chat+user) create too
@@ -87,7 +87,7 @@ def get_or_create_session(db: Session, chat_id: int, session_date: date) -> DayS
     stmt = select(DaySession).where(DaySession.chat_id == chat_id, DaySession.session_date == session_date)
     sess = db.scalar(stmt)
     if sess is None:
-        sess = DaySession(chat_id=chat_id, session_date=session_date, status="active", start_at=datetime.utcnow(), end_at=None)
+        sess = DaySession(chat_id=chat_id, session_date=session_date, status="active", start_at=datetime.now(UTC), end_at=None)
         db.add(sess)
         db.flush()  # to get session_id
     return sess
@@ -118,7 +118,7 @@ def get_or_create_session_user_state(db: Session, session_id: int, user_id: int)
             remind_22=False,
             bristol=None,
             feeling=None,
-            updated_at=datetime.utcnow(),
+            updated_at=datetime.now(UTC),
         )
         db.add(sus)
     return sus

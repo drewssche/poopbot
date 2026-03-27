@@ -85,26 +85,26 @@ def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, 
     curr_r = period_to_range(local_date, period)
     prev_r = previous_period_range(local_date, period)
 
+    curr_metrics = compute_chat_period_metrics(db, chat_id, curr_r, user_id=report_user_id)
+    prev_metrics = compute_chat_period_metrics(db, chat_id, prev_r, user_id=report_user_id)
+
     text = title + "\n\n" + build_stats_text_chat(db, chat_id, local_date, period, user_id=report_user_id)
 
-    # Вычисляем паттерны чата за период
+    # Вычисляем паттерны чата за период.
     chat_slot_counts, _ = _compute_chat_slot_patterns(db, chat_id, curr_r)
     chat_pattern_title = _get_pattern_title(chat_slot_counts, curr_metrics.total_poops)
-    
-    # Добавляем блок паттернов после основного текста статистики
+
+    # Добавляем блок паттернов после основного текста статистики.
     if curr_metrics.total_poops > 0:
         # Находим позицию после заголовка статистики
         insert_marker = "\n\nТенденция к прошлому периоду:"
         if insert_marker in text:
-            pattern_block = "\n\n🕐 Паттерны за период:\n"
-            pattern_block += "\n".join(_format_slot_patterns(chat_slot_counts, curr_metrics.total_poops))
+            pattern_block = "\n\n🕐 Ритм за период:\n"
+            pattern_block += "\n".join(_format_slot_patterns(chat_slot_counts))
             if chat_pattern_title:
                 pattern_block += f"\n\n💡 Титул периода: «{chat_pattern_title}»"
             pattern_block += insert_marker
             text = text.replace(insert_marker, pattern_block)
-
-    curr_metrics = compute_chat_period_metrics(db, chat_id, curr_r, user_id=report_user_id)
-    prev_metrics = compute_chat_period_metrics(db, chat_id, prev_r, user_id=report_user_id)
 
     trend_lines = ["Тенденция к прошлому периоду:"]
     trend_lines.append(_trend_line("Всего 💩", curr_metrics.total_poops, prev_metrics.total_poops))

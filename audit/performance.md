@@ -1,5 +1,8 @@
 # Performance Audit for 1 vCPU / 2 GB RAM VPS
 
+> Исторический аудит. Текущий тестовый контур с тех пор изменился:
+> старые неподдерживаемые Telegram-интеграционные тесты удалены, а `tests/load_test.py` теперь opt-in (`RUN_LOAD_TESTS=1`).
+
 Date: local workspace audit
 
 ## Scope

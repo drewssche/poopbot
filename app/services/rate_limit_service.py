@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.db.models import RateLimit
@@ -17,7 +17,7 @@ def check_rate_limit(
     True  => allowed
     False => blocked
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     rl = db.get(RateLimit, {"chat_id": chat_id, "user_id": user_id, "scope": scope})
 
     if rl is None:

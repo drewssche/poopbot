@@ -355,7 +355,7 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
     # Добавляем блок паттернов по всем чатам
     total_all = sum(total_slot_counts.values())
     if total_all > 0:
-        lines.extend(["", "🕐 Всего по слотам (все чаты):"])
+        lines.extend(["", "🕐 Когда чаще ходят (все чаты):"])
         labels = [
             ("night", "🌙 Ночь (00–06)"),
             ("morning", "🌅 Утро (06–12)"),

@@ -24,6 +24,7 @@ This is a code health and change-safety effort first. It is not expected to prod
 
 - Added low-risk runtime performance optimizations and documented them in `/Users/bitriks24/Downloads/poopbot/audit/performance.md`
 - Added local test harness support with `.venv` and `pytest.ini`
+- Removed stale Telegram integration test files and normalized the remaining test suite
 - Added migrated-chat handling so scheduler stops retrying stale Telegram group ids
 - Split `app/services/scheduler_service.py` into:
   - `/Users/bitriks24/Downloads/poopbot/app/services/scheduler_service.py`

@@ -57,10 +57,14 @@ from app.services.stats_streaks import (
 from app.services.time_service import now_in_tz, get_time_slot, get_slot_emoji, get_slot_title, get_dominant_slot
 
 
+def _empty_slot_counts() -> dict[str, int]:
+    return {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+
+
 def _compute_slot_patterns(db: Session, session_ids: list[int], user_id: int, tz_name: str = "Europe/Minsk") -> dict[str, int]:
     """Подсчитывает события пользователя по временным слотам."""
     if not session_ids:
-        return {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+        return _empty_slot_counts()
     
     events = db.scalars(
         select(PoopEvent).where(
@@ -69,16 +73,32 @@ def _compute_slot_patterns(db: Session, session_ids: list[int], user_id: int, tz
         )
     ).all()
     
-    slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+    slot_counts = _empty_slot_counts()
     for ev in events:
         if ev.created_at:
             slot = get_time_slot(ev.created_at, tz_name)
             slot_counts[slot] = slot_counts.get(slot, 0) + 1
-    
+
     return slot_counts
 
 
-def _format_slot_patterns(slot_counts: dict[str, int], total: int) -> list[str]:
+def _compute_slot_patterns_from_state_rows(
+    states: list[SessionUserState],
+    events_map: dict[tuple[int, int], list[PoopEvent]],
+    *,
+    tz_name: str = "Europe/Minsk",
+) -> dict[str, int]:
+    """Считает паттерны только по каноническим состояниям, чтобы не расходиться с dedup-итогами."""
+    slot_counts = _empty_slot_counts()
+    for state in states:
+        for ev in events_map.get((int(state.session_id), int(state.user_id)), []):
+            if ev.created_at:
+                slot = get_time_slot(ev.created_at, tz_name)
+                slot_counts[slot] = slot_counts.get(slot, 0) + 1
+    return slot_counts
+
+
+def _format_slot_patterns(slot_counts: dict[str, int]) -> list[str]:
     """Форматирует паттерны для отображения в статистике."""
     slot_total = sum(slot_counts.values())
     if slot_total == 0:
@@ -107,11 +127,11 @@ def _get_pattern_title(slot_counts: dict[str, int], total: int) -> str | None:
     """Определяет титул по паттернам."""
     if total == 0:
         return None
-    
+
     dominant = get_dominant_slot(slot_counts)
-    if dominant is None or dominant == "all_day":
+    if dominant is None:
         return None
-    
+
     return get_slot_title(dominant)
 
 
@@ -197,8 +217,8 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     streak_val = _compute_user_global_streak_live(db, user_id, today)
 
-    # Вычисляем паттерны по слотам
-    slot_counts = _compute_slot_patterns(db, session_ids, user_id)
+    # Слоты считаем по тем же каноническим сессиям, что и dedup-итоги.
+    slot_counts = _compute_slot_patterns_from_state_rows(canonical_states, events_map)
     pattern_title = _get_pattern_title(slot_counts, total_poops)
 
     lines = [
@@ -215,8 +235,8 @@ def build_stats_text_my(db: Session, chat_id: int, user_id: int, today: date, pe
 
     # Добавляем блок паттернов
     if total_poops > 0:
-        lines.append("🕐 Твои паттерны:")
-        lines.extend(_format_slot_patterns(slot_counts, total_poops))
+        lines.append("🕐 Твой ритм:")
+        lines.extend(_format_slot_patterns(slot_counts))
         if pattern_title:
             lines.append("")
             lines.append(f"💡 Титул: «{pattern_title}»")
@@ -287,27 +307,20 @@ def _compute_chat_slot_patterns(db: Session, chat_id: int, r: Range) -> tuple[di
     return chat_slot_counts, user_slot_counts
 
 
-def _compute_global_slot_patterns(db: Session, r: Range) -> dict[int, dict[str, int]]:
-    """Подсчитывает паттерны всех пользователей глобально."""
-    sessions = _sessions_in_range(db, None, r)
-    if not sessions:
-        return {}
-    
-    session_ids = [int(s.session_id) for s in sessions]
-    
-    events = db.scalars(
-        select(PoopEvent).where(PoopEvent.session_id.in_(session_ids))
-    ).all()
-    
+def _compute_global_slot_patterns(
+    canonical_state_by_user_day: dict[tuple[int, date], SessionUserState],
+    events_map: dict[tuple[int, int], list[PoopEvent]],
+    tz_name: str = "Europe/Minsk",
+) -> dict[int, dict[str, int]]:
+    """Подсчитывает глобальные паттерны по тем же dedup-состояниям, что и общие итоги."""
     user_slot_counts: dict[int, dict[str, int]] = {}
-    for ev in events:
-        if ev.created_at:
-            slot = get_time_slot(ev.created_at, "Europe/Minsk")
-            uid = int(ev.user_id)
-            if uid not in user_slot_counts:
-                user_slot_counts[uid] = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
-            user_slot_counts[uid][slot] = user_slot_counts[uid].get(slot, 0) + 1
-    
+    for st in canonical_state_by_user_day.values():
+        uid = int(st.user_id)
+        user_counts = user_slot_counts.setdefault(uid, _empty_slot_counts())
+        for ev in events_map.get((int(st.session_id), uid), []):
+            if ev.created_at:
+                slot = get_time_slot(ev.created_at, tz_name)
+                user_counts[slot] = user_counts.get(slot, 0) + 1
     return user_slot_counts
 
 
@@ -368,18 +381,8 @@ def build_stats_text_chat(
         best_streak_live = _best_streak_from_days(active_days)
         streak_val = _current_streak_from_days(active_days, today)
 
-        # Вычисляем паттерны по слотам для лички (считаем напрямую из rows)
-        slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
-        for d, uid, n, bristol, feeling in rows:
-            if int(uid) == user_id and n > 0:
-                # Для простоты считаем по дате сессии - утро/день/вечер
-                if d:  # Если дата есть
-                    # Распределяем равномерно по слотам (т.к. нет времени)
-                    slot_counts["morning"] += n // 4
-                    slot_counts["afternoon"] += n // 4
-                    slot_counts["evening"] += n // 4
-                    slot_counts["night"] += n - (3 * (n // 4))
-        
+        private_session_ids = [int(s.session_id) for s in _sessions_in_range(db, chat_id, r)]
+        slot_counts = _compute_slot_patterns(db, private_session_ids, user_id)
         pattern_title = _get_pattern_title(slot_counts, total_poops)
 
         mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
@@ -397,8 +400,8 @@ def build_stats_text_chat(
 
         # Добавляем блок паттернов
         if total_poops > 0:
-            lines.append("🕐 Твои паттерны:")
-            lines.extend(_format_slot_patterns(slot_counts, total_poops))
+            lines.append("🕐 Твой ритм:")
+            lines.extend(_format_slot_patterns(slot_counts))
             if pattern_title:
                 lines.append("")
                 lines.append(f"💡 Титул: «{pattern_title}»")
@@ -475,8 +478,8 @@ def build_stats_text_chat(
 
     # Добавляем блок паттернов чата
     if total_poops > 0:
-        lines.append("🕐 Паттерны чата:")
-        lines.extend(_format_slot_patterns(chat_slot_counts, total_poops))
+        lines.append("🕐 Ритм чата:")
+        lines.extend(_format_slot_patterns(chat_slot_counts))
         if chat_pattern_title:
             lines.append("")
             lines.append(f"💡 Чат — «{chat_pattern_title}»")
@@ -642,7 +645,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     me_name = _display_name(me, user_id)
 
     # Вычисляем глобальные паттерны для титулов
-    user_slot_counts = _compute_global_slot_patterns(db, r)
+    user_slot_counts = _compute_global_slot_patterns(canonical_state_by_user_day, events_map)
     
     # Считаем общее по слотам
     total_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
@@ -664,7 +667,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     # Добавляем блок паттернов по всем
     slot_total = sum(total_slot_counts.values())
     if slot_total > 0:
-        lines.append("🕐 Всего по слотам (все участники):")
+        lines.append("🕐 Когда чаще ходят (все участники):")
         labels = [
             ("night", "🌙 Ночь (00–06)"),
             ("morning", "🌅 Утро (06–12)"),
@@ -684,22 +687,24 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
         lines.append("🏆 Титулы месяца:")
         slot_labels = [
             ("night", "Ночной серун", "ночных"),
-            ("morning", "Утренний жаворонок", "утренних"),
-            ("afternoon", "Дневной трудяга", "дневных"),
-            ("evening", "Вечерний философ", "вечерних"),
+            ("morning", "Утренний просер", "утренних"),
+            ("afternoon", "Дневной навальщик", "дневных"),
+            ("evening", "Вечерний сливатор", "вечерних"),
         ]
         for slot, title, adj in slot_labels:
             top_users = _get_top_slot_users(user_slot_counts, slot, limit=10)
             if top_users and top_users[0][1] > 0:
                 # Находим место текущего пользователя
                 user_rank = next((i + 1 for i, (uid, _) in enumerate(top_users) if uid == user_id), None)
-                top_uid, top_count = top_users[0]
+                _top_uid, top_count = top_users[0]
+                my_count = next((count for uid, count in top_users if uid == user_id), 0)
                 
                 if user_rank == 1:
                     lines.append(f"{get_slot_emoji(slot)} {title} — ТЫ — {top_count} {adj} походов 👑")
                 else:
                     rank_str = f"#{user_rank}" if user_rank else f"#{len(top_users) + 1}+"
-                    lines.append(f"{get_slot_emoji(slot)} {title} — {rank_str} — {top_count} {adj} походов")
+                    count_for_line = my_count if user_rank else top_count
+                    lines.append(f"{get_slot_emoji(slot)} {title} — {rank_str} — {count_for_line} {adj} походов")
         lines.append("")
 
     lines.extend([

@@ -1,24 +1,28 @@
 # Тестирование Poopbot
 
+Дата актуализации: 2026-03-27
+
 ## Быстрый старт
 
-### 1. Запустить Docker
+### 1. Запустить Docker-окружение
 
 ```bash
 docker compose up -d
 ```
 
-### 2. Запустить unit-тесты
+### 2. Запустить тесты в Docker
 
 ```bash
 docker compose exec bot python -m pytest tests/ -v
 ```
 
-### 3. Запустить нагрузочный тест
+### 3. При необходимости запустить тесты локально из `.venv`
 
 ```bash
-docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
+./.venv/bin/pytest -q tests
 ```
+
+По умолчанию будут запущены обычные тесты, а `load_test.py` будет пропущен.
 
 ---
 
@@ -35,10 +39,13 @@ docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
 | `test_streak_restore_service.py` | Сервис восстановления стриков |
 | `test_healthcheck.py` | Health check бота |
 | `test_heartbeat_monitor.py` | Мониторинг пульса |
+| `test_time_slots.py` | Временные слоты, титулы, popups |
 
 **Запуск:**
 ```bash
 docker compose exec bot python -m pytest tests/ -v
+# или локально
+./.venv/bin/pytest -q tests
 ```
 
 ---
@@ -50,6 +57,8 @@ docker compose exec bot python -m pytest tests/ -v
 - 118 пользователей  
 - 365 дней истории
 
+В обычный `pytest` не входит и помечен как `slow`.
+
 **Что измеряет:**
 - Пересчёт стриков (00:06 daily)
 - Batch vs N+1 запросы
@@ -57,9 +66,12 @@ docker compose exec bot python -m pytest tests/ -v
 
 **Запуск:**
 ```bash
-# Очистить БД и запустить с нуля
+# Docker/VPS-сценарий
 docker compose exec db psql -U poopbot -d poopbot -c "TRUNCATE TABLE poop_events, session_user_state, sessions, user_streaks, chat_members, users RESTART IDENTITY CASCADE;"
 docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
+
+# Локально через pytest
+RUN_LOAD_TESTS=1 ./.venv/bin/pytest -q tests/load_test.py
 ```
 
 **Ожидаемые результаты:**
@@ -72,32 +84,11 @@ docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
 
 ---
 
-### Интеграционные тесты (`tests/test_integration.py`)
+### Интеграционные Telegram-тесты
 
-Проверяют работу бота в реальном Telegram.
+Исторические файлы `tests/test_integration.py` и `tests/test_integration_auto.py` удалены как неподдерживаемые.
 
-**Требования:**
-- Токен бота
-- Chat ID для тестов (группа или ЛС)
-
-**Запуск:**
-```bash
-# Тесты в ЛС с ботом
-docker compose exec -e PYTHONPATH=/app bot python /app/tests/test_integration.py \
-  --bot-token YOUR_BOT_TOKEN \
-  --chat-id YOUR_USER_ID
-
-# Тесты в группе
-docker compose exec -e PYTHONPATH=/app bot python /app/tests/test_integration.py \
-  --bot-token YOUR_BOT_TOKEN \
-  --chat-id -1001234567890 \
-  --user-id YOUR_USER_ID
-```
-
-**Как получить chat_id:**
-1. Добавьте бота `@devotestobot` в группу
-2. Отправьте `/start`
-3. Посмотрите логи: `docker compose logs bot | grep "chat_id"`
+Если понадобятся реальные Telegram e2e-проверки, их лучше добавлять заново как отдельный opt-in suite, а не как часть обычного `pytest`.
 
 ---
 
@@ -131,7 +122,7 @@ docker compose exec db psql -U poopbot -d poopbot -c "\di"
 docker compose exec bot python -c "from app.core.config import load_settings; s=load_settings(); print(f'DB_POOL_SIZE={s.db_pool_size}, MAX_OVERFLOW={s.db_max_overflow}')"
 ```
 
-Ожидается: `DB_POOL_SIZE=10, MAX_OVERFLOW=10`
+Ожидается: `DB_POOL_SIZE=6, MAX_OVERFLOW=4`
 
 ---
 
@@ -153,11 +144,14 @@ docker compose exec bot python -c "from app.db.engine import make_engine; from a
 ### Тесты падают
 
 ```bash
-# Запустить с подробным выводом
+# Docker/VPS
 docker compose exec bot python -m pytest tests/ -v --tb=long
 
+# Локально с подробным выводом
+./.venv/bin/pytest -q tests -vv --tb=long
+
 # Запустить конкретный тест
-docker compose exec bot python -m pytest tests/test_scheduler_streak_recalc.py -v
+./.venv/bin/pytest -q tests/test_scheduler_streak_recalc.py -vv
 ```
 
 ### Медленные запросы
@@ -182,9 +176,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from app.db.base import Base
 
-engine = create_engine("sqlite+pysqlite:///:memory:")
+engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 Base.metadata.create_all(engine)
 db = Session(engine)
 ```
 
-4. Запустите: `docker compose exec bot python -m pytest tests/test_your_feature.py -v`
+4. Запустите:
+
+```bash
+./.venv/bin/pytest -q tests/test_your_feature.py
+```

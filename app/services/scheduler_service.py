@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import datetime, timedelta, date, time
+from datetime import UTC, datetime, timedelta, date, time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -439,7 +439,7 @@ async def _close_session(bot: Bot, db, chat_id: int, session_id: int, tz_name: s
         return
 
     sess.status = "closed"
-    sess.end_at = datetime.utcnow()
+    sess.end_at = datetime.now(UTC)
 
     # СЃС‚СЂРёРєРё: РµСЃР»Рё СЃРµРіРѕРґРЅСЏ poops_n > 0 в†’ +1 РґРµРЅСЊ РїРѕРґСЂСЏРґ, РёРЅР°С‡Рµ СЃР±СЂРѕСЃ
     member_rows = db.execute(

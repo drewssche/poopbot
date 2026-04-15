@@ -1,3 +1,5 @@
+name: poopbot
+
 services:
   db:
     image: postgres:16

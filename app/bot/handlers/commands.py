@@ -230,7 +230,6 @@ async def help_cmd(message: Message) -> None:
         window = get_session_window(chat.timezone)
         session_date = window.session_date
         existing_mid = get_any_command_message_id(db, chat_id, "help", session_date)
-        is_private_chat = message.chat.type == "private"
         root_text = _help_root_text(chat.timezone)
 
     if existing_mid:
@@ -242,14 +241,12 @@ async def help_cmd(message: Message) -> None:
                 text=root_text,
                 reply_markup=help_root_kb(user.id),
             )
-            if not is_private_chat:
-                await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
+            await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
             err = str(e).lower()
             if "message is not modified" in err:
-                if not is_private_chat:
-                    await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
+                await message.answer("Меню помощи выше 👆", reply_to_message_id=existing_mid)
                 return
             if all(
                 x not in err
@@ -310,14 +307,12 @@ async def stats_cmd(message: Message) -> None:
                 text=text,
                 reply_markup=stats_root_kb(show_recap=show_recap, is_private_chat=is_private_chat),
             )
-            if not is_private_chat:
-                await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
+            await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
             return
         except TelegramBadRequest as e:
             err = str(e).lower()
             if "message is not modified" in err:
-                if not is_private_chat:
-                    await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
+                await message.answer("Твоя статистика выше 👆", reply_to_message_id=existing_mid)
                 return
             if all(
                 x not in err

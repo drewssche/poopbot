@@ -148,7 +148,7 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(bot.calls), 1)
         self.assertEqual(bot.calls[0]["chat_id"], 42)
-        self.assertIn("последние 7 дней", bot.calls[0]["text"])
+        self.assertIn("периоде, выбранном администратором", bot.calls[0]["text"])
         markup = bot.calls[0]["reply_markup"]
         self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim")
 

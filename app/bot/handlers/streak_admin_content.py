@@ -1,62 +1,36 @@
 from __future__ import annotations
 
 from datetime import date
+from app.services.restore_period_service import RestorePeriod
 
 
-def _candidate_block(candidates: list[dict[str, int | str]] | None) -> str:
-    if not candidates:
-        return "Подозрительные даты: пока не найдены.\n"
-    lines = ["Подозрительные даты инцидента:"]
-    for item in candidates:
-        lines.append(
-            f"• `{item['date']}` — всего {item['total']}, группы {item['groups']}, лички {item['private']}"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def streak_admin_text(
-    target_date: date,
-    *,
-    candidates: list[dict[str, int | str]] | None = None,
-    restore_enabled: bool = False,
-) -> str:
-    _ = target_date
-    _ = candidates
+def streak_admin_text(target_date: date, *, candidates=None, restore_enabled: bool = False, period: RestorePeriod | None = None) -> str:
+    label = period.label if period else "не выбран"
     return (
         "🛠 Управление восстановлением стрика\n\n"
-        "Окно восстановления: последние 7 дней\n\n"
-        f"Статус кнопки восстановления: {'ВКЛ' if restore_enabled else 'ВЫКЛ'}\n\n"
-        "Что делает панель:\n"
-        "• рассылает сервисное сообщение с кнопкой восстановления;\n"
-        "• отдельно по всем группам или по всем личкам;\n"
-        "• умеет отправить безопасное превью только тебе;\n"
-        "• умеет отправить боевое тестовое сообщение только тебе;\n"
-        "• умеет отменить тестовое восстановление только тебе;\n"
-        "• не дублирует отправку в уже обработанные чаты.\n\n"
-        "Рекомендация:\n"
-        "• сначала проверь `Превью в личку`, затем `Боевое себе в личку`;\n"
-        "• для массового инцидента сначала отправь в группы;\n"
-        "• затем, если нужно, отдельно в лички."
+        f"Период: {label}\n"
+        f"Статус восстановления: {'ВКЛ' if restore_enabled else 'ВЫКЛ'}\n\n"
+        "Период сохраняется до твоего изменения; даты сами не сдвигаются. "
+        "Новый выбор действует и для ранее отправленных сервисных кнопок.\n\n"
+        "Кнопка добавляет по одной отметке за каждый пропущенный день только нажавшему участнику и только в этом чате.\n\n"
+        "Сначала проверь превью или боевое сообщение себе, затем выбери адресатов. "
+        "Отмена убирает только твои неизменённые тестовые отметки выбранного периода."
     )
 
 
-def streak_admin_result_text(scope_label: str, target_date: date, *, sent: int, skipped: int, failed: int) -> str:
+def streak_admin_result_text(scope_label: str, target_date: date, *, sent: int, skipped: int, failed: int, period: RestorePeriod | None = None) -> str:
     return (
         "✅ Рассылка завершена\n\n"
-        "Окно восстановления: последние 7 дней\n"
+        f"Период: {period.label if period else 'выбранный в /streak'}\n"
         f"Куда: {scope_label}\n\n"
-        f"Отправлено: {sent}\n"
-        f"Пропущено как дубликат/неподходящее: {skipped}\n"
-        f"Ошибок: {failed}"
+        f"Отправлено: {sent}\nПропущено: {skipped}\nОшибок: {failed}"
     )
 
 
-def streak_admin_group_picker_text(target_date: date, *, page: int, total_groups: int) -> str:
+def streak_admin_group_picker_text(target_date: date, *, page: int, total_groups: int, period: RestorePeriod | None = None) -> str:
     return (
-        "🛠 Выбор группы для точечной рассылки\n\n"
-        "Окно восстановления: последние 7 дней\n"
-        f"Активных групп: {total_groups}\n"
-        f"Страница: {page + 1}\n\n"
-        "Нажми на нужную группу, и бот отправит туда одно сервисное сообщение "
-        "с кнопкой восстановления. Повторная отправка в ту же группу не задублируется."
+        "🛠 Выбор группы\n\n"
+        f"Период: {period.label if period else 'выбранный в /streak'}\n"
+        f"Активных групп: {total_groups}\nСтраница: {page + 1}\n\n"
+        "Нажми на группу, чтобы отправить сервисное сообщение. Повторное нажатие отправит его ещё раз."
     )

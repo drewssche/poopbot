@@ -41,6 +41,9 @@ docker compose exec bot python -m pytest tests/ -v
 | `test_stats_service.py` | Статистика, стрики, рейтинги |
 | `test_scheduler_streak_recalc.py` | Пересчёт стриков (оптимизация) |
 | `test_q1_restore_streak.py` | Восстановление стриков |
+| `test_restore_period.py` | Общий фиксированный период, поздние отметки, права, сроки и повторные нажатия |
+| `test_scheduler_unreachable_chat.py` | Отключение недоступного чата и отсутствие повторных запросов |
+| `test_q1_callbacks.py` | Сохранение Q1 до ответа Telegram, просроченные callback, сетевые сбои и журнал результатов |
 | `test_repo_service.py` | Репозитории, миграции чатов |
 | `test_streak_restore_service.py` | Сервис восстановления стриков |
 | `test_healthcheck.py` | Health check бота |

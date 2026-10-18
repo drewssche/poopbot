@@ -27,3 +27,9 @@ def q1_keyboard(
         kb.row(InlineKeyboardButton(text="♻️ Вернуть стрик", callback_data="q1:restore_streak"))
 
     return kb.as_markup()
+
+
+def closed_q1_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💩 Забыл отметиться", callback_data="q1:forgot"),
+    ]])

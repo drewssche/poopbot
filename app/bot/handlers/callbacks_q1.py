@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
@@ -51,6 +51,13 @@ def _is_stale_callback_error(e: TelegramBadRequest) -> bool:
     return "query is too old" in msg or "query id is invalid" in msg
 
 
+def _log_q1_result(cb: CallbackQuery, outcome: str, session_id: int | None = None) -> None:
+    logger.info(
+        "Q1 action chat_id=%s user_id=%s message_id=%s session_id=%s action=%s outcome=%s",
+        cb.message.chat.id, cb.from_user.id, cb.message.message_id, session_id, cb.data, outcome,
+    )
+
+
 def init_db(database_url: str) -> None:
     global _engine, _session_factory
     if _engine is None:
@@ -96,6 +103,9 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
     chat_id = cb.message.chat.id
     user = cb.from_user
     is_private_chat = cb.message.chat.type == "private"
+    committed = False
+    session_id = None
+    _log_q1_result(cb, "received")
 
     try:
         with db_session(_session_factory) as db:
@@ -103,6 +113,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             window = get_session_window(chat.timezone)
 
             if window.is_blocked_window:
+                _log_q1_result(cb, "blocked_window")
                 await cb.answer("Новая сессия начнётся в 00:05", show_alert=False)
                 return
 
@@ -115,6 +126,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 scope=rate_limit_scope,
                 cooldown_seconds=cooldown_seconds,
             ):
+                _log_q1_result(cb, "rate_limited")
                 await cb.answer("Не так быстро, здоровяк", show_alert=False)
                 return
 
@@ -125,6 +137,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             if cb.data == "q1:plus_late":
                 reminder_command = LATE_REMINDER_COMMAND
                 if not _resolve_reminder_context(db, chat_id, current_sess, cb, reminder_command):
+                    _log_q1_result(cb, "stale_reminder", current_sess.session_id)
                     await cb.answer("Неактуально", show_alert=False)
                     return
                 sess = current_sess
@@ -139,10 +152,13 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     )
                 )
                 if sess is None:
+                    _log_q1_result(cb, "unknown_message")
                     await cb.answer("Неактуально", show_alert=False)
                     return
 
+            session_id = sess.session_id
             if sess.status == "closed":
+                _log_q1_result(cb, "closed_session", session_id)
                 await cb.answer("Сессия закрыта", show_alert=False)
                 return
 
@@ -159,16 +175,15 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             if cb.data != "q1:plus_late":
                 allowed_msg_ids = {mid for mid in (q1_msg_id, late_msg_id) if mid}
                 if allowed_msg_ids and cb.message.message_id not in allowed_msg_ids:
+                    _log_q1_result(cb, "stale_message", session_id)
                     await cb.answer("Неактуально", show_alert=False)
                     return
 
             if cb.data == "q1:restore_streak":
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 changed, popup = restore_streak_for_user(db, chat_id, user.id, current_sess.session_date)
-                await cb.answer(popup, show_alert=False)
             elif cb.data == "q1:minus":
                 changed, popup = apply_minus(db, sess.session_id, user.id)
-                await cb.answer(popup, show_alert=False)
             else:
                 ensure_chat_member(db, chat_id=chat_id, user_id=user.id)
                 changed, popup = apply_plus(db, sess.session_id, user.id, origin_chat_id=chat_id)
@@ -181,8 +196,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     slot_popup = get_slot_popup(current_slot, current_hour)
                     if slot_popup:
                         popup = slot_popup
-                
-                await cb.answer(popup, show_alert=False)
 
             if cb.data != "q1:restore_streak":
                 state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
@@ -195,6 +208,24 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 )
 
             db.commit()
+            committed = True
+            _log_q1_result(cb, "saved" if changed else "unchanged", session_id)
+
+            # Telegram acknowledgement must never roll back a saved action or
+            # prevent refreshing Q1/private Q2 when the callback has expired.
+            try:
+                await cb.answer(popup, show_alert=False)
+            except TelegramAPIError as e:
+                reason = (
+                    "stale_callback"
+                    if isinstance(e, TelegramBadRequest) and _is_stale_callback_error(e)
+                    else type(e).__name__
+                )
+                logger.warning(
+                    "Q1 acknowledgement failed chat_id=%s user_id=%s message_id=%s "
+                    "session_id=%s action=%s committed=true reason=%s",
+                    chat_id, user.id, cb.message.message_id, session_id, cb.data, reason,
+                )
 
             text = (
                 render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=sess.session_date)
@@ -275,19 +306,27 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                     logger.exception("Failed to refresh Q2/Q3 after Q1 action")
 
     except TelegramBadRequest as e:
+        _log_q1_result(cb, "post_commit_error" if committed else "rolled_back", session_id)
         if _is_stale_callback_error(e):
             return
         logger.exception("Unhandled telegram error in q1_callbacks")
         try:
-            await cb.answer("Ошибка, попробуй ещё раз", show_alert=False)
+            await cb.answer(
+                "Изменения сохранены, но сообщение не обновилось" if committed else "Ошибка, попробуй ещё раз",
+                show_alert=False,
+            )
         except TelegramBadRequest as answer_err:
             if _is_stale_callback_error(answer_err):
                 return
             raise
     except Exception:
+        _log_q1_result(cb, "post_commit_error" if committed else "rolled_back", session_id)
         logger.exception("Unhandled exception in q1_callbacks")
         try:
-            await cb.answer("Ошибка, попробуй ещё раз", show_alert=False)
+            await cb.answer(
+                "Изменения сохранены, но сообщение не обновилось" if committed else "Ошибка, попробуй ещё раз",
+                show_alert=False,
+            )
         except TelegramBadRequest as e:
             if _is_stale_callback_error(e):
                 return

@@ -19,6 +19,12 @@ def streak_admin_kb(target_date: date, *, restore_enabled: bool) -> InlineKeyboa
             callback_data="streakadmin:toggle",
         )
     )
+    kb.row(
+        InlineKeyboardButton(text="Вчера", callback_data="streakadmin:period:1"),
+        InlineKeyboardButton(text="3 дня", callback_data="streakadmin:period:3"),
+        InlineKeyboardButton(text="7 дней", callback_data="streakadmin:period:7"),
+    )
+    kb.row(InlineKeyboardButton(text="📅 Другой период", callback_data="streakadmin:days:1"))
     kb.row(InlineKeyboardButton(text="👀 Превью в личку", callback_data=f"streakadmin:preview:{current_date}"))
     kb.row(InlineKeyboardButton(text="🧪 Боевое себе в личку", callback_data=f"streakadmin:battle:{current_date}"))
     kb.row(InlineKeyboardButton(text="↩️ Отменить восстановление себе", callback_data=f"streakadmin:undo:{current_date}"))
@@ -60,4 +66,16 @@ def streak_admin_group_picker_kb(target_date: date, group_options: list[tuple[in
         kb.row(*nav_buttons)
 
     kb.row(InlineKeyboardButton(text="↩️ Назад в панель", callback_data=f"streakadmin:panel:{current_date}"))
+    return kb.as_markup()
+
+
+def streak_period_picker_kb(days: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="−", callback_data=f"streakadmin:days:{max(1, days - 1)}"),
+        InlineKeyboardButton(text=f"{days} дн.", callback_data=f"streakadmin:days:{days}"),
+        InlineKeyboardButton(text="+", callback_data=f"streakadmin:days:{min(30, days + 1)}"),
+    )
+    kb.row(InlineKeyboardButton(text="✅ Выбрать этот период", callback_data=f"streakadmin:period:{days}"))
+    kb.row(InlineKeyboardButton(text="↩️ Назад", callback_data="streakadmin:panel"))
     return kb.as_markup()

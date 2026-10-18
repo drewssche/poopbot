@@ -25,6 +25,7 @@ from app.services.repo_service import (
     set_session_message_id,
 )
 from app.services.time_service import get_session_window, now_in_tz
+from app.services.restore_period_service import can_mark_closed_session
 from app.services.q1_service import mention, render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import ensure_q2_q3_exist, should_show_q2_q3_button
 from app.services.scheduler_reports import (
@@ -38,7 +39,7 @@ from app.services.reminder_service import (
     build_late_reminder_text,
 )
 from app.services.scheduler_telegram import safe_edit_message_text, safe_send_message
-from app.bot.keyboards.q1 import q1_keyboard
+from app.bot.keyboards.q1 import q1_keyboard, closed_q1_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
 
 logger = logging.getLogger(__name__)
@@ -300,6 +301,14 @@ async def _recover_chat_q1_on_startup(bot: Bot, session_factory: sessionmaker, c
             if is_past_day or is_today_after_cutoff:
                 await _close_session(bot, db, chat_id, active_sess.session_id, chat.timezone)
 
+        yesterday_sess = db.scalar(select(DaySession).where(
+            DaySession.chat_id == chat_id,
+            DaySession.session_date == window.session_date - timedelta(days=1),
+            DaySession.status == "closed",
+        ))
+        if yesterday_sess is not None:
+            await _lock_q1(bot, db, chat_id, yesterday_sess.session_id)
+
         sess = get_or_create_session(db, chat_id=chat_id, session_date=window.session_date)
 
         if local_time >= close_cutoff or sess.status == "closed" or window.is_blocked_window:
@@ -402,6 +411,7 @@ def _is_unreachable_chat_error(exc: TelegramBadRequest) -> bool:
     msg = str(exc).lower()
     return (
         "chat not found" in msg
+        or "chat_write_forbidden" in msg
         or "group chat was deleted" in msg
         or "group is deactivated" in msg
         or "bot was kicked from the group chat" in msg
@@ -487,8 +497,14 @@ async def _lock_q1(bot: Bot, db, chat_id: int, session_id: int) -> None:
         if chat_id > 0
         else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date)
     )
+    chat = db.get(Chat, chat_id)
+    today = now_in_tz(chat.timezone if chat else "Europe/Minsk").date()
+    can_mark = can_mark_closed_session(sess, today)
     text = f"{LOCK_LINE}\n\n{text}"
-    await safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text, reply_markup=None)
+    if can_mark:
+        text += f"\n\nЗабыл отметиться? Можно добавить одну отметку за {sess.session_date:%d.%m} до конца {(sess.session_date + timedelta(days=1)):%d.%m}."
+    await safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text,
+                                 reply_markup=closed_q1_keyboard() if can_mark else None)
 
 
 async def _lock_simple(bot: Bot, db, chat_id: int, session_id: int, kind: str, body_text: str) -> None:

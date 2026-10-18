@@ -17,7 +17,7 @@ from app.services.restore_period_service import choose_restore_period, ensure_re
 from app.services.scheduler_service import _refresh_current_q1_view
 from app.services.scheduler_telegram import safe_edit_message_text
 from app.services.streak_restore_service import (
-    collect_streak_restore_incident_stats, list_active_group_chat_ids,
+    collect_streak_restore_incident_stats, list_active_group_chat_ids, refresh_streak_restore_messages,
     send_streak_restore_battle_message, send_streak_restore_incident_message_to_chat,
     send_streak_restore_incident_messages, send_streak_restore_preview_message,
 )
@@ -85,6 +85,12 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
             await _edit_panel(cb, streak_admin_text(today, restore_enabled=enabled, period=period),
                               streak_admin_kb(today, restore_enabled=enabled))
             await cb.answer(f"Период: {period.label}" if action == "period" else "Готово")
+            if action == "period":
+                failed = await refresh_streak_restore_messages(cb.bot, _session_factory)
+                if failed:
+                    await _edit_panel(cb, streak_admin_text(today, restore_enabled=enabled, period=period)
+                        + f"\n\nНе удалось обновить даты в {failed} сообщениях. Повтори выбор периода для повторной попытки.",
+                        streak_admin_kb(today, restore_enabled=enabled))
             return
         if action == "days":
             days = max(1, min(30, int(parts[2])))
@@ -104,7 +110,7 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
         if action in {"preview", "battle"}:
             await cb.answer("Отправляю")
             send = send_streak_restore_preview_message if action == "preview" else send_streak_restore_battle_message
-            await send(cb.bot, owner_chat_id=cb.message.chat.id, target_date=today)
+            await send(cb.bot, _session_factory, owner_chat_id=cb.message.chat.id, target_date=today)
             return
         if action == "undo":
             with db_session(_session_factory) as db:

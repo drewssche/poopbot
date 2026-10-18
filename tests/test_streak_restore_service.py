@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -10,10 +11,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.db.models import Chat
 from app.services.command_message_service import get_command_message_id
+from app.services.restore_period_service import choose_restore_period
+from app.bot.handlers.callbacks_restore_preview import restore_preview_callbacks
 from app.services.streak_restore_service import (
     STREAK_RESTORE_INCIDENT_COMMAND,
     detect_suspected_streak_incident_dates,
     list_active_group_chat_ids,
+    refresh_streak_restore_messages,
+    send_streak_restore_preview_message,
     send_streak_restore_battle_message,
     send_streak_restore_incident_message_to_chat,
     send_streak_restore_incident_messages,
@@ -23,10 +28,15 @@ from app.services.streak_restore_service import (
 class _FakeBot:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.edits: list[dict] = []
 
     async def send_message(self, **kwargs):
         self.calls.append(kwargs)
         return SimpleNamespace(message_id=len(self.calls))
+
+    async def edit_message_text(self, **kwargs):
+        self.edits.append(kwargs)
+        return True
 
 
 class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -144,13 +154,43 @@ class StreakRestoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_battle_message_uses_real_restore_callback(self) -> None:
         bot = _FakeBot()
-        await send_streak_restore_battle_message(bot, owner_chat_id=42, target_date=date(2026, 3, 22))
+        await send_streak_restore_battle_message(bot, self.SessionLocal, owner_chat_id=42, target_date=date(2026, 3, 22))
 
         self.assertEqual(len(bot.calls), 1)
         self.assertEqual(bot.calls[0]["chat_id"], 42)
-        self.assertIn("периоде, выбранном администратором", bot.calls[0]["text"])
+        self.assertEqual("♻️ Восстановление отметок за 21.03.2026", bot.calls[0]["text"])
         markup = bot.calls[0]["reply_markup"]
         self.assertEqual(markup.inline_keyboard[0][0].callback_data, "restore:claim")
+
+    async def test_saved_period_is_shown_and_all_copies_update_on_change(self) -> None:
+        with self.SessionLocal() as db:
+            choose_restore_period(db, today=date(2026, 3, 20), days=3)
+            db.commit()
+        bot = _FakeBot()
+        for _ in range(2):
+            await send_streak_restore_incident_message_to_chat(
+                bot, self.SessionLocal, chat_id=-100, target_date=date(2026, 3, 22), force=True)
+        await send_streak_restore_battle_message(bot, self.SessionLocal, owner_chat_id=42, target_date=date(2026, 3, 22))
+        await send_streak_restore_preview_message(bot, self.SessionLocal, owner_chat_id=42, target_date=date(2026, 3, 22))
+        for call in bot.calls:
+            self.assertIn("17.03.2026–19.03.2026", call["text"])
+        with self.SessionLocal() as db:
+            choose_restore_period(db, today=date(2026, 3, 22), days=1)
+            db.commit()
+        failed = await refresh_streak_restore_messages(bot, self.SessionLocal)
+        self.assertEqual(failed, 0)
+        self.assertEqual(len(bot.edits), 4)
+        self.assertEqual({c["message_id"] for c in bot.edits}, {1, 2, 3, 4})
+        for call in bot.edits:
+            self.assertIn("за 21.03.2026", call["text"])
+            self.assertNotIn("19.03", call["text"])
+            callback = call["reply_markup"].inline_keyboard[0][0].callback_data
+            self.assertEqual(callback, "restorepreview:noop" if call["message_id"] == 4 else "restore:claim")
+
+    async def test_closed_session_demo_only_answers_callback(self) -> None:
+        cb = SimpleNamespace(data="restorepreview:forgot", message=SimpleNamespace(), answer=AsyncMock())
+        await restore_preview_callbacks(cb)
+        cb.answer.assert_awaited_once_with("Это пример. Отметка не добавлена.", show_alert=True)
 
     async def test_lists_only_active_groups(self) -> None:
         with self.SessionLocal() as db:

@@ -1,40 +1,66 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, timedelta
 
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import sessionmaker
 
 from app.bot.keyboards.streak_restore import streak_restore_keyboard, streak_restore_preview_keyboard
-from app.db.models import Chat, PoopEvent, Session as DaySession
+from app.db.models import Chat, CommandMessage, PoopEvent, Session as DaySession
 from app.db.session import db_session
 from app.services.command_message_service import get_command_message_id, set_command_message_id
-from app.services.scheduler_telegram import safe_send_message
+from app.services.scheduler_telegram import safe_edit_message_text, safe_send_message
+from app.services.restore_period_service import RestorePeriod, ensure_restore_period, get_restore_period
 
 logger = logging.getLogger(__name__)
 
 STREAK_RESTORE_INCIDENT_COMMAND = "streak_restore_incident"
 
 
-def streak_restore_message_text(target_date: date) -> str:
-    _ = target_date
-    return (
-        "⚠️ Из-за сбоя бот мог пропустить входящие сообщения.\n\n"
-        "Если у тебя сломался стрик, нажми кнопку ниже. "
-        "Бот добавит по одной отметке за пропущенные дни в периоде, выбранном администратором. Даты будут показаны после нажатия."
-    )
+def streak_restore_message_text(period: RestorePeriod) -> str:
+    return f"♻️ Восстановление отметок за {period.label}"
 
 
-def streak_restore_preview_text(target_date: date) -> str:
-    _ = target_date
-    return (
-        "👀 Превью сообщения восстановления\n\n"
-        "Ниже показано, как будет выглядеть сообщение в чате. "
-        "В боевой версии кнопка добавит по одной отметке за пропущенные дни в выбранном администратором периоде. "
-        "Кнопка в превью не восстанавливает стрик."
-    )
+def streak_restore_preview_text(period: RestorePeriod) -> str:
+    return f"👀 Превью · кнопка без действия\n\n{streak_restore_message_text(period)}"
+
+
+def _track_restore_message(db, *, chat_id: int, message_id: int, target_date: date, preview: bool = False) -> None:
+    # Keep each copy, including repeated sends on the same day.
+    prefix = "restore_demo:" if preview else "restore_live:"
+    set_command_message_id(db, chat_id, 0, f"{prefix}{message_id}", target_date, message_id)
+
+
+async def refresh_streak_restore_messages(bot: Bot, session_factory: sessionmaker) -> int:
+    """Update dates only when the owner changes the shared restoration period."""
+    with db_session(session_factory) as db:
+        period = get_restore_period(db)
+        if period is None:
+            return 0
+        rows = db.execute(select(CommandMessage.chat_id, CommandMessage.message_id, CommandMessage.command).where(or_(
+            CommandMessage.command == STREAK_RESTORE_INCIDENT_COMMAND,
+            CommandMessage.command.startswith("restore_live:"),
+            CommandMessage.command.startswith("restore_demo:"),
+        ))).all()
+    failed = 0
+    seen = set()
+    for chat_id, message_id, command in rows:
+        if (chat_id, message_id) in seen:
+            continue
+        seen.add((chat_id, message_id))
+        preview = command.startswith("restore_demo:")
+        try:
+            await safe_edit_message_text(bot, chat_id=chat_id, message_id=message_id,
+                text=streak_restore_preview_text(period) if preview else streak_restore_message_text(period),
+                reply_markup=streak_restore_preview_keyboard() if preview else streak_restore_keyboard())
+        except Exception:
+            failed += 1
+            logger.exception("Failed to update restore message chat_id=%s message_id=%s", chat_id, message_id)
+        await asyncio.sleep(0.2)
+    return failed
 
 
 def detect_suspected_streak_incident_dates(db, *, today: date, lookback_days: int = 21, limit: int = 5) -> list[dict[str, int | str]]:
@@ -139,24 +165,24 @@ def list_active_group_chat_ids(db) -> list[int]:
     )
 
 
-async def send_streak_restore_preview_message(bot: Bot, *, owner_chat_id: int, target_date: date) -> int:
-    sent = await safe_send_message(
-        bot,
-        chat_id=owner_chat_id,
-        text=streak_restore_preview_text(target_date),
-        reply_markup=streak_restore_preview_keyboard(),
-    )
+async def _send_owner_restore_message(bot: Bot, session_factory: sessionmaker, *, owner_chat_id: int, target_date: date, preview: bool) -> int:
+    with db_session(session_factory) as db:
+        period = ensure_restore_period(db, today=target_date)
+        sent = await safe_send_message(
+            bot, chat_id=owner_chat_id,
+            text=streak_restore_preview_text(period) if preview else streak_restore_message_text(period),
+            reply_markup=streak_restore_preview_keyboard() if preview else streak_restore_keyboard(),
+        )
+        _track_restore_message(db, chat_id=owner_chat_id, message_id=sent.message_id, target_date=target_date, preview=preview)
     return int(sent.message_id)
 
 
-async def send_streak_restore_battle_message(bot: Bot, *, owner_chat_id: int, target_date: date) -> int:
-    sent = await safe_send_message(
-        bot,
-        chat_id=owner_chat_id,
-        text=streak_restore_message_text(target_date),
-        reply_markup=streak_restore_keyboard(),
-    )
-    return int(sent.message_id)
+async def send_streak_restore_preview_message(bot: Bot, session_factory: sessionmaker, *, owner_chat_id: int, target_date: date) -> int:
+    return await _send_owner_restore_message(bot, session_factory, owner_chat_id=owner_chat_id, target_date=target_date, preview=True)
+
+
+async def send_streak_restore_battle_message(bot: Bot, session_factory: sessionmaker, *, owner_chat_id: int, target_date: date) -> int:
+    return await _send_owner_restore_message(bot, session_factory, owner_chat_id=owner_chat_id, target_date=target_date, preview=False)
 
 
 async def send_streak_restore_incident_message_to_chat(
@@ -174,7 +200,7 @@ async def send_streak_restore_incident_message_to_chat(
             sent = await safe_send_message(
                 bot,
                 chat_id=int(chat_id),
-                text=streak_restore_message_text(target_date),
+                text=streak_restore_message_text(ensure_restore_period(db, today=target_date)),
                 reply_markup=streak_restore_keyboard(),
             )
             set_command_message_id(
@@ -185,6 +211,7 @@ async def send_streak_restore_incident_message_to_chat(
                 target_date,
                 sent.message_id,
             )
+            _track_restore_message(db, chat_id=int(chat_id), message_id=sent.message_id, target_date=target_date)
             return {"sent": 1, "skipped": 0, "failed": 0, "duplicate": False}
         except Exception:
             logger.exception("Failed to send streak restore incident message chat_id=%s", chat_id)
@@ -226,7 +253,7 @@ async def send_streak_restore_incident_messages(
                 sent = await safe_send_message(
                     bot,
                     chat_id=int(chat_id),
-                    text=streak_restore_message_text(target_date),
+                    text=streak_restore_message_text(ensure_restore_period(db, today=target_date)),
                     reply_markup=streak_restore_keyboard(),
                 )
                 set_command_message_id(
@@ -237,13 +264,12 @@ async def send_streak_restore_incident_messages(
                     target_date,
                     sent.message_id,
                 )
+                _track_restore_message(db, chat_id=int(chat_id), message_id=sent.message_id, target_date=target_date)
                 sent_count += 1
             except Exception:
                 logger.exception("Failed to send streak restore incident message chat_id=%s scope=%s", chat_id, scope)
                 failed_count += 1
         if chat_throttle_sec > 0:
-            import asyncio
-
             await asyncio.sleep(chat_throttle_sec)
 
     return {"sent": sent_count, "skipped": skipped_count, "failed": failed_count}

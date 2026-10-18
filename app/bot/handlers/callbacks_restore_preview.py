@@ -14,6 +14,9 @@ async def restore_preview_callbacks(cb: CallbackQuery) -> None:
 
     action = cb.data.split(":")[1]
     try:
+        if action == "forgot":
+            await cb.answer("Это пример. Отметка не добавлена.", show_alert=True)
+            return
         if action == "noop":
             await cb.answer("Это превью. Боевая кнопка восстановит пропуски за период, выбранный в /streak.", show_alert=False)
             return

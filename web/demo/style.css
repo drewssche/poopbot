@@ -1,10 +1,18 @@
+@font-face {
+  font-family: Inter;
+  src: url("./assets/Inter-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
 :root {
   color-scheme: light;
-  --ink: #202327;
-  --brown: #8b512d;
-  --sand: #c3b9ab;
-  --pale: #f3f0eb;
-  --muted: #c8c4bc;
+  --ink: #181d27;
+  --brown: #934c21;
+  --sand: #c8b7a7;
+  --pale: #f4f0ec;
+  --muted: #c8b7a7;
+  --secondary: #645b5b;
   --surface: #fff;
   --safe-top: var(--tg-content-safe-area-inset-top, 0px);
   --safe-bottom: max(
@@ -19,7 +27,8 @@ body {
   margin: 0;
   background: #fff;
   color: var(--ink);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Inter, Arial, sans-serif;
+  font-optical-sizing: none;
   -webkit-tap-highlight-color: transparent;
 }
 button {
@@ -38,33 +47,30 @@ button:disabled {
   cursor: default;
 }
 button,
-svg {
+img {
   flex-shrink: 0;
 }
-svg {
+img {
+  display: block;
+}
+.icon {
   width: 24px;
   height: 24px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  object-fit: contain;
+  pointer-events: none;
 }
 .app {
   width: 100%;
-  max-width: 430px;
+  max-width: 393px;
   min-height: var(--tg-viewport-stable-height, 100dvh);
   margin: 0 auto;
   padding-top: var(--safe-top);
-  padding-bottom: calc(30px + var(--safe-bottom));
+  padding-bottom: calc(22px + var(--safe-bottom));
   position: relative;
 }
 .header {
-  height: 92px;
-  display: flex;
-  align-items: center;
+  height: 80px;
   position: relative;
-  padding: 0 20px;
 }
 .icon-button {
   display: grid;
@@ -75,77 +81,71 @@ svg {
 }
 .menu {
   position: absolute;
-  left: 20px;
-}
-.menu svg {
-  width: 20px;
-  height: 20px;
+  left: 22px;
+  top: 21px;
 }
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: auto;
-  font-size: 29px;
-  font-weight: 700;
-  letter-spacing: -1.2px;
-  font-family: "Arial Narrow", Arial, sans-serif;
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  width: 202.55px;
+  height: 47px;
 }
-.brand .poop-mark {
-  width: 45px;
-  height: 49px;
-  margin-top: -5px;
-}
-.brand .word-poop {
-  color: var(--brown);
-}
-.brand .word-check {
-  margin-left: -8px;
-}
-.poop-mark {
-  display: block;
-  background: var(--brown);
-  mask: url("./poop.svg") center/contain no-repeat;
-  -webkit-mask: url("./poop.svg") center/contain no-repeat;
+.brand img {
+  width: 100%;
+  height: 47px;
 }
 .date-card {
-  border-radius: 0 0 18px 18px;
-  box-shadow: 0 8px 14px #0000000d;
-  padding: 0 24px 24px;
+  border-radius: 0 0 16px 16px;
+  box-shadow: 0 8px 16px #e6e2e2;
+  padding: 0 30px 28px 34px;
 }
 .date-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
-  min-height: 40px;
+  height: 48px;
+  margin-bottom: 18px;
 }
 .month-button {
   display: flex;
   align-items: center;
-  gap: 0;
-  font-size: 22px;
+  gap: 2px;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 500;
   padding: 0;
   min-height: 44px;
+  white-space: nowrap;
 }
-.month-button svg {
-  width: 16px;
-  height: 16px;
-  margin-left: 2px;
+.month-button .icon {
+  width: 12px;
+  height: 8px;
+  margin-left: 0;
+}
+.date-heading > .icon-button {
+  margin-right: -2px;
 }
 .month-nav {
   display: flex;
   align-items: center;
-  font-size: 22px;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 29px;
   white-space: nowrap;
+  gap: 8px;
 }
 .month-nav button {
-  width: 22px;
+  width: 10px;
   min-height: 44px;
   padding: 0;
+  display: grid;
+  place-items: center;
 }
-.month-nav svg {
-  width: 18px;
+.month-nav .icon {
+  width: 8px;
+  height: 12px;
 }
 .month-nav .month-label {
   width: auto;
@@ -155,12 +155,14 @@ svg {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   text-align: center;
-  gap: 2px;
+  gap: 1px;
 }
 .weekdays {
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 400;
   color: var(--muted);
-  margin: 0 0 6px;
+  margin: 0 0 5px;
 }
 .weekday-selected {
   color: var(--brown);
@@ -168,8 +170,9 @@ svg {
 .day {
   position: relative;
   min-width: 0;
-  height: 42px;
-  font-size: 18px;
+  height: 38px;
+  font-size: 20px;
+  line-height: 24px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -178,9 +181,9 @@ svg {
 .day .day-circle {
   display: grid;
   place-items: center;
-  width: 38px;
+  width: 39px;
   height: 38px;
-  border-radius: 50%;
+  border-radius: 19px;
 }
 .day.has-events .day-circle {
   background: var(--sand);
@@ -190,74 +193,100 @@ svg {
   background: var(--brown);
   color: #fff;
 }
+.date-card:has(.month) {
+  padding-bottom: 20px;
+  padding-left: 32px;
+  padding-right: 32px;
+}
+.date-card:has(.month) .weekdays {
+  margin-bottom: 12px;
+}
 .days.month {
-  row-gap: 3px;
+  row-gap: 0;
 }
 .month .day {
-  height: 43px;
+  height: 48px;
 }
 .month .day .poop-mark {
   position: absolute;
-  width: 43px;
-  height: 43px;
-  inset: 0;
-  margin: auto;
-  background: var(--sand);
-}
-.month .day.selected .poop-mark,
-.month .day.has-events .poop-mark {
+  width: 42px;
+  height: 40px;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
   background: var(--brown);
+  mask: url("./assets/poop-day.svg") center/contain no-repeat;
+  -webkit-mask: url("./assets/poop-day.svg") center/contain no-repeat;
 }
 .month .day .date-number {
-  position: relative;
+  position: absolute;
+  top: 14px;
+  left: 0;
+  right: 0;
   z-index: 1;
-  margin-top: 12px;
   color: #fff;
-  font-size: 17px;
+  font-size: 20px;
+  line-height: 24px;
 }
 .month .day:not(.has-events) .date-number {
   color: var(--muted);
-  margin: 0;
 }
 .month .day.selected:not(.has-events) {
   background: var(--pale);
   border-radius: 50%;
-  color: var(--brown);
 }
 .badge {
   position: absolute;
-  right: 0;
-  top: -2px;
+  right: -1px;
+  top: -4px;
   border-radius: 50%;
-  background: #f2d336;
+  background: #ffe30b;
   color: var(--brown);
   width: 17px;
   height: 17px;
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 15px;
+  font-weight: 600;
   z-index: 2;
 }
 .question {
-  padding: 36px 42px 110px;
+  padding: 40px 44px 110px;
 }
 .question h1 {
-  font-size: 22px;
-  font-weight: 400;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 500;
   margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   white-space: nowrap;
+}
+.question h1 .icon {
+  width: 32px;
+  height: 31px;
+  margin-top: -2px;
+  margin-bottom: 0;
+}
+.question h1:not(:has(.icon)) {
+  justify-content: flex-start;
 }
 .choices {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 .choice {
   width: 100%;
   background: var(--pale);
-  border-radius: 32px;
-  min-height: 54px;
-  font-size: 18px;
-  padding: 12px 15px;
+  border-radius: 28px;
+  min-height: 56px;
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 400;
+  padding: 16px 12px;
 }
 .choice.selected {
   background: var(--sand);
@@ -268,93 +297,90 @@ svg {
 }
 .add {
   position: absolute;
-  bottom: calc(45px + var(--safe-bottom));
-  right: 42px;
+  bottom: calc(22px + var(--safe-bottom));
+  right: 44px;
   width: 70px;
   height: 70px;
   border-radius: 50%;
-  background: var(--brown);
-  color: white;
-  font-size: 43px;
-  font-weight: 300;
-  line-height: 1;
+  padding: 0;
   display: grid;
   place-items: center;
-  padding: 0 0 4px;
-  box-shadow: none;
+}
+.add .icon {
+  width: 70px;
+  height: 70px;
 }
 .history {
-  padding: 30px 20px;
+  padding: 32px 20px 0;
 }
 .history h1 {
   font-size: 24px;
-  font-weight: 400;
-  margin: 0 0 12px 22px;
+  line-height: 29px;
+  font-weight: 500;
+  margin: 0 0 11px 24px;
 }
 .event {
   position: relative;
   background: var(--sand);
-  border-radius: 40px;
-  margin: 0 0 10px;
+  border-radius: 35px;
+  margin: 0 0 8px;
   overflow: hidden;
-  min-height: 72px;
+  min-height: 70px;
   touch-action: pan-y;
 }
 .event-content {
   position: relative;
   background: var(--pale);
-  border-radius: 40px;
-  min-height: 72px;
+  border-radius: 35px;
+  min-height: 70px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 5px;
-  padding: 12px 16px 12px 30px;
+  padding: 16px 17px 16px 34px;
   transition: transform 0.15s ease;
 }
 .event.revealed .event-content {
   transform: translateX(-66px);
 }
 .event time {
-  font-size: 15px;
-  color: #827d73;
+  font-size: 16px;
+  line-height: 19px;
+  font-weight: 400;
+  color: var(--secondary);
   display: block;
-  margin-bottom: 3px;
 }
 .event .description {
   font-size: 16px;
+  line-height: 19px;
+  font-weight: 500;
 }
 .edit {
-  width: 39px;
-  height: 39px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
   background: var(--brown);
   color: #fff;
   border-radius: 50%;
-  padding: 8px;
-}
-.edit svg {
-  width: 24px;
-  height: 24px;
+  padding: 7px;
 }
 .delete {
   position: absolute;
-  right: 12px;
-  top: 14px;
+  right: 14px;
+  top: 13px;
   width: 44px;
   height: 44px;
-  color: #fff;
   display: grid;
   place-items: center;
 }
 .empty {
-  color: #b5afa5;
-  font-size: 17px;
-  padding: 20px 22px;
+  color: var(--muted);
+  font-size: 16px;
+  padding: 20px 24px;
 }
 .statistics {
-  padding: 0 20px 24px;
+  padding: 8px 18px 0 19px;
 }
 .back {
   width: 38px;
@@ -363,12 +389,12 @@ svg {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  padding: 8px;
-  margin: 0 0 28px;
+  padding: 0;
+  margin: 0 0 26px;
 }
-.back svg {
-  width: 20px;
-  height: 20px;
+.back .icon {
+  width: 8px;
+  height: 12px;
 }
 .metrics {
   display: grid;
@@ -378,32 +404,35 @@ svg {
 }
 .metric {
   background: var(--pale);
-  border-radius: 60px;
-  min-height: 95px;
+  border-radius: 48px;
+  height: 96px;
   text-align: center;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 0;
 }
 .metric strong {
   font-size: 32px;
-  font-weight: 400;
-  color: #795035;
+  line-height: 39px;
+  font-weight: 500;
+  color: var(--brown);
 }
 .metric span {
   color: var(--muted);
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 19px;
+  font-weight: 500;
 }
 .streak {
   position: relative;
   background: var(--sand);
-  border-radius: 65px;
-  min-height: 96px;
+  border-radius: 48px;
+  height: 96px;
   display: flex;
   align-items: center;
-  padding: 18px;
-  gap: 14px;
+  padding: 20px 21px;
+  gap: 15px;
   color: #fff;
   overflow: hidden;
   margin-bottom: 16px;
@@ -411,9 +440,10 @@ svg {
 .streak:before {
   content: "";
   position: absolute;
-  inset: 0 21% 0 0;
+  inset: 0 auto 0 0;
+  width: 74.719%;
   background: var(--brown);
-  border-radius: 65px;
+  border-radius: 48px;
 }
 .streak > * {
   position: relative;
@@ -425,61 +455,71 @@ svg {
   display: grid;
   place-items: center;
   background: #fff;
-  color: var(--brown);
 }
 .streak-title {
-  font-size: 22px;
-  margin-bottom: 4px;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 500;
+  margin: 0 0 3px;
 }
 .streak-days {
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 19px;
+  font-weight: 500;
 }
 .dynamics {
   background: var(--pale);
   border-radius: 48px;
-  padding: 20px 18px 18px;
+  padding: 20px 21px 19px;
 }
 .dynamics-heading {
   display: flex;
-  gap: 12px;
+  gap: 15px;
   align-items: center;
   margin-bottom: 12px;
+  height: 48px;
 }
 .dynamics-heading .round-icon {
   background: var(--brown);
-  color: #fff;
 }
 .dynamics-title {
-  font-size: 23px;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 500;
 }
 .dynamics-subtitle {
-  font-size: 15px;
-  color: #857a6d;
+  font-size: 16px;
+  line-height: 19px;
+  font-weight: 500;
+  color: var(--secondary);
   margin-top: 3px;
+  white-space: nowrap;
 }
 .chart {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 6px;
+  gap: 8px;
 }
 .chart-column {
   text-align: center;
   color: var(--muted);
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 400;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .bar {
   background: #fff;
-  height: 112px;
-  border-radius: 24px;
+  height: 114px;
+  border-radius: 19px;
   position: relative;
   overflow: hidden;
 }
 .bar-fill {
   background: var(--brown);
-  border-radius: 24px;
+  border-radius: 19px;
   position: absolute;
   bottom: 0;
   left: 0;
@@ -487,8 +527,8 @@ svg {
   min-height: 0;
 }
 .stat-placeholder {
-  margin-top: 16px;
-  height: 150px;
+  margin-top: 14px;
+  height: 236px;
   background: var(--pale);
   border-radius: 48px;
 }
@@ -503,29 +543,64 @@ svg {
   white-space: nowrap;
   border: 0;
 }
+/* Preserve the 393px Figma geometry; only tighten horizontal spacing below it. */
 @media (max-width: 370px) {
-  .header {
-    height: 80px;
-  }
   .brand {
-    font-size: 26px;
+    width: 185px;
+  }
+  .menu {
+    left: 14px;
   }
   .date-card {
-    padding-left: 18px;
-    padding-right: 18px;
+    padding-left: 24px;
+    padding-right: 24px;
   }
-  .question {
-    padding: 30px 30px 110px;
-  }
-  .question h1 {
-    font-size: 20px;
+  .date-card:has(.month) {
+    padding-left: 24px;
+    padding-right: 24px;
   }
   .month-button,
   .month-nav {
-    font-size: 20px;
+    font-size: 22px;
   }
-  .streak-title {
-    font-size: 20px;
+  .month-nav {
+    gap: 4px;
+  }
+  .weekdays {
+    font-size: 22px;
+  }
+  .question {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+  .question h1 {
+    font-size: 22px;
+    gap: 6px;
+  }
+  .question h1 .icon {
+    width: 29px;
+  }
+  .add {
+    right: 24px;
+  }
+  .streak,
+  .dynamics {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .streak,
+  .dynamics-heading {
+    gap: 10px;
+  }
+  .streak-title,
+  .dynamics-title {
+    font-size: 21px;
+  }
+  .dynamics-subtitle {
+    font-size: 14px;
+  }
+  .metric span {
+    font-size: 14px;
   }
   .history {
     padding-left: 16px;
@@ -533,7 +608,9 @@ svg {
   }
   .event-content {
     padding-left: 22px;
+    padding-right: 12px;
   }
+  .event time,
   .event .description {
     font-size: 14px;
   }
@@ -543,18 +620,16 @@ svg {
   }
   .month .day .poop-mark {
     width: 38px;
-    height: 40px;
   }
-  .add {
-    right: 30px;
+  .chart {
+    gap: 6px;
+  }
+  .chart-column {
+    font-size: 22px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
   }
-}
-.month .day .poop-mark {
-  mask-image: url("./poop-day.svg");
-  -webkit-mask-image: url("./poop-day.svg");
 }

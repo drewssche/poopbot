@@ -1,0 +1,122 @@
+{
+  "menu": {
+    "source": "main.svg",
+    "layer": "menu_24dp_1F1F1F_FILL0_wght400_GRAD0_opsz24 1",
+    "viewBox": [
+      32,
+      75,
+      24,
+      24
+    ]
+  },
+  "stats": {
+    "source": "main.svg",
+    "layer": "Frame",
+    "viewBox": [
+      331,
+      136,
+      24,
+      24
+    ]
+  },
+  "down": {
+    "source": "main.svg",
+    "layer": "Vector",
+    "viewBox": [
+      165,
+      149,
+      12,
+      8
+    ]
+  },
+  "left": {
+    "source": "calendar.svg",
+    "layer": "Vector_41",
+    "viewBox": [
+      36,
+      145,
+      8,
+      12
+    ]
+  },
+  "right": {
+    "source": "calendar.svg",
+    "layer": "Vector_42",
+    "viewBox": [
+      188,
+      145,
+      8,
+      12
+    ]
+  },
+  "edit": {
+    "source": "calendar.svg",
+    "layer": "Vector_15",
+    "viewBox": [
+      326,
+      584,
+      24,
+      24
+    ]
+  },
+  "trash": {
+    "source": "calendar.svg",
+    "layer": "Frame 18",
+    "viewBox": [
+      325,
+      741,
+      24,
+      24
+    ]
+  },
+  "award": {
+    "source": "statistics.svg",
+    "layer": "Frame",
+    "viewBox": [
+      52,
+      344,
+      24,
+      24
+    ]
+  },
+  "stats-light": {
+    "source": "statistics.svg",
+    "layer": "Frame_2",
+    "viewBox": [
+      52,
+      452,
+      24,
+      24
+    ]
+  },
+  "poop-face": {
+    "source": "main.svg",
+    "layer": "Group 20",
+    "viewBox": [
+      60,
+      330,
+      32,
+      31
+    ]
+  },
+  "add": {
+    "source": "main.svg",
+    "layer": "Group 19",
+    "viewBox": [
+      279,
+      726,
+      70,
+      70
+    ]
+  },
+  "poop-day": {
+    "source": "calendar.svg",
+    "layer": "Vector_19",
+    "viewBox": [
+      32,
+      374,
+      42,
+      40
+    ]
+  }
+}

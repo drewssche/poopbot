@@ -24,19 +24,8 @@
     tg?.setBackgroundColor("#ffffff");
     tg?.setBottomBarColor?.("#ffffff");
   } catch {}
-  const icons = {
-    menu: '<path d="M5 7h14M5 12h14M5 17h14"/>',
-    stats: '<path d="M4 20h16M7 17v-5M11 17V7M15 17V4M19 17V9"/>',
-    down: '<path d="m6 9 6 6 6-6"/>',
-    left: '<path d="m15 5-7 7 7 7"/>',
-    right: '<path d="m9 5 7 7-7 7"/>',
-    edit: '<path d="M13 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-7M15 4l3-1 3 3-1 3-8 8-5 1 1-5Z"/>',
-    trash: '<path d="M4 6h16M9 3h6M7 6l1 14h8l1-14M10 10v6M14 10v6"/>',
-    award:
-      '<path d="m12 2 3 2 4 1 1 4 2 3-2 3-1 4-4 1-3 2-3-2-4-1-1-4-2-3 2-3 1-4 4-1Z"/><path d="m8 12 3 3 5-6"/>',
-  };
   const icon = (name) =>
-    `<svg aria-hidden="true" viewBox="0 0 24 24">${icons[name]}</svg>`;
+    `<img class="icon icon-${name}" src="./assets/${name}.svg" alt="" aria-hidden="true" width="24" height="24">`;
   const esc = (value) =>
     String(value).replace(
       /[&<>"']/g,
@@ -66,7 +55,7 @@
     );
   }
   function header() {
-    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><span class="poop-mark" aria-hidden="true"></span><span class="word-poop">Poop</span><span class="word-check">Check</span></div></header>`;
+    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><img src="./assets/logo.svg" alt="PoopCheck" width="203" height="47"></div></header>`;
   }
   function dayButton(date, full) {
     const n = count(date),
@@ -99,7 +88,7 @@
   function question() {
     const kind = screen === "kind",
       options = kind ? M.kinds : M.feelings;
-    return `${calendar(false)}<section class="question"><h1>${kind ? "💩 Консистенция кала" : "Мои ощущения"}</h1><div class="choices">${options.map((name, i) => `<button class="choice ${draft?.[kind ? "kind" : "feeling"] === i ? "selected" : ""}" data-choice="${i}">${name}</button>`).join("")}</div></section><button class="add" data-action="add" aria-label="Добавить отметку">+</button>`;
+    return `${calendar(false)}<section class="question"><h1>${kind ? `${icon("poop-face")}<span>Консистенция кала</span>` : "Мои ощущения"}</h1><div class="choices">${options.map((name, i) => `<button class="choice ${draft?.[kind ? "kind" : "feeling"] === i ? "selected" : ""}" data-choice="${i}">${name}</button>`).join("")}</div></section><button class="add" data-action="add" aria-label="Добавить отметку">${icon("add")}</button>`;
   }
   function history() {
     const rows = events
@@ -113,7 +102,7 @@
       start = M.addDays(selected, -day),
       counts = Array.from({ length: 7 }, (_, i) => count(M.addDays(start, i))),
       max = Math.max(3, ...counts);
-    return `<section class="statistics"><button class="back" data-action="back" aria-label="Назад">${icon("left")}</button><div class="metrics"><div class="metric"><strong>${s.total}</strong><span>всего кала</span></div><div class="metric"><strong>${s.best}</strong><span>лучшая серия</span></div></div><div class="streak"><div class="round-icon">${icon("award")}</div><div><div class="streak-title">Ударный режим!</div><div class="streak-days">${s.current} ${plural(s.current)}</div></div></div><div class="dynamics"><div class="dynamics-heading"><div class="round-icon">${icon("stats")}</div><div><div class="dynamics-title">Динамика</div><div class="dynamics-subtitle">Результат за неделю</div></div></div><div class="chart" aria-label="Отметки за неделю">${counts.map((n, i) => `<div class="chart-column" aria-label="${M.addDays(start, i)}: ${n}"><span>${["пн", "вт", "ср", "чт", "пт", "сб", "вс"][i]}</span><div class="bar"><div class="bar-fill" style="height:${(100 * n) / max}%"></div></div><span>${n}</span></div>`).join("")}</div></div><div class="stat-placeholder" aria-hidden="true"></div></section>`;
+    return `<section class="statistics"><button class="back" data-action="back" aria-label="Назад">${icon("left")}</button><div class="metrics"><div class="metric"><strong>${s.total}</strong><span>всего кала</span></div><div class="metric"><strong>${s.best}</strong><span>лучшая серия</span></div></div><div class="streak"><div class="round-icon">${icon("award")}</div><div><div class="streak-title">Ударный режим!</div><div class="streak-days">${s.current} ${plural(s.current)}</div></div></div><div class="dynamics"><div class="dynamics-heading"><div class="round-icon">${icon("stats-light")}</div><div><div class="dynamics-title">Динамика</div><div class="dynamics-subtitle">Результат за неделю</div></div></div><div class="chart" aria-label="Отметки за неделю">${counts.map((n, i) => `<div class="chart-column" aria-label="${M.addDays(start, i)}: ${n}"><span>${["пн", "вт", "ср", "чт", "пт", "сб", "вс"][i]}</span><div class="bar"><div class="bar-fill" style="height:${(100 * n) / max}%"></div></div><span>${n}</span></div>`).join("")}</div></div><div class="stat-placeholder" aria-hidden="true"></div></section>`;
   }
   function plural(n) {
     return n % 10 === 1 && n % 100 !== 11

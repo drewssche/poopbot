@@ -1,0 +1,13 @@
+[Unit]
+Description=Poopbot isolated local backup restore drill
+After=docker.service poopbot-backup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/poopbot
+ExecStart=/usr/bin/python3 /opt/poopbot/scripts/backup_ops.py verify
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min

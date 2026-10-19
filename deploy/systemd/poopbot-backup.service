@@ -1,0 +1,13 @@
+[Unit]
+Description=Poopbot daily local database backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/poopbot
+ExecStart=/usr/bin/python3 /opt/poopbot/scripts/backup_ops.py create
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min

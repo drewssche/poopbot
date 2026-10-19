@@ -1,0 +1,10 @@
+[Unit]
+Description=Poopbot weekly restore verification schedule
+
+[Timer]
+OnCalendar=Sun *-*-* 03:45:00 UTC
+Persistent=true
+Unit=poopbot-restore-check.service
+
+[Install]
+WantedBy=timers.target

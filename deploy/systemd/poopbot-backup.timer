@@ -1,0 +1,10 @@
+[Unit]
+Description=Poopbot daily backup schedule
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+Unit=poopbot-backup.service
+
+[Install]
+WantedBy=timers.target

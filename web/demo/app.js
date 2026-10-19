@@ -26,7 +26,6 @@
     loadError = "",
     requestNumber = 0,
     activeRequest = null,
-    lastRead = 0,
     saving = false,
     pendingMark = null;
   let events = live ? [] : M.load(storage),
@@ -163,24 +162,26 @@
       else tg?.BackButton.show();
     } catch {}
   }
-  function go(next) {
+  async function go(next, revalidate = false) {
     screen = next;
     revealed = null;
-    render();
+    if (live && revalidate) await refresh();
+    else render();
     window.scrollTo(0, 0);
   }
-  function back() {
-    if (saving || pendingMark) return;
+  async function back() {
+    if (saving || loading || pendingMark) return;
     if (screen === "feeling") {
       go("kind");
       return;
     }
-    go(screen === "stats" ? returnScreen : "kind");
+    await go(screen === "stats" ? returnScreen : "kind", true);
   }
-  function fresh() {
+  async function fresh() {
     if (live) selected = today;
     draft = null;
-    go("kind");
+    month = selected.slice(0, 7);
+    await go("kind", true);
     announce("Выберите консистенцию и ощущения");
   }
   async function commit(feeling) {
@@ -302,20 +303,20 @@
       selected = b.dataset.date;
       draft = null;
       revealed = null;
-      if (screen === "feeling") go("kind");
-      else if (live && selected.slice(0, 7) !== month) {
-        month = selected.slice(0, 7);
-        await refresh();
-      } else render();
+      if (screen === "feeling") screen = "kind";
+      month = selected.slice(0, 7);
+      if (live) await refresh();
+      else render();
       return;
     }
     if (b.dataset.edit) {
+      if (live && !await refresh()) return;
       const event = events.find((e) => e.id === b.dataset.edit);
       if (event) {
         draft = { ...event };
         selected = event.date;
         go("kind");
-      }
+      } else if (live) notice("Эта отметка уже удалена. Календарь обновлён.");
       return;
     }
     if (b.dataset.delete) {
@@ -336,23 +337,23 @@
     switch (b.dataset.action) {
       case "home":
       case "add":
-        fresh();
+        await fresh();
         break;
       case "calendar":
         month = selected.slice(0, 7);
         draft = null;
-        go("calendar");
+        await go("calendar", true);
         break;
       case "week":
         draft = null;
-        go("kind");
+        await go("kind", true);
         break;
       case "stats":
         returnScreen = screen;
-        go("stats");
+        await go("stats", true);
         break;
       case "back":
-        back();
+        await back();
         break;
       case "previous-month":
       case "next-month": {
@@ -371,14 +372,14 @@
   });
   let pointer = null;
   app.addEventListener("pointerdown", (e) => {
-    if (saving || pendingMark) return;
+    if (saving || loading || pendingMark) return;
     const row = e.target.closest("[data-event]");
     pointer = row
       ? { id: row.dataset.event, x: e.clientX, y: e.clientY }
       : null;
   });
   app.addEventListener("pointerup", (e) => {
-    if (!pointer || saving || pendingMark) return;
+    if (!pointer || saving || loading || pendingMark) return;
     const dx = e.clientX - pointer.x,
       dy = e.clientY - pointer.y;
     if (Math.abs(dx) > 45 && Math.abs(dy) < 35) {
@@ -391,7 +392,7 @@
     pointer = null;
   });
   app.addEventListener("keydown", (e) => {
-    if (saving || pendingMark) return;
+    if (saving || loading || pendingMark) return;
     const row = e.target.closest("[data-event]");
     if (row && e.key === "ArrowLeft") {
       revealed = row.dataset.event;
@@ -421,16 +422,18 @@
     render();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const data = await live.read(snapshot ? month : null, controller.signal);
+      // Follow today across midnight only when no unfinished form is bound to it.
+      const requestedMonth = !snapshot || (!draft && selected === today) ? null : month;
+      const data = await live.read(requestedMonth, controller.signal);
       if (number !== requestNumber) return;
       const oldToday = today;
       today = data.today;
-      if (!snapshot || selected === oldToday) selected = today;
+      if (!snapshot || (!draft && selected === oldToday)) selected = today;
       month = data.month;
       snapshot = data;
       app.setAttribute("aria-label", data.scope === "personal" ? "PoopCheck — личные отметки" : "PoopCheck — отметки в группе");
       events = data.events;
-      lastRead = Date.now();
+      return true;
     } catch (error) {
       if (number !== requestNumber) return;
       events = [];
@@ -456,9 +459,11 @@
     try {
       const outcomes = await live.recoverPending(pendingMark?.requestId);
       pendingMark = null;
-      draft = null;
-      revealed = null;
-      if (outcomes.length) screen = "calendar";
+      if (outcomes.length) {
+        draft = null;
+        revealed = null;
+        screen = "calendar";
+      }
       await refresh();
       if (outcomes.length) notice(outcomes.includes("cancelled")
         ? "Результаты проверены. Невыполненные действия отменены — при необходимости повтори их. Календарь показывает сохранённые отметки."
@@ -479,13 +484,9 @@
       startLive();
       return;
     }
-    if (
-      live &&
-      !loading && !saving && !draft && !pendingMark &&
-      document.visibilityState === "visible" &&
-      Date.now() - lastRead > 5000
-    ) {
-      if (selected === today) month = null; // Server chooses the current month, including at midnight.
+    if (live && !loading && !saving && !pendingMark) {
+      // Event-driven revalidation, including unfinished forms. Keep their values
+      // and original revision so a concurrent edit still conflicts on save.
       refresh();
     }
   }

@@ -531,3 +531,70 @@ async def test_queue_timeout_does_not_start_rejected_work():
         try: assert (await client.post('/view',headers=headers,json={})).status==429
         finally: release.set()
         assert (await first).status==200 and calls==[1]
+
+
+def test_all_existing_questions_follow_app_create_edit_delete(db, monkeypatch):
+    from app.services import mini_app_message
+    from app.services.time_service import SessionWindow
+    from app.services.mini_app_service import record_mark
+    from app.db.models import SessionMessage
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    monkeypatch.setattr(mini_app_message, 'get_session_window', lambda _: SessionWindow(now.date(),False,True))
+    event_id = int(record_mark(db,-100,10,new_mark(),now=now)['eventId']); db.commit()
+    event = db.get(PoopEvent,event_id)
+    for kind, mid in [('Q1',101),('Q2',102),('Q3',103)]:
+        db.add(SessionMessage(session_id=event.session_id,kind=kind,message_id=mid))
+    db.commit()
+    payloads = mini_app_message.current_messages(db,-100,10)
+    assert [p['message_id'] for p in payloads] == [101,102,103]
+    assert '#1 🍌' in payloads[1]['text'] and '#1 😇' in payloads[2]['text']
+    assert payloads[1]['reply_markup']['inline_keyboard'][0][0]['callback_data'] == 'q2:12'
+    assert payloads[2]['reply_markup']['inline_keyboard'][0][0]['callback_data'] == 'q3:great'
+    record_mark(db,-100,10,{**mutation(event),'kind':3,'feeling':2},now=now);db.commit()
+    payloads = mini_app_message.current_messages(db,-100,10)
+    assert '#1 💦' in payloads[1]['text'] and '#1 😫' in payloads[2]['text']
+    record_mark(db,-100,10,mutation(event,'delete'),now=now);db.commit()
+    payloads = mini_app_message.current_messages(db,-100,10)
+    assert all('— —' in p['text'] for p in payloads)
+    assert all('#1' not in p['text'] for p in payloads[1:])
+
+
+def test_question_refresh_preserves_closed_state_and_missing_messages(db, monkeypatch):
+    from app.services import mini_app_message
+    from app.services.time_service import SessionWindow
+    from app.services.mini_app_service import record_mark, prepare_scope
+    from app.db.models import SessionMessage
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    event_id = int(record_mark(db,-100,10,new_mark(),now=now)['eventId']);db.commit()
+    event = db.get(PoopEvent,event_id)
+    sess = db.get(DaySession,event.session_id)
+    sess.status = 'closed'
+    # Missing Q1/Q2 must not prevent refreshing the existing Q3.
+    db.add(SessionMessage(session_id=sess.session_id,kind='Q3',message_id=103));db.commit()
+    monkeypatch.setattr(mini_app_message, 'get_session_window', lambda _:SessionWindow(date(2026,10,3),False,True))
+    payloads = mini_app_message.current_messages(db,-100,10,now.date())
+    assert len(payloads) == 1 and payloads[0]['message_id'] == 103
+    assert payloads[0]['text'].startswith('🔒 Сессия закрыта.')
+    assert '#1 😇' in payloads[0]['text'] and payloads[0]['reply_markup'] == {'inline_keyboard':[]}
+    sess.status = 'active';db.commit()
+    assert mini_app_message.current_messages(db,-100,10,now.date()) == []
+    prepare_scope(db,10,{'id':10})
+    personal = DaySession(chat_id=10,session_date=date(2026,10,3));db.add(personal);db.flush()
+    for kind, mid in [('Q1',101),('Q2',102),('Q3',103)]:
+        db.add(SessionMessage(session_id=personal.session_id,kind=kind,message_id=mid))
+    db.commit()
+    assert [p['message_id'] for p in mini_app_message.current_messages(db,10,10)] == [101]
+
+
+def test_shared_question_renderers_use_origin_events_not_stale_counts(db):
+    from app.services.q2_q3_render import render_q2_text, render_q3_text
+    from app.db.models import SessionUserState
+    sess = db.query(DaySession).filter_by(chat_id=-100,session_date=date(2026,10,1)).one()
+    db.add(SessionUserState(session_id=sess.session_id,user_id=10,poops_n=9))
+    foreign = db.query(PoopEvent).filter_by(session_id=sess.session_id,user_id=10,origin_chat_id=-200).one()
+    foreign.bristol=7;foreign.feeling='bad';db.commit()
+    q2=render_q2_text(db,-100,sess.session_id);q3=render_q3_text(db,-100,sess.session_id)
+    assert '#1 🍌' in q2 and '#2 ❔' in q2
+    assert '#1 😇' in q3 and '#2 ❔' in q3
+    assert '#3' not in q2 and '#3' not in q3
+    assert db.get(SessionUserState,(sess.session_id,10)).poops_n == 9  # No old-data repairs.

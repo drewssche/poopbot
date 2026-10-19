@@ -69,3 +69,39 @@ def test_notification_retries_stop_after_five_attempts(tmp_path):
         receipt=db.get(MiniAppRequest,(10,rid))
         assert not receipt.notify_pending and receipt.notify_attempts==5
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delivery_attempts_every_message_and_retries_partial_failure():
+    from app.services.mini_app_notifications import deliver_messages
+    class Gateway:
+        def __init__(self):self.calls=[]
+        async def call(self,method,payload):
+            assert method == 'editMessageText'
+            self.calls.append(payload['message_id'])
+            if payload['message_id'] == 2:raise RuntimeError('temporary failure')
+    gateway=Gateway()
+    with pytest.raises(RuntimeError, match='incomplete'):
+        await deliver_messages(gateway,[{'message_id':i} for i in [1,2,3]])
+    assert gateway.calls == [1,2,3]
+
+
+@pytest.mark.asyncio
+async def test_deleted_message_is_terminal_but_other_telegram_errors_retry():
+    from app.mini_app import TelegramGateway
+    class Response:
+        def __init__(self,data):self.data=data
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def json(self):return self.data
+    class HTTP:
+        def post(self,*args,**kwargs):return Response(self.data)
+    gateway=TelegramGateway('fake');gateway.http=HTTP()
+    for description in ['Bad Request: message to edit not found','Bad Request: MESSAGE_ID_INVALID']:
+        gateway.http.data={'ok':False,'error_code':400,'description':description}
+        assert await gateway.call('editMessageText',{}) is False
+    gateway.http.data={'ok':False,'error_code':400,'description':'message is not modified'}
+    assert await gateway.call('editMessageText',{}) is True
+    for code in [403,429,500]:
+        gateway.http.data={'ok':False,'error_code':code,'description':'temporary error'}
+        with pytest.raises(RuntimeError):await gateway.call('editMessageText',{})

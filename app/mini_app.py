@@ -82,8 +82,17 @@ class TelegramGateway:
         async with self.http.post('https://api.telegram.org/bot' + self.token + '/' + method, json=payload) as response:
             data = await response.json()
             if not data.get('ok'):
-                if method == 'editMessageText' and 'message is not modified' in data.get('description', ''):
-                    return True
+                if method == 'editMessageText':
+                    description = data.get('description', '').lower()
+                    if 'message is not modified' in description:
+                        return True
+                    if data.get('error_code') == 400 and any(reason in description for reason in (
+                        'message to edit not found', 'message not found', 'message_id_invalid',
+                    )):
+                        # A deleted post must not prevent the other session posts
+                        # from refreshing. Do not recreate it unsolicited.
+                        logger.info('Skipping deleted session message during Mini App refresh')
+                        return False
                 raise RuntimeError('Telegram request failed')
             return data['result']
 
@@ -257,20 +266,20 @@ def main():
             return result
 
     async def notifier(chat, user, changed_date=None):
-        from app.services.mini_app_message import current_message
+        from app.services.mini_app_message import current_messages
         def read_message():
             with Session(engine) as db:
-                payloads = [current_message(db, chat, user)]
+                payloads = current_messages(db, chat, user)
                 if changed_date:
                     from datetime import date
-                    historical = current_message(db, chat, user, date.fromisoformat(changed_date))
-                    if historical and historical not in payloads:
-                        payloads.append(historical)
-                return [p for p in payloads if p]
+                    historical = current_messages(db, chat, user, date.fromisoformat(changed_date))
+                    known = {p['message_id'] for p in payloads}
+                    payloads.extend(p for p in historical if p['message_id'] not in known)
+                return payloads
         from app.services.mini_app_notifications import database_work
         payloads = await database_work(read_message)
-        for payload in payloads:
-            await gateway.call('editMessageText', payload)
+        from app.services.mini_app_notifications import deliver_messages
+        await deliver_messages(gateway, payloads)
 
     from app.services.mini_app_notifications import NotificationWorker
     notifications = NotificationWorker(engine, notifier)

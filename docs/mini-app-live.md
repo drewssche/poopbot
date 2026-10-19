@@ -94,13 +94,29 @@ receipts remain, but the calendar should be checked before re-entering an action
 
 Telegram refresh work is committed with the receipt and runs outside the HTTP
 response in one background worker. The worker coalesces up to 32 receipts by
-chat/user/day, refreshes current/affected Q1 messages, and retries failures up to
+chat/user/day, refreshes existing current/affected Q1/Q2/Q3 messages, and retries failures up to
 five attempts with backoff. Final failure is logged and retained in the receipt's
 attempt count; mark data remains committed. Jobs survive restart. There is one
 startup drain, event-driven wakeups on writes, and timed retries only while work
 is pending: no idle DB polling. Existing historical statistics posts remain
 snapshots; reopening statistics computes current values. No unsolicited messages
-are created.
+are created. Missing Telegram posts are skipped; temporary errors in one post
+still allow other posts to refresh before the job retries. Closed sessions keep
+closed controls. Personal questions reuse Q1, so their message returns to the
+personal overview instead of showing stale event-number controls. Question text
+and buttons are shared between bot and API without adding aiogram to the API
+image. Group Q2/Q3 summaries use origin-scoped events like Q1 and Mini App,
+not stale state counters; no ambiguous historical rows are changed.
+
+The app revalidates on calendar/statistics/home navigation, selecting a date,
+opening an edit, returning to the visible app and reconnecting. There is no
+interval polling. Reads block actions against stale UI; an edit starts from the
+latest revision or explains that the record was deleted. An unfinished form
+survives resume/read-error retry, retaining its original revision so concurrent
+bot edits still produce a conflict instead of being overwritten. A form also
+retains its date across midnight; an idle today view follows the server day and
+month. Existing loading/error UI is reused; CSS, fonts, icons and layout are
+unchanged. Historic statistics messages remain snapshots.
 
 The API permits two active operations plus eight queued operations, with a
 six-second queue wait limit, per-user 60/minute and global 600/minute limits.
@@ -136,7 +152,7 @@ fonts or navigation design changed for this reliability stage.
 Rollback: revert application commit/menu settings and rebuild bot/API. Keep the
 additive receipt table and already saved real marks; do not drop user data.
 
-Checks: `.venv/bin/python -m pytest -q`; `node --test tests/demo_model.test.cjs tests/live_recovery.test.cjs`.
+Checks: `.venv/bin/python -m pytest -q`; `node --test tests/demo_model.test.cjs tests/live_recovery.test.cjs tests/live_navigation.test.cjs`.
 The optional `tests/test_mini_app_postgres.py` tests concurrent retries, recovery/write races and bot/app
 writes in a uniquely named disposable schema of `MINI_APP_TEST_DATABASE_URL`.
 It removes only that schema afterward. No GitHub CI is configured.

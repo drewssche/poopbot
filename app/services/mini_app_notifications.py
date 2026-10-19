@@ -23,6 +23,19 @@ async def database_work(function, *args):
         raise
 
 
+async def deliver_messages(gateway, payloads):
+    failed = False
+    for payload in payloads:
+        try:
+            await gateway.call('editMessageText', payload)
+        except Exception:
+            failed = True
+    if failed:
+        # Still refresh the remaining messages; the durable job retries failures
+        # using fresh data, and already updated messages are harmless no-ops.
+        raise RuntimeError('Session message refresh incomplete')
+
+
 class NotificationWorker:
     def __init__(self, engine, notify):
         self.engine, self.notify = engine, notify

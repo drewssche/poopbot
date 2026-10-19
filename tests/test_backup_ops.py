@@ -50,6 +50,16 @@ def test_metrics_cover_every_application_table():
     assert "UPDATE " not in backups.metrics_sql()
 
 
+def test_commands_do_not_consume_the_calling_shell_input(monkeypatch):
+    seen = []
+    def call(args, **kwargs):
+        seen.append(kwargs["stdin"])
+        return SimpleNamespace(returncode=0, stdout=b"ok")
+    monkeypatch.setattr(backups.subprocess, "run", call)
+    assert backups.run(["docker", "inspect", "example"]) == b"ok"
+    assert seen == [backups.subprocess.DEVNULL]
+
+
 def test_restore_is_isolated_and_cleans_up(ops, monkeypatch):
     path, metrics = archive(ops)
     calls = fake_docker(monkeypatch, metrics)

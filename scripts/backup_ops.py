@@ -56,7 +56,7 @@ def atomic_json(path, data):
     os.replace(temporary, path)
 
 
-def run(args, *, stdin=None, stdout=subprocess.PIPE, timeout=300):
+def run(args, *, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, timeout=300):
     result = subprocess.run(args, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, timeout=timeout)
     if result.returncode:
         # Do not include SQL rows, connection strings or command arguments in alerts/logs.
@@ -251,7 +251,7 @@ class Operations:
                 # initdb's temporary server only listens on a Unix socket. Wait
                 # for the final server before starting the restore.
                 result = subprocess.run(["docker", "exec", name, "pg_isready", "-q", "-h", "127.0.0.1", "-U", user,
-                                         "-d", database], stdout=subprocess.DEVNULL,
+                                         "-d", database], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                         stderr=subprocess.DEVNULL, timeout=10)
                 if result.returncode == 0:
                     break

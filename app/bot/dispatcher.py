@@ -18,6 +18,7 @@ from app.bot.monitoring import PollingActivityMiddleware, telegram_guard_loop
 from app.services.scheduler_service import recover_missing_q1_on_startup, start_scheduler
 
 from app.bot.handlers.commands import router as commands_router
+from app.bot.handlers.mini_app import router as mini_app_router
 from app.bot.handlers.callbacks_q1 import router as callbacks_q1_router
 from app.bot.handlers.callbacks_q2 import router as callbacks_q2_router
 from app.bot.handlers.callbacks_q3 import router as callbacks_q3_router
@@ -142,6 +143,7 @@ async def run_bot(settings: Settings) -> None:
 
 async def _run_bot(settings, bot, session_factory):
     dp = Dispatcher()
+    dp.include_router(mini_app_router)
     dp.include_router(commands_router)
     dp.include_router(callbacks_q1_router)
     dp.include_router(callbacks_q2_router)

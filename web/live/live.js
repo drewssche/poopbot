@@ -1,32 +1,28 @@
-/* Real records stay in memory. Telegram credentials never go into URLs or storage. */
-window.PoopLive = {
-  async read(month, signal) {
+/* Real records and Telegram credentials stay in memory. */
+window.PoopLive = (() => {
+  async function request(path, body, signal) {
     const initData = window.Telegram?.WebApp?.initData;
-    if (!initData)
-      throw new Error("Открой приложение через кнопку в личке бота.");
-    const response = await fetch("/poopcheck-api/view", {
-      method: "POST",
-      cache: "no-store",
-      credentials: "omit",
-      signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "tma " + initData,
-      },
-      body: JSON.stringify(month ? { month } : {}),
+    if (!initData) throw new Error('Открой приложение из Telegram: кнопкой в личке или ссылкой /app из группы.');
+    const response = await fetch('/poopcheck-api/' + path, {
+      method: 'POST', cache: 'no-store', credentials: 'omit', signal,
+      headers: {'Content-Type': 'application/json', Authorization: 'tma ' + initData},
+      body: JSON.stringify(body),
     });
-    if (response.status === 401)
-      throw new Error(
-        "Вход устарел. Закрой приложение и открой его снова из бота.",
-      );
-    if (response.status === 403)
-      throw new Error(
-        "Эта версия пока доступна только владельцу бота для выбранного чата.",
-      );
-    if (response.status === 429)
-      throw new Error("Слишком много запросов. Попробуй чуть позже.");
-    if (!response.ok)
-      throw new Error("Не удалось загрузить данные. Нажми, чтобы повторить.");
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const message = response.status === 401 ? 'Вход устарел. Закрой приложение и открой снова.'
+        : response.status === 403 ? 'Нет доступа к этому чату. Открой свежую ссылку /app из группы, в которой состоишь.'
+        : response.status === 429 ? 'Слишком много запросов. Попробуй чуть позже.'
+        : response.status === 409 ? data.error
+        : 'Не удалось подтвердить запрос. Попробуй ещё раз.';
+      const error = new Error(message);
+      error.definitive = response.status >= 400 && response.status < 500;
+      throw error;
+    }
     return response.json();
-  },
-};
+  }
+  return {
+    read(month, signal) { return request('view', month ? {month} : {}, signal); },
+    create(mark, signal) { return request('events', mark, signal); },
+  };
+})();

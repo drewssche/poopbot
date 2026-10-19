@@ -305,6 +305,7 @@ def _achievement_pool(n: int) -> list[str]:
 
 
 def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int | None = None) -> tuple[bool, str]:
+    db.scalar(select(User).where(User.user_id == user_id).with_for_update())
     if origin_chat_id is None:
         origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
 
@@ -350,6 +351,7 @@ def apply_plus(db: Session, session_id: int, user_id: int, origin_chat_id: int |
 
 
 def apply_minus(db: Session, session_id: int, user_id: int) -> tuple[bool, str]:
+    db.scalar(select(User).where(User.user_id == user_id).with_for_update())
     origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
     normalize_session_user_state_to_origin_chat(
         db,

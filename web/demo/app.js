@@ -26,7 +26,9 @@
     loadError = "",
     requestNumber = 0,
     activeRequest = null,
-    lastRead = 0;
+    lastRead = 0,
+    saving = false,
+    pendingMark = null;
   let events = live ? [] : M.load(storage),
     screen = "kind",
     selected = today,
@@ -168,6 +170,7 @@
     window.scrollTo(0, 0);
   }
   function back() {
+    if (saving || pendingMark) return;
     if (screen === "feeling") {
       go("kind");
       return;
@@ -175,12 +178,47 @@
     go(screen === "stats" ? returnScreen : "kind");
   }
   function fresh() {
+    if (live) selected = today;
     draft = null;
     go("kind");
     announce("Выберите консистенцию и ощущения");
   }
-  function commit(feeling) {
-    if (live) return;
+  async function commit(feeling) {
+    if (live) {
+      if (saving) return;
+      pendingMark ||= {
+        requestId: crypto.randomUUID(), date: selected, kind: draft.kind, feeling,
+      };
+      saving = true;
+      app.querySelectorAll("button").forEach(b => { b.disabled = true; });
+      tg?.enableClosingConfirmation?.();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const result = await live.create(pendingMark, controller.signal);
+        pendingMark = null;
+        draft = null;
+        selected = today;
+        month = today.slice(0, 7);
+        screen = "calendar";
+        announce("Отметка сохранена");
+        tg?.HapticFeedback?.notificationOccurred("success");
+        await refresh();
+        if (result.messageUpdated === false)
+          notice("Отметка сохранена. Сообщение в чате пока не обновилось; статистика уже учитывает её.");
+      } catch (error) {
+        if (error.definitive) pendingMark = null;
+        notice(pendingMark
+          ? "Не удалось подтвердить сохранение. Нажми выбранное ощущение ещё раз — повтор не создаст дубль. Не закрывай приложение до подтверждения."
+          : error.message);
+      } finally {
+        clearTimeout(timeout);
+        saving = false;
+        if (!pendingMark) tg?.disableClosingConfirmation?.();
+        render();
+      }
+      return;
+    }
     const editing = draft?.id,
       event = {
         id:
@@ -211,7 +249,11 @@
   }
   app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
-    if (!b || b.disabled) return;
+    if (!b || b.disabled || saving) return;
+    if (pendingMark && b.dataset.choice === undefined) {
+      notice("Сначала подтверди сохранение: нажми выбранное ощущение ещё раз.");
+      return;
+    }
     if (b.dataset.action === "retry") {
       await refresh();
       return;
@@ -219,20 +261,21 @@
     if (live && (!snapshot || loading || loadError)) return;
     if (
       live &&
-      (b.dataset.choice !== undefined ||
-        b.dataset.edit ||
-        b.dataset.delete ||
-        b.dataset.action === "add")
+      (b.dataset.edit || b.dataset.delete)
     ) {
       readOnlyNotice();
       return;
     }
     if (b.dataset.choice !== undefined) {
       const value = Number(b.dataset.choice);
+      if (live && selected !== today) {
+        notice("Добавить отметку можно только за сегодня. Для прошлых дней используй восстановление в боте.");
+        return;
+      }
       if (screen === "kind") {
         draft = { ...draft, kind: value };
         go("feeling");
-      } else if (draft) commit(value);
+      } else if (draft) await commit(value);
       return;
     }
     if (b.dataset.date) {
@@ -338,8 +381,9 @@
     tg?.BackButton.onClick(back);
   } catch {}
   function readOnlyNotice() {
-    const text =
-      "Пока доступен только просмотр. Добавлять и менять отметки можно через бота.";
+    notice("Редактирование и удаление пока доступны через бота.");
+  }
+  function notice(text) {
     if (tg?.isVersionAtLeast?.("6.2")) tg.showAlert(text);
     else window.alert(text);
   }
@@ -361,6 +405,7 @@
       if (!snapshot || selected === oldToday) selected = today;
       month = data.month;
       snapshot = data;
+      app.setAttribute("aria-label", data.scope === "personal" ? "PoopCheck — личные отметки" : "PoopCheck — отметки в группе");
       events = data.events;
       lastRead = Date.now();
     } catch (error) {
@@ -382,7 +427,7 @@
   function resume() {
     if (
       live &&
-      !loading &&
+      !loading && !saving && !draft && !pendingMark &&
       document.visibilityState === "visible" &&
       Date.now() - lastRead > 5000
     ) {

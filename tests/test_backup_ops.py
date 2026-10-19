@@ -178,3 +178,15 @@ def test_notification_failure_never_leaks_token(ops, monkeypatch):
     logs = "".join(p.read_text() for p in ops.logs.glob("*.json*"))
     assert token not in logs
     assert "notification_failed" in logs
+
+
+def test_restore_manifest_from_before_mini_app_migration(ops, monkeypatch):
+    path, metrics = archive(ops)
+    metrics.pop('mini_app_requests')
+    manifest = json.loads(path.with_suffix('.json').read_text())
+    manifest['metrics'] = metrics
+    path.with_suffix('.json').write_text(json.dumps(manifest))
+    calls = fake_docker(monkeypatch, metrics)
+    assert ops.verify()['validation'] == 'snapshot_match'
+    sql = next(c[-1] for c in calls if 'psql' in c)
+    assert 'mini_app_requests' not in sql

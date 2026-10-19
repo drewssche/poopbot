@@ -171,3 +171,14 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class MiniAppRequest(Base):
+    __tablename__ = "mini_app_requests"
+    __table_args__ = (PrimaryKeyConstraint("user_id", "request_id"),)
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"))
+    request_id: Mapped[str] = mapped_column(String(36))
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("poop_events.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

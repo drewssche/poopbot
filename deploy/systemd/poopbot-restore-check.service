@@ -1,7 +1,7 @@
 [Unit]
 Description=Poopbot isolated local backup restore drill
 After=docker.service poopbot-backup.service
-Requires=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot

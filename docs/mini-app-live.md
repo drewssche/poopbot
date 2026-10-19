@@ -83,9 +83,11 @@ connection must allow writes now. OS filesystem remains read-only/unprivileged.
    verify manifests created before this migration.
 4. `docker compose --profile mini-app up -d --no-deps bot mini-app`.
    Database and other applications need no restart or Nginx changes.
-5. Set the default private menu and the owner's prior override to a WebApp
-   button named `Открыть` at `/poopcheck/`. Save their previous JSON first.
-   Add `/app` to the bot command list while preserving other commands.
+5. Save the existing menu/command JSON, then add `/app` to the bot command
+   list while preserving other commands. After setting commands, set the default
+   private menu and the owner's prior override to a WebApp button named `Открыть`
+   at `/poopcheck/`. Set commands first: Telegram can reset the default menu to
+   `commands` during that operation. Read both menus back afterward.
 6. Verify service health, missing auth/outsider rejection, personal/group
    projections, and a Telegram launch. Use isolated test databases for synthetic
    marks; do not contaminate real histories with test entries.

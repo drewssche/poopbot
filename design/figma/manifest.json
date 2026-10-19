@@ -1,0 +1,135 @@
+{
+  "source": "https://www.figma.com/design/WRKqMhlFx8pJjegt5jVhZg/Untitled",
+  "exported_on": "2026-10-19",
+  "font_source": "https://github.com/google/fonts/tree/main/ofl/inter",
+  "screens": {
+    "calendar": {
+      "width": "393",
+      "height": "852",
+      "fonts": [
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "16"
+        },
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "20"
+        },
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "24"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "16"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "24"
+        },
+        {
+          "family": "Inter",
+          "weight": "600",
+          "size": "12"
+        }
+      ],
+      "colors": {
+        "#934C21": 25,
+        "#181D27": 22,
+        "#C8B7A7": 19,
+        "#A95723": 5,
+        "#FFE30B": 4,
+        "#F4F0EC": 3,
+        "#645B5B": 3,
+        "#010101": 1
+      },
+      "sha256": "74730dd3aa2ebd55a636fdacf5634173c17b96ed6595f69eabeeb9c2ea87f7cb"
+    },
+    "logo": {
+      "width": "203",
+      "height": "47",
+      "fonts": [],
+      "colors": {
+        "#181D27": 9,
+        "#A95723": 5
+      },
+      "sha256": "cd7e5fdc2b1692ffc556e57cd7f3d5fe7915ece2b14d0ddc899404775e2ff3c7"
+    },
+    "main": {
+      "width": "393",
+      "height": "852",
+      "fonts": [
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "20"
+        },
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "24"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "16"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "24"
+        }
+      ],
+      "colors": {
+        "#181D27": 20,
+        "#C8B7A7": 12,
+        "#A95723": 5,
+        "#F4F0EC": 4,
+        "#934C21": 4,
+        "#010101": 1
+      },
+      "sha256": "4b9fcaaaa1beb3fc22d26c33444b01ef033e1838d6471509bfcd710d4ed9b3f0"
+    },
+    "statistics": {
+      "width": "393",
+      "height": "852",
+      "fonts": [
+        {
+          "family": "Inter",
+          "weight": "400",
+          "size": "24"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "16"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "24"
+        },
+        {
+          "family": "Inter",
+          "weight": "500",
+          "size": "32"
+        }
+      ],
+      "colors": {
+        "#C8B7A7": 15,
+        "#934C21": 13,
+        "#181D27": 12,
+        "#F4F0EC": 5,
+        "#A95723": 5,
+        "#010101": 1,
+        "#645B5B": 1
+      },
+      "sha256": "a52a3e38e782fa3a6c971808468e5e62e5e8c33f56d5f5850d291d611cbbe1ef"
+    }
+  }
+}

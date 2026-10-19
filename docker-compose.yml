@@ -73,5 +73,34 @@ services:
     mem_limit: 512m
     mem_reservation: 128m
 
+  mini-app:
+    profiles: ["mini-app"]
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "-m", "app.mini_app"]
+    ports:
+      - "127.0.0.1:8087:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 192m
+    cpus: 0.5
+    read_only: true
+    user: "65534:65534"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).close()"]
+      interval: 120s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 volumes:
   poopbot_pgdata:

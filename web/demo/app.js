@@ -1,18 +1,36 @@
 (function () {
   "use strict";
+  const live =
+    document.documentElement.dataset.mode === "live"
+      ? window.PoopLive || {
+          async read() {
+            throw new Error(
+              "Не удалось загрузить приложение. Закрой и открой его снова.",
+            );
+          },
+        }
+      : null;
+  const assetRoot = live ? "/poopcheck-demo/" : "./";
   const M = window.PoopDemo,
     app = document.getElementById("app"),
     announcer = document.getElementById("announcer");
   let storage;
   try {
-    storage = window.localStorage;
+    storage = live ? null : window.localStorage;
   } catch {
     storage = null;
   }
-  let events = M.load(storage),
+  let today = M.TODAY;
+  let snapshot = null,
+    loading = Boolean(live),
+    loadError = "",
+    requestNumber = 0,
+    activeRequest = null,
+    lastRead = 0;
+  let events = live ? [] : M.load(storage),
     screen = "kind",
-    selected = M.TODAY,
-    month = "2026-06",
+    selected = today,
+    month = today.slice(0, 7),
     draft = null,
     returnScreen = "kind",
     revealed = null;
@@ -25,7 +43,7 @@
     tg?.setBottomBarColor?.("#ffffff");
   } catch {}
   const icon = (name) =>
-    `<img class="icon icon-${name}" src="./assets/${name}.svg" alt="" aria-hidden="true" width="24" height="24">`;
+    `<img class="icon icon-${name}" src="${assetRoot}assets/${name}.svg" alt="" aria-hidden="true" width="24" height="24">`;
   const esc = (value) =>
     String(value).replace(
       /[&<>"']/g,
@@ -42,11 +60,15 @@
     new Intl.DateTimeFormat("ru", { month: "long", year: "numeric" })
       .format(M.parseDate(key + "-01"))
       .replace(/\s*г\.?$/, "");
-  const count = (date) => events.filter((e) => e.date === date).length;
+  const count = (date) =>
+    live
+      ? snapshot?.counts[date] || 0
+      : events.filter((e) => e.date === date).length;
   function announce(text) {
     announcer.textContent = text;
   }
   function persist() {
+    if (live) return;
     const saved = M.save(storage, events);
     announce(
       saved
@@ -55,12 +77,12 @@
     );
   }
   function header() {
-    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><img src="./assets/logo.svg" alt="PoopCheck" width="203" height="47"></div></header>`;
+    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><img src="${assetRoot}assets/logo.svg" alt="PoopCheck" width="203" height="47"></div></header>`;
   }
   function dayButton(date, full) {
     const n = count(date),
       active = date === selected,
-      future = date > M.TODAY;
+      future = date > today;
     return `<button class="day ${n ? "has-events" : ""} ${active ? "selected" : ""}" data-date="${date}" aria-label="${date}${n ? ", отметок: " + n : ""}" aria-pressed="${active}" ${future ? "disabled" : ""}>${full ? `${n ? '<span class="poop-mark" aria-hidden="true"></span>' : ""}<span class="date-number">${Number(date.slice(-2))}</span>${n > 1 ? `<span class="badge">${n}</span>` : ""}` : `<span class="day-circle">${Number(date.slice(-2))}</span>`}</button>`;
   }
   function calendar(full) {
@@ -83,7 +105,7 @@
       for (let i = 0; i < 7; i++)
         days += dayButton(M.addDays(monday, i), false);
     }
-    return `<section class="date-card" aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц">${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(month)}</button><button data-action="next-month" aria-label="Следующий месяц" ${month >= "2026-06" ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selected.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
+    return `<section class="date-card" aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц">${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(month)}</button><button data-action="next-month" aria-label="Следующий месяц" ${month >= today.slice(0, 7) ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selected.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
   }
   function question() {
     const kind = screen === "kind",
@@ -93,11 +115,11 @@
   function history() {
     const rows = events
       .filter((e) => e.date === selected)
-      .sort((a, b) => a.time.localeCompare(b.time));
-    return `${calendar(true)}<section class="history"><h1>Итоги дня:</h1>${rows.length ? rows.map((e) => `<article class="event ${revealed === e.id ? "revealed" : ""}" data-event="${esc(e.id)}"><button class="delete" data-delete="${esc(e.id)}" aria-label="Удалить запись ${e.time}" ${revealed !== e.id ? 'tabindex="-1" aria-hidden="true"' : ""}>${icon("trash")}</button><div class="event-content"><div><time>${e.date.split("-").reverse().join(".").replace(".2026", ".26")} ${e.time}</time><div class="description">${[M.kinds[e.kind], M.feelings[e.feeling].toLowerCase()].join(", ")}</div></div><button class="edit" data-edit="${esc(e.id)}" aria-label="Изменить запись ${e.time}">${icon("edit")}</button></div></article>`).join("") : '<div class="empty">Нет отметок</div>'}</section>`;
+      .sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
+    return `${calendar(true)}<section class="history"><h1>Итоги дня:</h1>${rows.length ? rows.map((e) => `<article class="event ${revealed === e.id ? "revealed" : ""}" data-event="${esc(e.id)}"><button class="delete" data-delete="${esc(e.id)}" aria-label="Удалить запись ${esc(e.time || "время не указано")}" ${revealed !== e.id ? 'tabindex="-1" aria-hidden="true"' : ""}>${icon("trash")}</button><div class="event-content"><div><time>${[e.date.slice(8), e.date.slice(5, 7), e.date.slice(2, 4)].join(".")} ${esc(e.time || "время не указано")}</time><div class="description">${esc([M.kinds[e.kind] || "Консистенция не указана", M.feelings[e.feeling]?.toLowerCase() || "ощущения не указаны"].join(", "))}</div></div><button class="edit" data-edit="${esc(e.id)}" aria-label="Изменить запись ${esc(e.time || "время не указано")}">${icon("edit")}</button></div></article>`).join("") : '<div class="empty">Нет отметок</div>'}</section>`;
   }
   function statistics() {
-    const s = M.stats(events),
+    const s = live ? snapshot.stats : M.stats(events),
       day = (M.parseDate(selected).getDay() + 6) % 7,
       start = M.addDays(selected, -day),
       counts = Array.from({ length: 7 }, (_, i) => count(M.addDays(start, i))),
@@ -112,6 +134,14 @@
         : "дней";
   }
   function render() {
+    if (live && (loading || loadError || !snapshot)) {
+      app.innerHTML =
+        header() +
+        (loadError
+          ? `<button class="empty" data-action="retry">${esc(loadError)}</button>`
+          : '<div class="empty" role="status">Загрузка…</div>');
+      return;
+    }
     app.innerHTML =
       header() +
       (screen === "calendar"
@@ -143,6 +173,7 @@
     announce("Выберите консистенцию и ощущения");
   }
   function commit(feeling) {
+    if (live) return;
     const editing = draft?.id,
       event = {
         id:
@@ -171,9 +202,24 @@
       tg?.HapticFeedback.notificationOccurred("success");
     } catch {}
   }
-  app.addEventListener("click", (e) => {
+  app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
     if (!b || b.disabled) return;
+    if (b.dataset.action === "retry") {
+      await refresh();
+      return;
+    }
+    if (live && (!snapshot || loading || loadError)) return;
+    if (
+      live &&
+      (b.dataset.choice !== undefined ||
+        b.dataset.edit ||
+        b.dataset.delete ||
+        b.dataset.action === "add")
+    ) {
+      readOnlyNotice();
+      return;
+    }
     if (b.dataset.choice !== undefined) {
       const value = Number(b.dataset.choice);
       if (screen === "kind") {
@@ -187,7 +233,10 @@
       draft = null;
       revealed = null;
       if (screen === "feeling") go("kind");
-      else render();
+      else if (live && selected.slice(0, 7) !== month) {
+        month = selected.slice(0, 7);
+        await refresh();
+      } else render();
       return;
     }
     if (b.dataset.edit) {
@@ -236,13 +285,17 @@
           d.getMonth() + (b.dataset.action === "previous-month" ? -1 : 1),
         );
         month = M.dateKey(d).slice(0, 7);
-        render();
+        if (live) {
+          selected = month === today.slice(0, 7) ? today : month + "-01";
+          await refresh();
+        } else render();
         break;
       }
     }
   });
   let pointer = null;
   app.addEventListener("pointerdown", (e) => {
+    if (live) return;
     const row = e.target.closest("[data-event]");
     pointer = row
       ? { id: row.dataset.event, x: e.clientX, y: e.clientY }
@@ -262,6 +315,7 @@
     pointer = null;
   });
   app.addEventListener("keydown", (e) => {
+    if (live) return;
     const row = e.target.closest("[data-event]");
     if (row && e.key === "ArrowLeft") {
       revealed = row.dataset.event;
@@ -276,5 +330,62 @@
   try {
     tg?.BackButton.onClick(back);
   } catch {}
-  render();
+  function readOnlyNotice() {
+    const text =
+      "Пока доступен только просмотр. Добавлять и менять отметки можно через бота.";
+    if (tg?.isVersionAtLeast?.("6.2")) tg.showAlert(text);
+    else window.alert(text);
+  }
+  async function refresh() {
+    if (!live) return;
+    const number = ++requestNumber;
+    activeRequest?.abort();
+    const controller = new AbortController();
+    activeRequest = controller;
+    loading = true;
+    loadError = "";
+    render();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const data = await live.read(snapshot ? month : null, controller.signal);
+      if (number !== requestNumber) return;
+      const oldToday = today;
+      today = data.today;
+      if (!snapshot || selected === oldToday) selected = today;
+      month = data.month;
+      snapshot = data;
+      events = data.events;
+      lastRead = Date.now();
+    } catch (error) {
+      if (number !== requestNumber) return;
+      events = [];
+      loadError =
+        error.name === "AbortError"
+          ? "Не удалось загрузить данные. Нажми, чтобы повторить."
+          : error.message;
+    } finally {
+      clearTimeout(timeout);
+      if (number === requestNumber) {
+        loading = false;
+        activeRequest = null;
+        render();
+      }
+    }
+  }
+  function resume() {
+    if (
+      live &&
+      !loading &&
+      document.visibilityState === "visible" &&
+      Date.now() - lastRead > 5000
+    ) {
+      if (selected === today) month = null; // Server chooses the current month, including at midnight.
+      refresh();
+    }
+  }
+  if (live) {
+    document.addEventListener("visibilitychange", resume);
+    tg?.onEvent?.("activated", resume);
+    refresh();
+  } else render();
 })();

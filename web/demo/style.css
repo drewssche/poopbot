@@ -628,6 +628,186 @@ img {
     font-size: 22px;
   }
 }
+/* Fit the existing composition into desktop webviews without scaling the page.
+   Phones keep the original Figma sizing. Long histories still scroll normally. */
+@media (max-height: 720px) {
+  html[data-layout="desktop"] {
+    --desktop-bottom: 16px;
+    --desktop-add: 56px;
+  }
+  html[data-layout="desktop"] .app {
+    padding-bottom: calc(var(--desktop-bottom) + var(--safe-bottom));
+  }
+  html[data-layout="desktop"] .header {
+    height: 64px;
+  }
+  html[data-layout="desktop"] .brand {
+    width: 176px;
+    height: 41px;
+    top: 10px;
+  }
+  html[data-layout="desktop"] .brand img {
+    height: 41px;
+  }
+  html[data-layout="desktop"] .menu {
+    top: 12px;
+  }
+  html[data-layout="desktop"] .date-card {
+    padding-bottom: 16px;
+  }
+  html[data-layout="desktop"] .date-heading {
+    height: 40px;
+    margin-bottom: 8px;
+  }
+  html[data-layout="desktop"] .month-button,
+  html[data-layout="desktop"] .month-nav {
+    font-size: 20px;
+    line-height: 24px;
+  }
+  html[data-layout="desktop"] .weekdays {
+    font-size: 20px;
+    line-height: 24px;
+    margin-bottom: 4px;
+  }
+  html[data-layout="desktop"] .day,
+  html[data-layout="desktop"] .day .day-circle {
+    height: 34px;
+  }
+  html[data-layout="desktop"] .day .day-circle {
+    width: 34px;
+  }
+  html[data-layout="desktop"] .day {
+    font-size: 18px;
+  }
+  html[data-layout="desktop"] .month .day {
+    height: 44px;
+  }
+  html[data-layout="desktop"] .question {
+    padding-top: 24px;
+    padding-bottom: 80px;
+  }
+  html[data-layout="desktop"] .question h1 {
+    font-size: 20px;
+    line-height: 24px;
+    margin-bottom: 12px;
+    gap: 7px;
+  }
+  html[data-layout="desktop"] .question h1 .icon {
+    width: 26px;
+    height: 25px;
+  }
+  html[data-layout="desktop"] .choices {
+    gap: 6px;
+  }
+  html[data-layout="desktop"] .choice {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 18px;
+    line-height: 24px;
+  }
+  html[data-layout="desktop"] .add,
+  html[data-layout="desktop"] .add .icon {
+    width: var(--desktop-add);
+    height: var(--desktop-add);
+  }
+  html[data-layout="desktop"] .add {
+    bottom: calc(var(--desktop-bottom) + var(--safe-bottom));
+  }
+  html[data-layout="desktop"] .history {
+    padding-top: 24px;
+  }
+  html[data-layout="desktop"] .history h1 {
+    font-size: 20px;
+    line-height: 24px;
+  }
+  html[data-layout="desktop"] .back {
+    margin-bottom: 16px;
+  }
+  html[data-layout="desktop"] .metric,
+  html[data-layout="desktop"] .streak {
+    height: 80px;
+  }
+  html[data-layout="desktop"] .metric strong {
+    font-size: 28px;
+    line-height: 34px;
+  }
+  html[data-layout="desktop"] .streak-title,
+  html[data-layout="desktop"] .dynamics-title {
+    font-size: 20px;
+    line-height: 24px;
+  }
+  html[data-layout="desktop"] .bar {
+    height: 90px;
+  }
+}
+@media (max-height: 560px) {
+  html[data-layout="desktop"] {
+    --desktop-bottom: 12px;
+    --desktop-add: 48px;
+  }
+  html[data-layout="desktop"] .header {
+    height: 48px;
+  }
+  html[data-layout="desktop"] .brand {
+    width: 150px;
+    height: 35px;
+    top: 6px;
+  }
+  html[data-layout="desktop"] .brand img {
+    height: 35px;
+  }
+  html[data-layout="desktop"] .menu {
+    top: 2px;
+  }
+  html[data-layout="desktop"] .date-card {
+    padding-bottom: 12px;
+  }
+  html[data-layout="desktop"] .date-heading {
+    height: 36px;
+    margin-bottom: 4px;
+  }
+  html[data-layout="desktop"] .month-button,
+  html[data-layout="desktop"] .month-nav,
+  html[data-layout="desktop"] .weekdays {
+    font-size: 18px;
+    line-height: 22px;
+  }
+  html[data-layout="desktop"] .weekdays {
+    margin-bottom: 2px;
+  }
+  html[data-layout="desktop"] .day,
+  html[data-layout="desktop"] .day .day-circle {
+    height: 30px;
+  }
+  html[data-layout="desktop"] .day .day-circle {
+    width: 30px;
+  }
+  html[data-layout="desktop"] .day {
+    font-size: 16px;
+  }
+  html[data-layout="desktop"] .month .day {
+    height: 42px;
+  }
+  html[data-layout="desktop"] .question {
+    padding-top: 16px;
+    padding-bottom: 70px;
+  }
+  html[data-layout="desktop"] .question h1 {
+    font-size: 18px;
+    line-height: 22px;
+    margin-bottom: 10px;
+  }
+  html[data-layout="desktop"] .question h1 .icon {
+    width: 23px;
+    height: 22px;
+  }
+  html[data-layout="desktop"] .choice {
+    min-height: 36px;
+    padding: 7px 12px;
+    font-size: 16px;
+    line-height: 22px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

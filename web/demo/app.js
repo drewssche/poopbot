@@ -35,6 +35,13 @@
     returnScreen = "kind",
     revealed = null;
   const tg = window.Telegram?.WebApp;
+  // Telegram Desktop uses a short webview. Keep the phone layout unchanged.
+  const platform = tg?.platform || "unknown";
+  const desktop =
+    ["tdesktop", "macos", "web", "weba", "webk"].includes(platform) ||
+    (platform === "unknown" &&
+      window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+  document.documentElement.dataset.layout = desktop ? "desktop" : "mobile";
   try {
     tg?.ready();
     tg?.expand();

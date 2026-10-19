@@ -3,9 +3,12 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.bot.callback_answers import answer_callback
 
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q2 import q2_keyboard
@@ -189,21 +192,27 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
         if selected_n < 1 or selected_n > int(state.poops_n):
             selected_n = int(state.poops_n)
 
+        popup = "Пропустил" if is_skip else None
         if selected_choice:
             evt = events_by_n.get(selected_n)
             if evt is not None:
                 evt.bristol = _map_choice_to_bristol(selected_choice)
                 state.bristol = evt.bristol
                 changed = True
-                await cb.answer(f"Записал для тебя: #{selected_n} {_choice_to_icon(selected_choice)}", show_alert=False)
-        elif is_back_q1:
-            await cb.answer()
-        elif is_skip:
-            await cb.answer("Пропустил", show_alert=False)
-        else:
-            await cb.answer()
+                popup = f"Записал для тебя: #{selected_n} {_choice_to_icon(selected_choice)}"
 
-        db.commit()
+        session_id = sess.session_id
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("Q2 save failed chat_id=%s user_id=%s session_id=%s", chat_id, user.id, session_id)
+            await answer_callback(cb, "Не удалось сохранить ответ. Попробуй ещё раз.")
+            return
+
+        logger.info("Q2 action chat_id=%s user_id=%s session_id=%s action=%s outcome=%s",
+                    chat_id, user.id, sess.session_id, cb.data, "saved" if changed else "unchanged")
+        await answer_callback(cb, popup)
 
         evt = events_by_n.get(selected_n)
         active_choice = _choice_from_bristol(evt.bristol if evt else None)
@@ -235,7 +244,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                             event_n=selected_n,
                         ),
                     )
-            except TelegramBadRequest as e:
+            except TelegramAPIError as e:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit private flow from Q2: %s", e)
 
@@ -246,7 +255,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                 render_q2_text(db, chat_id, sess.session_id),
                 reply_markup=q2_keyboard(selected_choice=active_choice),
             )
-        except TelegramBadRequest as e:
+        except TelegramAPIError as e:
             if "message is not modified" not in str(e).lower():
                 logger.exception("Failed to edit Q2 text: %s", e)
 
@@ -279,7 +288,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
                         ),
                     ),
                 )
-            except TelegramBadRequest as e:
+            except TelegramAPIError as e:
                 msg = str(e).lower()
                 if "message is not modified" in msg:
                     return

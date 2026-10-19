@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery
 
+from app.bot.callback_answers import answer_callback
 from app.bot.handlers.help_actions import (
     refresh_q1_after_settings_change,
     render_global_visibility_panel,
@@ -43,6 +44,29 @@ router = Router()
 _engine = None
 _session_factory = None
 
+_SHARED_SETTING_ACTIONS = {
+    "notifications_toggle", "notifications_on", "notifications_off",
+    "late_reminder_toggle", "q2_q3_toggle", "time",
+    "global_vis_toggle", "global_vis_on", "global_vis_off",
+}
+
+
+async def _can_change_shared_settings(cb: CallbackQuery) -> bool:
+    if cb.message.chat.type == "private":
+        return True
+    # Check the actor, not the owner encoded in a shared menu's callback.
+    # Fetch afresh so revoked admin rights do not remain cached.
+    try:
+        admins = await cb.bot.get_chat_administrators(chat_id=cb.message.chat.id)
+    except TelegramAPIError:
+        logger.exception("Cannot verify chat admin chat_id=%s user_id=%s", cb.message.chat.id, cb.from_user.id)
+        await answer_callback(cb, "Не удалось проверить права. Попробуй ещё раз.", show_alert=True)
+        return False
+    if any(admin.user.id == cb.from_user.id for admin in admins):
+        return True
+    await answer_callback(cb, "Общие настройки группы может менять только её администратор.", show_alert=True)
+    return False
+
 
 def _is_stale_callback_error(e: TelegramBadRequest) -> bool:
     msg = str(e).lower()
@@ -65,16 +89,20 @@ async def help_callbacks(cb: CallbackQuery) -> None:
     if cb.message is None or cb.from_user is None:
         return
 
-    from app.core.config import load_settings
-
-    settings = load_settings()
-    init_db(settings.database_url)
-
     data = cb.data
     chat_id = cb.message.chat.id
     actor_id = cb.from_user.id
     is_private_chat = cb.message.chat.type == "private"
     owner_id = actor_id
+
+    action = data.split(":")[1]
+    if action in _SHARED_SETTING_ACTIONS and not await _can_change_shared_settings(cb):
+        return
+
+    from app.core.config import load_settings
+
+    settings = load_settings()
+    init_db(settings.database_url)
 
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id)

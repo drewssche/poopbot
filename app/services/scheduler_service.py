@@ -39,6 +39,7 @@ from app.services.reminder_service import (
     build_late_reminder_text,
 )
 from app.services.scheduler_telegram import safe_edit_message_text, safe_send_message
+from app.services.scheduler_scan import load_scheduler_snapshot
 from app.bot.keyboards.q1 import q1_keyboard, closed_q1_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
 
@@ -132,10 +133,13 @@ async def recover_missing_q1_on_startup(
 
 async def _tick(bot: Bot, session_factory: sessionmaker, chat_throttle_sec: float = 0.2) -> None:
     with db_session(session_factory) as db:
-        chat_ids = list(db.scalars(select(Chat.chat_id).where(Chat.is_enabled == True)).all())
+        snapshot = load_scheduler_snapshot(db)
 
-    for chat_id in chat_ids:
+    for chat in snapshot.chats:
+        chat_id = chat.chat_id
         try:
+            if not snapshot.needs_processing(chat, now_in_tz(chat.timezone)):
+                continue
             await asyncio.wait_for(
                 _process_chat(bot, session_factory, int(chat_id)),
                 timeout=_CHAT_PROCESS_TIMEOUT_SEC,

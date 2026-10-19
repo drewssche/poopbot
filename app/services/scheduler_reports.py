@@ -41,6 +41,17 @@ def _is_last_day_of_month(d: date) -> bool:
     return (d + timedelta(days=1)).month != d.month
 
 
+def periodic_reports_due(report_for_date: date) -> list[tuple[str, str, str]]:
+    reports = []
+    if report_for_date.weekday() == 6:
+        reports.append(("weekly_stats", "week", "📉 Итоги недели"))
+    if _is_last_day_of_month(report_for_date):
+        reports.append(("monthly_stats", "month", "📉 Итоги месяца"))
+    if report_for_date.month == 12 and report_for_date.day == 31:
+        reports.append(("yearly_stats", "year", "📉 Итоги года"))
+    return reports
+
+
 def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, title: str) -> str:
     def _trend_line(label: str, curr: int, prev: int) -> str:
         delta = curr - prev
@@ -164,12 +175,8 @@ async def send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> N
         sent = await safe_send_message(bot, chat_id=chat_id, text=text)
         set_command_message_id(db, chat_id, 0, kind, anchor_date, sent.message_id)
 
-    if report_for_date.weekday() == 6:
-        await _send("weekly_stats", "week", "📉 Итоги недели", report_for_date)
-    if _is_last_day_of_month(report_for_date):
-        await _send("monthly_stats", "month", "📉 Итоги месяца", report_for_date)
-    if report_for_date.month == 12 and report_for_date.day == 31:
-        await _send("yearly_stats", "year", "📉 Итоги года", report_for_date)
+    for kind, period, title in periodic_reports_due(report_for_date):
+        await _send(kind, period, title, report_for_date)
 
 
 def _streak_rank_label(days: int) -> str:

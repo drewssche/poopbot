@@ -80,7 +80,8 @@ def add_missing_mark(db, *, sess: DaySession, user_id: int, marker: str | None =
     state.achievement_text = marker
     state.bristol = None
     state.feeling = None
-    create_event(db, sess.session_id, user_id, 1, origin_chat_id=sess.chat_id)
+    create_event(db, sess.session_id, user_id, 1, origin_chat_id=sess.chat_id,
+                 source="restore" if marker else "late")
     db.flush()
     return True
 

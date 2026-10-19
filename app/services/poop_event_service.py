@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -86,10 +88,10 @@ def ensure_events_count(db: Session, session_id: int, user_id: int, poops_n: int
     }
     for n in range(1, int(poops_n) + 1):
         if n not in existing:
-            create_event(db, session_id=session_id, user_id=user_id, event_n=n, origin_chat_id=origin_chat_id)
+            create_event(db, session_id=session_id, user_id=user_id, event_n=n, origin_chat_id=origin_chat_id, source="reconciled")
 
 
-def reconcile_events_count(db: Session, session_id: int, user_id: int, poops_n: int, origin_chat_id: int | None = None) -> None:
+def reconcile_events_count(db: Session, session_id: int, user_id: int, poops_n: int, origin_chat_id: int | None = None, *, source: str = "reconciled") -> None:
     target = max(0, int(poops_n or 0))
     events = db.scalars(
         select(PoopEvent).where(PoopEvent.session_id == session_id, PoopEvent.user_id == user_id)
@@ -109,10 +111,10 @@ def reconcile_events_count(db: Session, session_id: int, user_id: int, poops_n: 
     # Create missing events inside [1..poops_n].
     for n in range(1, target + 1):
         if n not in existing:
-            create_event(db, session_id=session_id, user_id=user_id, event_n=n, origin_chat_id=origin_chat_id)
+            create_event(db, session_id=session_id, user_id=user_id, event_n=n, origin_chat_id=origin_chat_id, source=source)
 
 
-def create_event(db: Session, session_id: int, user_id: int, event_n: int, origin_chat_id: int | None = None) -> None:
+def create_event(db: Session, session_id: int, user_id: int, event_n: int, origin_chat_id: int | None = None, *, source: str = "recorded") -> None:
     if origin_chat_id is None:
         origin_chat_id = int(
             db.scalar(
@@ -128,11 +130,12 @@ def create_event(db: Session, session_id: int, user_id: int, event_n: int, origi
 
         origin_chat_id = int(db.scalar(select(DaySession.chat_id).where(DaySession.session_id == session_id)) or 0)
 
+    occurred_at = datetime.now(UTC) if source == "recorded" else None
     dialect_name = db.bind.dialect.name if db.bind is not None else ""
     if dialect_name == "postgresql":
         db.execute(
             pg_insert(PoopEvent)
-            .values(session_id=session_id, user_id=user_id, event_n=event_n, origin_chat_id=origin_chat_id)
+            .values(session_id=session_id, user_id=user_id, event_n=event_n, origin_chat_id=origin_chat_id, source=source, occurred_at=occurred_at)
             .on_conflict_do_nothing(
                 index_elements=["session_id", "user_id", "event_n"]
             )
@@ -154,6 +157,8 @@ def create_event(db: Session, session_id: int, user_id: int, event_n: int, origi
             user_id=user_id,
             event_n=event_n,
             origin_chat_id=origin_chat_id,
+            source=source,
+            occurred_at=occurred_at,
         )
     )
 

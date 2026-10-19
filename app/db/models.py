@@ -130,6 +130,10 @@ class PoopEvent(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     origin_chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
     event_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL source identifies untouched historical rows. No timestamp is invented
+    # for a restored mark: created_at is when it was recorded, not when it happened.
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bristol: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1..7
     feeling: Mapped[str | None] = mapped_column(
         Enum("great", "ok", "bad", name="feeling_kind"),

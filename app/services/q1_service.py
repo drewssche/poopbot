@@ -15,6 +15,7 @@ from app.services.poop_event_service import (
     normalize_session_user_state_to_origin_chat,
     reconcile_events_count,
 )
+from app.services.event_time_service import event_occurrence_time
 from app.services.time_service import (
     get_time_slot,
     get_slot_emoji,
@@ -62,8 +63,9 @@ def _get_user_slot_counts(
     
     slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
     for ev in events:
-        if ev.created_at:
-            slot = get_time_slot(ev.created_at, tz_name)
+        occurred_at = event_occurrence_time(ev)
+        if occurred_at is not None:
+            slot = get_time_slot(occurred_at, tz_name)
             slot_counts[slot] = slot_counts.get(slot, 0) + 1
     
     return slot_counts
@@ -253,6 +255,7 @@ def restore_streak_for_date(db: Session, chat_id: int, user_id: int, restore_dat
         user_id=user_id,
         poops_n=int(state.poops_n or 0),
         origin_chat_id=chat_id,
+        source="restore",
     )
     _refresh_user_streak_cache_before_current_day(
         db,
@@ -369,6 +372,7 @@ def restore_recent_streak_window(
             user_id=user_id,
             poops_n=int(state.poops_n or 0),
             origin_chat_id=chat_id,
+            source="restore",
         )
 
     _refresh_user_streak_cache_before_current_day(

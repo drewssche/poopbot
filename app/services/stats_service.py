@@ -6,7 +6,8 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import PoopEvent, SessionUserState, User
+from app.db.models import Chat, Session as DaySession, PoopEvent, SessionUserState, User
+from app.services.event_time_service import event_occurrence_time
 from app.services.stats_common import (
     Range,
     estimate_waste_metrics,
@@ -67,16 +68,18 @@ def _compute_slot_patterns(db: Session, session_ids: list[int], user_id: int, tz
         return _empty_slot_counts()
     
     events = db.scalars(
-        select(PoopEvent).where(
+        select(PoopEvent).join(DaySession, DaySession.session_id == PoopEvent.session_id).where(
             PoopEvent.session_id.in_(session_ids),
+            PoopEvent.origin_chat_id == DaySession.chat_id,
             PoopEvent.user_id == user_id
         )
     ).all()
     
     slot_counts = _empty_slot_counts()
     for ev in events:
-        if ev.created_at:
-            slot = get_time_slot(ev.created_at, tz_name)
+        occurred_at = event_occurrence_time(ev)
+        if occurred_at is not None:
+            slot = get_time_slot(occurred_at, tz_name)
             slot_counts[slot] = slot_counts.get(slot, 0) + 1
 
     return slot_counts
@@ -92,8 +95,9 @@ def _compute_slot_patterns_from_state_rows(
     slot_counts = _empty_slot_counts()
     for state in states:
         for ev in events_map.get((int(state.session_id), int(state.user_id)), []):
-            if ev.created_at:
-                slot = get_time_slot(ev.created_at, tz_name)
+            occurred_at = event_occurrence_time(ev)
+            if occurred_at is not None:
+                slot = get_time_slot(occurred_at, tz_name)
                 slot_counts[slot] = slot_counts.get(slot, 0) + 1
     return slot_counts
 
@@ -102,7 +106,7 @@ def _format_slot_patterns(slot_counts: dict[str, int]) -> list[str]:
     """Форматирует паттерны для отображения в статистике."""
     slot_total = sum(slot_counts.values())
     if slot_total == 0:
-        return ["Пока нет данных для анализа паттернов."]
+        return ["Пока нет отметок с известным временем.", "Восстановления без времени учитываются в количестве и стрике."]
     
     lines = []
     labels = [
@@ -120,6 +124,7 @@ def _format_slot_patterns(slot_counts: dict[str, int]) -> list[str]:
         peak_marker = " ← Пик!" if slot == peak_slot and count > 0 else ""
         lines.append(f"{label}:   {count} раз  ({pct:.0f}%){peak_marker}")
     
+    lines.append("Отметки без известного времени в ритм не включены.")
     return lines
 
 
@@ -289,9 +294,12 @@ def _compute_chat_slot_patterns(db: Session, chat_id: int, r: Range) -> tuple[di
     chat_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
     user_slot_counts: dict[int, dict[str, int]] = {}
     
+    chat = db.get(Chat, chat_id)
+    tz_name = chat.timezone if chat else "Europe/Minsk"
     for ev in events:
-        if ev.created_at:
-            slot = get_time_slot(ev.created_at, "Europe/Minsk")
+        occurred_at = event_occurrence_time(ev)
+        if occurred_at is not None:
+            slot = get_time_slot(occurred_at, tz_name)
             chat_slot_counts[slot] = chat_slot_counts.get(slot, 0) + 1
             
             uid = int(ev.user_id)
@@ -313,10 +321,11 @@ def _compute_global_slot_patterns(
         uid = int(st.user_id)
         user_counts = user_slot_counts.setdefault(uid, _empty_slot_counts())
         for ev in events_map.get((int(st.session_id), uid), []):
-            if ev.created_at:
-                slot = get_time_slot(ev.created_at, tz_name)
+            occurred_at = event_occurrence_time(ev)
+            if occurred_at is not None:
+                slot = get_time_slot(occurred_at, tz_name)
                 user_counts[slot] = user_counts.get(slot, 0) + 1
-    return user_slot_counts
+    return {uid: counts for uid, counts in user_slot_counts.items() if sum(counts.values()) > 0}
 
 
 def _get_top_slot_users(user_slot_counts: dict[int, dict[str, int]], target_slot: str, limit: int = 1) -> list[tuple[int, int]]:
@@ -377,7 +386,8 @@ def build_stats_text_chat(
         streak_val = _current_streak_from_days(active_days, today)
 
         private_session_ids = [int(s.session_id) for s in _sessions_in_range(db, chat_id, r)]
-        slot_counts = _compute_slot_patterns(db, private_session_ids, user_id)
+        chat = db.get(Chat, chat_id)
+        slot_counts = _compute_slot_patterns(db, private_session_ids, user_id, chat.timezone if chat else "Europe/Minsk")
         pattern_title = _get_pattern_title(slot_counts, total_poops)
 
         mass_g, water_l, water_gal = estimate_waste_metrics(total_poops)
@@ -662,6 +672,7 @@ def build_stats_text_global(db: Session, user_id: int, today: date, period: str)
     slot_total = sum(total_slot_counts.values())
     if slot_total > 0:
         lines.append("🕐 Когда чаще ходят (все участники):")
+        lines.append("Отметки без известного времени в ритм не включены.")
         labels = [
             ("night", "🌙 Ночь (00–06)"),
             ("morning", "🌅 Утро (06–12)"),

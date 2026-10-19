@@ -14,7 +14,9 @@ from app.db.base import Base
 from app.db.models import Chat, PoopEvent, Session as DaySession, SessionUserState, User
 
 # Test-only fallback when local env does not have pytz installed.
-if "pytz" not in sys.modules:
+try:
+    import pytz
+except ImportError:
     pytz_stub = types.ModuleType("pytz")
     pytz_stub.timezone = lambda _name: timezone.utc
     sys.modules["pytz"] = pytz_stub
@@ -148,11 +150,11 @@ class StatsServiceTests(unittest.TestCase):
 
         d = date(2026, 2, 16)
         # Chat 1 total for day = 5
-        self._add_session_state(chat_id=c1, d=d, user_id=1, poops_n=3, with_events=False)
-        self._add_session_state(chat_id=c1, d=d, user_id=2, poops_n=2, with_events=False)
+        self._add_session_state(chat_id=c1, d=d, user_id=1, poops_n=3, with_events=True)
+        self._add_session_state(chat_id=c1, d=d, user_id=2, poops_n=2, with_events=True)
         # Chat 2 total for day = 5 (tie)
-        self._add_session_state(chat_id=c2, d=d, user_id=1, poops_n=4, with_events=False)
-        self._add_session_state(chat_id=c2, d=d, user_id=2, poops_n=1, with_events=False)
+        self._add_session_state(chat_id=c2, d=d, user_id=1, poops_n=4, with_events=True)
+        self._add_session_state(chat_id=c2, d=d, user_id=2, poops_n=1, with_events=True)
 
         self.db.commit()
         snap = collect_among_chats_snapshot(self.db, d)

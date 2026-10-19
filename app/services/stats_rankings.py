@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Chat, PoopEvent
 from app.db.models import Session as DaySession
-from app.db.models import SessionUserState
+from app.services.event_time_service import event_occurrence_time
 from app.services.stats_common import Range, estimate_waste_metrics
 from app.services.time_service import now_in_tz, get_time_slot, get_slot_emoji
 
@@ -24,10 +24,11 @@ def rank_chat_among_groups_by_total(db: Session, chat_id: int, r: Range) -> tupl
         return None, 0
 
     rows = db.execute(
-        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
+        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(
             DaySession.chat_id.in_(chat_ids),
+            PoopEvent.origin_chat_id == DaySession.chat_id,
             DaySession.session_date >= r.start,
             DaySession.session_date <= r.end,
         )
@@ -78,16 +79,16 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     session_ids = [int(s.session_id) for s in sessions]
 
     by_chat_total = db.execute(
-        select(DaySession.chat_id, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
+        select(DaySession.chat_id, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id)
     ).all()
 
     by_chat_participants = db.execute(
-        select(DaySession.chat_id, func.count(func.distinct(SessionUserState.user_id)).label("participants"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids), SessionUserState.poops_n > 0)
+        select(DaySession.chat_id, func.count(func.distinct(PoopEvent.user_id)).label("participants"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id)
     ).all()
 
@@ -131,9 +132,9 @@ def collect_among_chats_snapshot(db: Session, today: date, r: Range | None = Non
     )[:5]
 
     day_rows = db.execute(
-        select(DaySession.chat_id, DaySession.session_date, func.coalesce(func.sum(SessionUserState.poops_n), 0).label("poops"))
-        .join(SessionUserState, SessionUserState.session_id == DaySession.session_id)
-        .where(DaySession.session_id.in_(session_ids))
+        select(DaySession.chat_id, DaySession.session_date, func.count(PoopEvent.id).label("poops"))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.session_id.in_(session_ids), PoopEvent.origin_chat_id == DaySession.chat_id)
         .group_by(DaySession.chat_id, DaySession.session_date)
     ).all()
     record_day = None
@@ -225,18 +226,20 @@ def collect_among_chats_slot_patterns(db: Session, r: Range) -> tuple[dict[int, 
     session_ids = [int(s.session_id) for s in sessions]
     
     events = db.scalars(
-        select(PoopEvent).where(
+        select(PoopEvent).join(DaySession, DaySession.session_id == PoopEvent.session_id).where(
             PoopEvent.session_id.in_(session_ids),
-            PoopEvent.origin_chat_id.in_(chat_ids)
+            PoopEvent.origin_chat_id == DaySession.chat_id
         )
     ).all()
     
     chat_slot_counts: dict[int, dict[str, int]] = {}
     total_slot_counts = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
     
+    tz_by_chat = {ch.chat_id: ch.timezone for ch in db.scalars(select(Chat).where(Chat.chat_id.in_(chat_ids)))}
     for ev in events:
-        if ev.created_at:
-            slot = get_time_slot(ev.created_at, "Europe/Minsk")
+        occurred_at = event_occurrence_time(ev)
+        if occurred_at is not None:
+            slot = get_time_slot(occurred_at, tz_by_chat.get(ev.origin_chat_id, "Europe/Minsk"))
             cid = int(ev.origin_chat_id)
             
             if cid not in chat_slot_counts:

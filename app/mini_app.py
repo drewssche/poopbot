@@ -145,7 +145,7 @@ def main():
 
     app.on_cleanup.append(cleanup)
     logging.basicConfig(level=logging.INFO)
-    web.run_app(app, host="0.0.0.0", port=8080, access_log=None, print=None, max_field_size=16384)
+    web.run_app(app, host="0.0.0.0", port=8080, access_log=None, print=None)
 
 
 if __name__ == "__main__":

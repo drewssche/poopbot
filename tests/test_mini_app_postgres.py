@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from app.db.base import Base
 from app.db.models import Chat, User, PoopEvent, Session as DaySession, SessionUserState, MiniAppRequest
-from app.services.mini_app_service import prepare_scope, record_mark, event_version, MarkRejected
+from app.services.mini_app_service import prepare_scope, record_mark, event_version, MarkRejected, recover_request
 from app.services.q1_service import apply_plus
 
 URL = os.getenv('MINI_APP_TEST_DATABASE_URL')
@@ -85,6 +85,27 @@ def test_parallel_app_retries_and_bot_marks():
         with Session(scoped) as db:
             assert db.get(SessionUserState,(sid,10)).poops_n == 2
             assert db.scalars(select(PoopEvent.event_n).order_by(PoopEvent.event_n)).all() == [1,2]
+        # Recovery races a disconnected writer: either commit once or fence it off.
+        def recover(request_id):
+            with Session(scoped) as db:
+                outcome = recover_request(db,10,10,request_id)
+                db.commit()
+                return outcome
+        for _ in range(3):
+            body = {**mark,'requestId':str(uuid4())}
+            with Session(scoped) as db:
+                before = db.get(SessionUserState,(sid,10)).poops_n
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                w = pool.submit(edit_outcome,body)
+                r = pool.submit(recover,body['requestId'])
+                written, recovered = w.result(), r.result()
+            with Session(scoped) as db:
+                after = db.get(SessionUserState,(sid,10)).poops_n
+            if recovered['status'] == 'completed':
+                assert written != 'conflict' and after == before + 1
+            else:
+                assert written == 'conflict' and after == before
+            assert recover(body['requestId']) == recovered
     finally:
         with engine.begin() as c:
             c.exec_driver_sql('DROP SCHEMA ' + schema + ' CASCADE')

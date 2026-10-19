@@ -181,4 +181,10 @@ class MiniAppRequest(Base):
     request_id: Mapped[str] = mapped_column(String(36))
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     event_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("poop_events.id", ondelete="SET NULL"), nullable=True)
+    # NULL chat_id belongs to legacy receipts, which cannot be queried across scopes.
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    notify_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notify_pending: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    notify_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    notify_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

@@ -145,7 +145,8 @@ def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: dat
     event.feeling = ('great', 'ok', 'bad')[body['feeling']]
     event.occurred_at = local_now.astimezone(UTC)
     state.bristol, state.feeling = event.bristol, event.feeling
-    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event.id))
+    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event.id,
+                          chat_id=chat_id, notify_date=local_now.date(), notify_pending=True))
     db.flush()
     return {'eventId': str(event.id), 'repeated': False}
 
@@ -248,6 +249,36 @@ def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None
         _refresh_user_streak_cache_before_current_day(
             db, chat_id=chat_id, user_id=user_id, current_session_date=local_now.date())
     event_id = event.id if action == 'edit' else None
-    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event_id))
+    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event_id,
+                          chat_id=chat_id, notify_date=day, notify_pending=True))
     db.flush()
     return {'eventId': str(event_id) if event_id else None, 'repeated': False, 'date': body['date']}
+
+
+CANCELLED_REQUEST = '0' * 64
+
+
+def recover_request(db: Session, chat_id: int, user_id: int, request_id: str) -> dict:
+    """Resolve an uncertain action, fencing off any delayed writer with the same UUID.
+
+    A missing receipt alone is NOT proof that a disconnected write will not arrive.
+    The user lock and cancellation receipt make that decision atomic with writes.
+    """
+    from uuid import UUID
+    from app.db.models import MiniAppRequest, User
+    try:
+        request_id = str(UUID(request_id))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('Invalid request ID') from None
+    db.scalar(select(User).where(User.user_id == user_id).with_for_update())
+    if db.get(Chat, chat_id) is None or db.get(ChatMember, (chat_id, user_id)) is None:
+        raise PermissionError('Unavailable scope')
+    receipt = db.get(MiniAppRequest, (user_id, request_id))
+    if receipt:
+        if receipt.chat_id != chat_id:
+            raise PermissionError('Unavailable request')
+        return {'status': 'cancelled' if receipt.payload_hash == CANCELLED_REQUEST else 'completed'}
+    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, chat_id=chat_id,
+                          payload_hash=CANCELLED_REQUEST, notify_pending=False))
+    db.flush()
+    return {'status': 'cancelled'}

@@ -146,7 +146,7 @@ async def test_slow_reads_are_bounded_and_scope_is_server_controlled():
         entered.set()
         release.wait(3)
         return {'readOnly':True}
-    async with TestClient(TestServer(create_app(CONFIG,reader))) as client:
+    async with TestClient(TestServer(create_app(CONFIG,reader,workers=1,capacity=1))) as client:
         headers={'Origin':CONFIG.origin,'Authorization':'tma '+signed()}
         first=asyncio.ensure_future(client.post('/view',headers=headers,json={}))
         await asyncio.to_thread(entered.wait,2)
@@ -209,13 +209,13 @@ async def test_current_membership_required_for_both_read_and_write():
 
 
 @pytest.mark.asyncio
-async def test_saved_mark_survives_telegram_refresh_failure():
+async def test_saved_mark_queues_message_refresh_without_waiting():
     def writer(*args): return {'eventId':'1'}
-    async def notifier(*args): raise RuntimeError('secret')
+    def notifier(): pass
     async with TestClient(TestServer(create_app(CONFIG,lambda *a: {},writer,notifier=notifier))) as client:
         response = await client.post('/events',headers={'Origin':CONFIG.origin,'Authorization':'tma '+signed()},json={})
         assert response.status == 200
-        assert await response.json() == {'eventId':'1','messageUpdated':False}
+        assert await response.json() == {'eventId':'1','messageUpdateQueued':True}
 
 
 def new_mark(**kw):
@@ -391,14 +391,14 @@ async def test_http_edit_delete_recheck_membership_and_notify_changed_day():
     def writer(chat,user,body):
         assert (chat,user['id']) == (-100,10)
         return {'date':body['date']}
-    async def notifier(chat,user,day): calls.append(day)
+    def notifier(): calls.append('queued')
     headers = {'Origin':CONFIG.origin,'Authorization':'tma '+signed(start_param=group_scope(CONFIG.token,-100))}
     async with TestClient(TestServer(create_app(CONFIG,lambda *a: {},writer,authorize,notifier))) as client:
         for action in ['edit','delete']:
             response = await client.post('/events',headers=headers,json={
                 'action':action,'eventId':'1','version':'a'*64,'date':'2026-10-02'})
             assert response.status == 200
-    assert calls == [True,'2026-10-02',True,'2026-10-02']
+    assert calls == [True,'queued',True,'queued']
 
 
 def test_mutation_cannot_edit_valid_event_of_another_user_or_chat(db):
@@ -436,3 +436,98 @@ def test_refresh_closed_q1_keeps_closed_controls_and_corrected_count(db,monkeypa
     assert '02.10.26' in payload['text'] and '— —' in payload['text']
     monkeypatch.setattr(mini_app_message,'get_session_window',lambda _:SessionWindow(date(2026,10,4),False,True))
     assert mini_app_message.current_message(db,-100,10,date(2026,10,2))['reply_markup'] == {'inline_keyboard':[]}
+
+
+def test_recovery_fences_late_writes_and_isolates_scopes(db):
+    from app.services.mini_app_service import record_mark, recover_request, MarkRejected, prepare_scope
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    mark = new_mark()
+    assert recover_request(db,-100,10,mark['requestId']) == {'status':'cancelled'}; db.commit()
+    with pytest.raises(MarkRejected): record_mark(db,-100,10,mark,now=now)
+    db.rollback()
+    assert recover_request(db,-100,10,mark['requestId']) == {'status':'cancelled'}; db.commit()
+    prepare_scope(db,10,{'id':10}); db.commit()
+    with pytest.raises(PermissionError): recover_request(db,10,10,mark['requestId'])
+    db.rollback()
+    prepare_scope(db,-100,{'id':20}); db.commit()
+    # The same UUID in another account says nothing about the first user's receipt.
+    assert recover_request(db,-100,20,mark['requestId']) == {'status':'cancelled'}; db.commit()
+    assert read_view(db,-100,10,None,now=now)['stats']['total'] == 3
+
+
+def test_recovery_confirms_create_edit_delete_even_after_event_removed(db):
+    from app.services.mini_app_service import record_mark, recover_request
+    from app.db.models import MiniAppRequest
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    mark = new_mark()
+    event_id = int(record_mark(db,-100,10,mark,now=now)['eventId']); db.commit()
+    event = db.get(PoopEvent,event_id)
+    edit = mutation(event)
+    record_mark(db,-100,10,edit,now=now); db.commit()
+    deletion = mutation(event,'delete')
+    record_mark(db,-100,10,deletion,now=now); db.commit()
+    for body in [mark,edit,deletion]:
+        assert recover_request(db,-100,10,body['requestId']) == {'status':'completed'}; db.commit()
+        receipt = db.get(MiniAppRequest,(10,body['requestId']))
+        assert receipt.notify_pending and receipt.chat_id == -100
+        assert receipt.notify_date == date(2026,10,2)
+        assert receipt.event_id is None
+
+
+@pytest.mark.asyncio
+async def test_recovery_endpoint_rechecks_membership_and_rejects_overrides():
+    from app.services.mini_app_links import group_scope
+    from uuid import uuid4
+    calls=[]
+    async def authorize(chat,user,*,writing): calls.append(writing); return user == 10
+    def recoverer(chat,user,request_id):
+        calls.append((chat,user['id'],request_id)); return {'status':'completed'}
+    body={'requestId':str(uuid4())}
+    async with TestClient(TestServer(create_app(CONFIG,lambda *a: {},authorize=authorize,recoverer=recoverer))) as client:
+        headers={'Origin':CONFIG.origin,'Authorization':'tma '+signed(start_param=group_scope(CONFIG.token,-100))}
+        assert (await client.post('/recover',headers=headers,json=body)).status == 200
+        assert calls == [True,(-100,10,body['requestId'])]
+        assert (await client.post('/recover',headers=headers,json={**body,'user_id':20})).status == 400
+        headers['Authorization']='tma '+signed(user=20,start_param=group_scope(CONFIG.token,-100))
+        assert (await client.post('/recover',headers=headers,json=body)).status == 403
+
+
+@pytest.mark.asyncio
+async def test_bounded_queue_accepts_burst_without_unbounded_db_work():
+    import asyncio, threading
+    release=threading.Event()
+    lock=threading.Lock()
+    current=peak=0
+    def reader(*args):
+        nonlocal current,peak
+        with lock: current+=1; peak=max(peak,current)
+        release.wait(4)
+        with lock: current-=1
+        return {}
+    async with TestClient(TestServer(create_app(CONFIG,reader))) as client:
+        headers={'Origin':CONFIG.origin,'Authorization':'tma '+signed()}
+        requests=[asyncio.ensure_future(client.post('/view',headers=headers,json={})) for _ in range(12)]
+        try:
+            for _ in range(100):
+                if sum(t.done() for t in requests)>=2: break
+                await asyncio.sleep(.01)
+            assert sum(t.done() for t in requests)==2
+            assert peak==2
+        finally: release.set()
+        statuses=[r.status for r in await asyncio.gather(*requests)]
+        assert statuses.count(200)==10 and statuses.count(429)==2
+
+
+@pytest.mark.asyncio
+async def test_queue_timeout_does_not_start_rejected_work():
+    import asyncio,threading
+    entered,release=threading.Event(),threading.Event()
+    calls=[]
+    def reader(*args): calls.append(1); entered.set(); release.wait(3); return {}
+    async with TestClient(TestServer(create_app(CONFIG,reader,workers=1,queue_timeout=.05))) as client:
+        headers={'Origin':CONFIG.origin,'Authorization':'tma '+signed()}
+        first=asyncio.ensure_future(client.post('/view',headers=headers,json={}))
+        await asyncio.to_thread(entered.wait,2)
+        try: assert (await client.post('/view',headers=headers,json={})).status==429
+        finally: release.set()
+        assert (await first).status==200 and calls==[1]

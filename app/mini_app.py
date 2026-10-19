@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.services.mini_app_links import scope_chat
-from app.services.mini_app_service import MarkRejected, prepare_scope, read_view, record_mark
+from app.services.mini_app_service import MarkRejected, prepare_scope, read_view, record_mark, recover_request
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +110,11 @@ class TelegramGateway:
         return allowed
 
 
-def create_app(config: Config, reader, writer=None, authorize=None, notifier=None) -> web.Application:
+def create_app(config: Config, reader, writer=None, authorize=None, notifier=None, recoverer=None,
+               *, workers=2, capacity=10, queue_timeout=6) -> web.Application:
     recent = {}
-    busy = False
+    slots = asyncio.Semaphore(workers)
+    tasks = set()
 
     @web.middleware
     async def responses(request, handler):
@@ -127,7 +129,6 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
         return response
 
     async def handle(request):
-        nonlocal busy
         if request.headers.get('Origin') != config.origin:
             raise web.HTTPForbidden()
         auth = request.headers.get('Authorization', '')
@@ -140,14 +141,15 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
             body = await request.json()
         except (ValueError, UnicodeError):
             raise web.HTTPBadRequest() from None
+        recovering = request.path.endswith('/recover')
         writing = request.path.endswith('/events')
-        allowed = {'scope', 'requestId', 'date', 'kind', 'feeling', 'action', 'eventId', 'version'} if writing else {'scope', 'month'}
+        allowed = {'scope', 'requestId'} if recovering else {'scope', 'requestId', 'date', 'kind', 'feeling', 'action', 'eventId', 'version'} if writing else {'scope', 'month'}
         if not isinstance(body, dict) or set(body) - allowed:
             raise web.HTTPBadRequest()
         scope = body.pop('scope', None)
         if scope is not None and not isinstance(scope, str):
             raise web.HTTPBadRequest()
-        if not writing and body.get('month') is not None and not isinstance(body['month'], str):
+        if not writing and not recovering and body.get('month') is not None and not isinstance(body['month'], str):
             raise web.HTTPBadRequest()
         chat = resolve_chat(config, identity, scope)
         user = identity['user']
@@ -157,35 +159,54 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
             if not recent[key]:
                 del recent[key]
         bucket = recent.setdefault(user['id'], [])
-        if busy or len(bucket) >= 60 or sum(map(len, recent.values())) >= 600:
+        if len(tasks) >= capacity or len(bucket) >= 60 or sum(map(len, recent.values())) >= 600:
             raise web.HTTPTooManyRequests()
         bucket.append(current)
-        busy = True
-        try:
-            # Never trust a historical ChatMember row to grant current group access.
-            if chat < 0 and (authorize is None or not await authorize(chat, user['id'], writing=writing)):
-                raise web.HTTPForbidden()
-            if writing:
-                if writer is None:
-                    raise web.HTTPServiceUnavailable()
-                data = await asyncio.to_thread(writer, chat, user, body)
-                if notifier:
-                    try:
-                        await notifier(chat, user['id'], data.get('date'))
-                        data['messageUpdated'] = True
-                    except Exception as exc:
-                        logger.warning('Saved mark; message refresh failed: %s', type(exc).__name__)
-                        data['messageUpdated'] = False
-            else:
-                data = await asyncio.to_thread(reader, chat, user, body.get('month'))
-        except PermissionError:
-            raise web.HTTPForbidden() from None
-        except MarkRejected as exc:
-            raise web.HTTPConflict(reason=str(exc)) from None
-        except ValueError:
-            raise web.HTTPBadRequest() from None
-        finally:
-            busy = False
+        async def operation():
+            # The slot belongs to the operation, not the HTTP connection. A disconnected
+            # request must not release it while its transaction is still running.
+            try:
+                await asyncio.wait_for(slots.acquire(), timeout=queue_timeout)
+            except TimeoutError:
+                raise web.HTTPTooManyRequests() from None
+            try:
+                if chat < 0 and (authorize is None or not await authorize(chat, user['id'], writing=writing or recovering)):
+                    raise web.HTTPForbidden()
+                if writing:
+                    if writer is None:
+                        raise web.HTTPServiceUnavailable()
+                    result = await asyncio.to_thread(writer, chat, user, body)
+                    if notifier:
+                        # Non-blocking signal only. The committed receipt is the durable job.
+                        try:
+                            notifier()
+                        except Exception as exc:
+                            logger.error('Mini App notification signal failed: %s', type(exc).__name__)
+                        result['messageUpdateQueued'] = True
+                elif recovering:
+                    if recoverer is None or set(body) != {'requestId'}:
+                        raise web.HTTPBadRequest()
+                    result = await asyncio.to_thread(recoverer, chat, user, body['requestId'])
+                else:
+                    result = await asyncio.to_thread(reader, chat, user, body.get('month'))
+                return result
+            except PermissionError:
+                raise web.HTTPForbidden() from None
+            except MarkRejected as exc:
+                raise web.HTTPConflict(reason=str(exc)) from None
+            except ValueError:
+                raise web.HTTPBadRequest() from None
+            finally:
+                slots.release()
+
+        task = asyncio.create_task(operation())
+        tasks.add(task)
+        def finished(done):
+            tasks.discard(done)
+            if not done.cancelled():
+                done.exception()  # Consume errors even if the HTTP client disconnected.
+        task.add_done_callback(finished)
+        data = await asyncio.shield(task)
         return web.json_response(data)
 
     async def health(request):
@@ -194,12 +215,17 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
     app = web.Application(middlewares=[responses], client_max_size=1024)
     app.router.add_post('/view', handle)
     app.router.add_post('/events', handle)
+    app.router.add_post('/recover', handle)
     app.router.add_get('/health', health)
+    async def drain(_app):
+        if tasks:
+            await asyncio.gather(*list(tasks), return_exceptions=True)
+    app.on_shutdown.append(drain)
     return app
 
 
 def make_engine(url):
-    return create_engine(url, pool_size=1, max_overflow=0, pool_timeout=5, pool_pre_ping=True,
+    return create_engine(url, pool_size=3, max_overflow=0, pool_timeout=5, pool_pre_ping=True,
                          hide_parameters=True, connect_args={'options': '-c statement_timeout=5000 -c lock_timeout=5000 -c idle_in_transaction_session_timeout=10000'})
 
 
@@ -223,6 +249,13 @@ def main():
             db.commit()
             return result
 
+    def recoverer(chat, user, request_id):
+        with Session(engine) as db:
+            prepare_scope(db, chat, user)
+            result = recover_request(db, chat, user['id'], request_id)
+            db.commit()
+            return result
+
     async def notifier(chat, user, changed_date=None):
         from app.services.mini_app_message import current_message
         def read_message():
@@ -234,16 +267,21 @@ def main():
                     if historical and historical not in payloads:
                         payloads.append(historical)
                 return [p for p in payloads if p]
-        payloads = await asyncio.to_thread(read_message)
+        from app.services.mini_app_notifications import database_work
+        payloads = await database_work(read_message)
         for payload in payloads:
             await gateway.call('editMessageText', payload)
 
-    app = create_app(config, reader, writer, gateway.authorize, notifier)
+    from app.services.mini_app_notifications import NotificationWorker
+    notifications = NotificationWorker(engine, notifier)
+    app = create_app(config, reader, writer, gateway.authorize, notifications.kick, recoverer)
 
     async def startup(_app):
         gateway.http = ClientSession(timeout=ClientTimeout(total=5))
+        notifications.start()
 
     async def cleanup(_app):
+        await notifications.stop()
         await gateway.http.close()
         engine.dispose()
 

@@ -33,7 +33,8 @@ user ID. No API accepts another user ID or an arbitrary chat ID.
 
 JSON requests require exact `MINI_APP_ORIGIN`, with no CORS, no query overrides,
 and a 1 KiB body limit. Credentials and real records stay in browser memory;
-there is no localStorage for live data. Logs exclude tokens, request bodies,
+localStorage contains only opaque pending-request UUIDs, partitioned by account
+and chat selector. It contains no initData, tokens, mark contents or history. Logs exclude tokens, request bodies,
 query strings and database parameters. Responses are `no-store`.
 
 ## Reading and writing
@@ -71,26 +72,45 @@ PoopEvent and SessionUserState atomically, and locks the user across bot/app +/�
 actions and bot Q2/Q3 writes. It refuses ambiguous origin/count/numbering data instead of repairing it.
 No historical data migration runs.
 
-A `mini_app_requests` receipt is committed with each mark. Retrying the same UUID
-and payload returns the same outcome, even after a process restart; reusing the
-UUID with different data fails. A receipt survives deletion of its event so a
-retry cannot resurrect a removed mark. The browser holds an uncertain request
-in memory, blocks navigation and offers the same request again after network
-failure. Closing/reloading the app discards that in-memory pending action; check
-the calendar before entering it again. While saving, controls are disabled.
+A `mini_app_requests` receipt is committed with each action. Retrying the same
+UUID and payload returns the same outcome, even after a process restart; reusing
+it with different data fails. Receipts survive event deletion.
 
-After commit the API attempts to refresh the existing current Q1 and, for a
-historical mutation, the changed day’s Q1 (including its closed-session controls). It never
-creates unsolicited posts. A Telegram edit failure cannot undo the saved mark;
-the UI reports that only the message refresh failed. Stats read the same records.
-Other previously sent historical statistics messages remain snapshots; reopening
-statistics computes the new values.
+Before sending an action, the browser persists only its UUID in an account/chat
+partition. If storage fails, it does not send the action and explains how to use
+the bot instead. No health fields or credentials are stored locally. On reopening,
+reconnection, or an uncertain response, `POST /poopcheck-api/recover` with
+`{"requestId":"UUID"}` resolves the action under the same authentication and fresh
+membership checks. The response is `completed` or `cancelled`. Recovery locks the
+same user as mutation: if no receipt exists, it inserts a cancellation receipt.
+This fences off a delayed write rather than mistaking “not found yet” for failure.
+A committed edit/deletion is confirmed even when its event no longer exists.
+Cross-chat receipts are inaccessible; old receipts without chat scope are not
+exposed. A failed recovery retains the local marker and blocks further writes
+until recovery succeeds. New login data can recover a request from an expired
+login. The app refreshes its calendar after recovery; it never silently resends
+stored health data. Clearing application storage loses recovery markers; server
+receipts remain, but the calendar should be checked before re-entering an action.
 
-The API has one in-flight request and one DB connection, per-user 60/minute and
-global 600/minute limits, bounded membership cache, 5s Telegram/DB/lock timeouts.
-There is no periodic polling. Reads use a consistent REPEATABLE READ projection
-after onboarding; writes use READ COMMITTED with explicit row locks. The DB
-connection must allow writes now. OS filesystem remains read-only/unprivileged.
+Telegram refresh work is committed with the receipt and runs outside the HTTP
+response in one background worker. The worker coalesces up to 32 receipts by
+chat/user/day, refreshes current/affected Q1 messages, and retries failures up to
+five attempts with backoff. Final failure is logged and retained in the receipt's
+attempt count; mark data remains committed. Jobs survive restart. There is one
+startup drain, event-driven wakeups on writes, and timed retries only while work
+is pending: no idle DB polling. Existing historical statistics posts remain
+snapshots; reopening statistics computes current values. No unsolicited messages
+are created.
+
+The API permits two active operations plus eight queued operations, with a
+six-second queue wait limit, per-user 60/minute and global 600/minute limits.
+Excess traffic still receives 429. A disconnected client cannot free an active
+slot while its transaction runs. Shutdown drains admitted operations. The DB pool
+has three connections (two request workers plus the notification worker), no
+unbounded overflow, and 5s statement/lock timeouts. Membership cache is bounded.
+Reads use REPEATABLE READ projections after onboarding; writes use READ COMMITTED
+with row locks. Filesystem remains read-only/unprivileged. No layout, CSS, icons,
+fonts or navigation design changed for this reliability stage.
 
 ## Deployment
 
@@ -98,8 +118,9 @@ connection must allow writes now. OS filesystem remains read-only/unprivileged.
    `.env`. The former owner-only `MINI_APP_CHAT_ID` is no longer used.
 2. Take a local backup. Push GitHub, then `git pull --ff-only origin main` on VPS.
 3. Build bot and mini-app images. Run `alembic upgrade head` with the bot image.
-   The additive migration creates only the receipt table; do not restore/modify
-   historical rows. Backup verification now includes the table and can also
+   The additive `mini_app_recovery_queue` migration adds scope and notification
+   columns plus a partial pending-job index to the receipt table; it does not
+   rewrite events or historical receipts. Run it before starting the new API. Backup verification now includes the table and can also
    verify manifests created before this migration.
 4. `docker compose --profile mini-app up -d --no-deps bot mini-app`.
    Database and other applications need no restart or Nginx changes.
@@ -115,7 +136,7 @@ connection must allow writes now. OS filesystem remains read-only/unprivileged.
 Rollback: revert application commit/menu settings and rebuild bot/API. Keep the
 additive receipt table and already saved real marks; do not drop user data.
 
-Checks: `.venv/bin/python -m pytest -q`; `node --test tests/demo_model.test.cjs`.
-The optional `tests/test_mini_app_postgres.py` tests concurrent retries and bot/app
+Checks: `.venv/bin/python -m pytest -q`; `node --test tests/demo_model.test.cjs tests/live_recovery.test.cjs`.
+The optional `tests/test_mini_app_postgres.py` tests concurrent retries, recovery/write races and bot/app
 writes in a uniquely named disposable schema of `MINI_APP_TEST_DATABASE_URL`.
 It removes only that schema afterward. No GitHub CI is configured.

@@ -221,7 +221,12 @@
   }
   async function mutate(body) {
     if (saving) return;
-    pendingMark ||= {requestId: crypto.randomUUID(), ...body};
+    if (!pendingMark) {
+      const candidate = {requestId: crypto.randomUUID(), ...body};
+      try { live.remember(candidate.requestId); }
+      catch (error) { notice(error.message); return; }
+      pendingMark = candidate;
+    }
     saving = true;
     app.querySelectorAll("button").forEach(b => { b.disabled = true; });
     tg?.enableClosingConfirmation?.();
@@ -229,7 +234,8 @@
     const timeout = setTimeout(() => controller.abort(), 15000);
     const deleting = pendingMark.action === "delete";
     try {
-      const result = await live.create(pendingMark, controller.signal);
+      await live.create(pendingMark, controller.signal);
+      live.forget(pendingMark.requestId);
       selected = pendingMark.date;
       month = selected.slice(0, 7);
       pendingMark = null;
@@ -237,23 +243,22 @@
       revealed = null;
       screen = "calendar";
       announce(deleting ? "Отметка удалена" : "Отметка сохранена");
-      tg?.HapticFeedback?.notificationOccurred("success");
+      try { tg?.HapticFeedback?.notificationOccurred("success"); } catch {}
       await refresh();
-      if (result.messageUpdated === false)
-        notice("Изменение сохранено. Сообщение в чате пока не обновилось; статистика уже учитывает правку.");
     } catch (error) {
-      if (error.definitive) {
+      try {
+        const outcome = await live.recoverOne(pendingMark.requestId);
         pendingMark = null;
         draft = null;
         revealed = null;
         screen = "calendar";
         await refresh();
+        notice(outcome === "completed" ? "Изменение сохранено. Результат подтверждён сервером."
+          : error.definitive ? error.message : "Действие не успело выполниться. Повтори его — предыдущий запрос отменён.");
+      } catch (recoveryError) {
+        notice(recoveryError.status === 401 || recoveryError.status === 403 ? recoveryError.message
+          : "Связь прервалась. Можно повторить действие или открыть приложение позже — результат будет проверен перед новой отметкой.");
       }
-      notice(pendingMark
-        ? deleting
-          ? "Не удалось подтвердить удаление. Нажми корзину ещё раз — повтор безопасен. Не закрывай приложение до подтверждения."
-          : "Не удалось подтвердить сохранение. Нажми выбранное ощущение ещё раз — повтор безопасен. Не закрывай приложение до подтверждения."
-        : error.message);
     } finally {
       clearTimeout(timeout);
       saving = false;
@@ -271,16 +276,13 @@
   app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
     if (!b || b.disabled || saving) return;
+    if (b.dataset.action === "retry" && live) { await startLive(); return; }
     if (pendingMark) {
       const retry = pendingMark.action === "delete"
         ? b.dataset.delete === pendingMark.eventId
         : screen === "feeling" && b.dataset.choice !== undefined;
       if (retry) await mutate(pendingMark);
       else notice("Сначала повтори неподтверждённое действие.");
-      return;
-    }
-    if (b.dataset.action === "retry") {
-      await refresh();
       return;
     }
     if (live && (!snapshot || loading || loadError)) return;
@@ -445,7 +447,38 @@
       }
     }
   }
+  async function startLive() {
+    if (saving) return;
+    saving = true;
+    loading = true;
+    loadError = "";
+    render();
+    try {
+      const outcomes = await live.recoverPending(pendingMark?.requestId);
+      pendingMark = null;
+      draft = null;
+      revealed = null;
+      if (outcomes.length) screen = "calendar";
+      await refresh();
+      if (outcomes.length) notice(outcomes.includes("cancelled")
+        ? "Результаты проверены. Невыполненные действия отменены — при необходимости повтори их. Календарь показывает сохранённые отметки."
+        : "Предыдущее действие сохранено. Календарь обновлён.");
+      tg?.disableClosingConfirmation?.();
+    } catch (error) {
+      loading = false;
+      loadError = error.status === 401 || error.status === 403 ? error.message
+        : "Не удалось проверить предыдущее действие. Проверь связь и нажми, чтобы повторить.";
+    } finally {
+      saving = false;
+      render();
+    }
+  }
   function resume() {
+    if (document.visibilityState !== "visible") return;
+    if (live && !saving && !loading && (pendingMark || loadError || live.pendingIds().length)) {
+      startLive();
+      return;
+    }
     if (
       live &&
       !loading && !saving && !draft && !pendingMark &&
@@ -459,6 +492,7 @@
   if (live) {
     document.addEventListener("visibilitychange", resume);
     tg?.onEvent?.("activated", resume);
-    refresh();
+    window.addEventListener("online", resume);
+    startLive();
   } else render();
 })();

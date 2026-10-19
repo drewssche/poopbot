@@ -75,7 +75,9 @@ services:
 
   mini-app:
     profiles: ["mini-app"]
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.mini-app
     restart: unless-stopped
     env_file: .env
     command: ["python", "-m", "app.mini_app"]

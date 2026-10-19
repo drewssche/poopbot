@@ -56,6 +56,8 @@ there is no periodic polling and no Telegram API call per view.
    `getChatMenuButton` response in the private operations backup directory;
    change only that owner's menu URL to `/poopcheck/`. Leave default menu alone.
 
+The API has a separate minimal image (`Dockerfile.mini-app`) and dependencies,
+so its HTTP server can stay current without upgrading the bot's aiogram stack.
 The API binds only host loopback `127.0.0.1:8087`, runs unprivileged with a
 read-only filesystem and no Linux capabilities, with 192 MiB / 0.5 CPU limits.
 Its HTTP liveness probe runs every 120s and does not query the database; real

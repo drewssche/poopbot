@@ -141,7 +141,7 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
         except (ValueError, UnicodeError):
             raise web.HTTPBadRequest() from None
         writing = request.path.endswith('/events')
-        allowed = {'scope', 'requestId', 'date', 'kind', 'feeling'} if writing else {'scope', 'month'}
+        allowed = {'scope', 'requestId', 'date', 'kind', 'feeling', 'action', 'eventId', 'version'} if writing else {'scope', 'month'}
         if not isinstance(body, dict) or set(body) - allowed:
             raise web.HTTPBadRequest()
         scope = body.pop('scope', None)
@@ -171,7 +171,7 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
                 data = await asyncio.to_thread(writer, chat, user, body)
                 if notifier:
                     try:
-                        await notifier(chat, user['id'])
+                        await notifier(chat, user['id'], data.get('date'))
                         data['messageUpdated'] = True
                     except Exception as exc:
                         logger.warning('Saved mark; message refresh failed: %s', type(exc).__name__)
@@ -223,13 +223,19 @@ def main():
             db.commit()
             return result
 
-    async def notifier(chat, user):
+    async def notifier(chat, user, changed_date=None):
         from app.services.mini_app_message import current_message
         def read_message():
             with Session(engine) as db:
-                return current_message(db, chat, user)
-        payload = await asyncio.to_thread(read_message)
-        if payload:
+                payloads = [current_message(db, chat, user)]
+                if changed_date:
+                    from datetime import date
+                    historical = current_message(db, chat, user, date.fromisoformat(changed_date))
+                    if historical and historical not in payloads:
+                        payloads.append(historical)
+                return [p for p in payloads if p]
+        payloads = await asyncio.to_thread(read_message)
+        for payload in payloads:
             await gateway.call('editMessageText', payload)
 
     app = create_app(config, reader, writer, gateway.authorize, notifier)

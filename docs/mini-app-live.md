@@ -45,13 +45,30 @@ historical timestamps/fields stay unknown. Counts stop at today in chat timezone
 `POST /poopcheck-api/events`:
 `{"requestId":"UUID","date":"YYYY-MM-DD","kind":0,"feeling":0}`.
 The existing UI chooses consistency, then feeling, and saves on that last choice.
-The existing `+` starts a new mark for today. Editing/deleting old rows through
-the app is still unavailable; their controls explain this without changing design.
+The existing `+` starts a new mark for today. The pencil edits consistency and
+feeling through the same two screens, preserving date/time/source. Swipe a row
+left (or use ArrowLeft on its focused pencil) to reveal the existing trash button;
+deletion requires a native Telegram/browser confirmation.
 
-The server allows only today's active session, outside the 23:55–00:05 technical
+The same endpoint accepts `{action:"edit", requestId, eventId, version, date,
+kind, feeling}` or `{action:"delete", requestId, eventId, version, date}`.
+Each read event includes an opaque revision. Only the signed user's records in
+the authorized chat are writable, including past/closed sessions. Future dates
+and the technical window are rejected. A stale revision fails with 409 and the
+UI reloads the calendar, preventing silent overwrites. UUID receipts cover edits
+and deletions as well as creation. Deletion closes numbering gaps, synchronizes
+SessionUserState to the remaining last event and rebuilds the historical streak
+cache; counts and statistics are projected from remaining events. Ambiguous old
+sessions are rejected without repairs. No migration or bulk correction is run.
+
+Calendar yellow badges already show the actual number of the user's marks in
+this chat for days with more than one mark. They are part of the expanded month
+calendar, not the compact week selector. One mark has no badge.
+
+For creation, the server allows only today's active session, outside the 23:55–00:05 technical
 window, up to the bot's existing limit of 10. It uses shared Q1 logic, updates
 PoopEvent and SessionUserState atomically, and locks the user across bot/app +/−
-actions. It refuses ambiguous origin/count/numbering data instead of repairing it.
+actions and bot Q2/Q3 writes. It refuses ambiguous origin/count/numbering data instead of repairing it.
 No historical data migration runs.
 
 A `mini_app_requests` receipt is committed with each mark. Retrying the same UUID
@@ -62,9 +79,12 @@ in memory, blocks navigation and offers the same request again after network
 failure. Closing/reloading the app discards that in-memory pending action; check
 the calendar before entering it again. While saving, controls are disabled.
 
-After commit the API attempts to refresh an existing active Q1 message. It never
+After commit the API attempts to refresh the existing current Q1 and, for a
+historical mutation, the changed day’s Q1 (including its closed-session controls). It never
 creates unsolicited posts. A Telegram edit failure cannot undo the saved mark;
 the UI reports that only the message refresh failed. Stats read the same records.
+Other previously sent historical statistics messages remain snapshots; reopening
+statistics computes the new values.
 
 The API has one in-flight request and one DB connection, per-user 60/minute and
 global 600/minute limits, bounded membership cache, 5s Telegram/DB/lock timeouts.

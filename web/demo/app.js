@@ -185,38 +185,10 @@
   }
   async function commit(feeling) {
     if (live) {
-      if (saving) return;
-      pendingMark ||= {
-        requestId: crypto.randomUUID(), date: selected, kind: draft.kind, feeling,
-      };
-      saving = true;
-      app.querySelectorAll("button").forEach(b => { b.disabled = true; });
-      tg?.enableClosingConfirmation?.();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      try {
-        const result = await live.create(pendingMark, controller.signal);
-        pendingMark = null;
-        draft = null;
-        selected = today;
-        month = today.slice(0, 7);
-        screen = "calendar";
-        announce("Отметка сохранена");
-        tg?.HapticFeedback?.notificationOccurred("success");
-        await refresh();
-        if (result.messageUpdated === false)
-          notice("Отметка сохранена. Сообщение в чате пока не обновилось; статистика уже учитывает её.");
-      } catch (error) {
-        if (error.definitive) pendingMark = null;
-        notice(pendingMark
-          ? "Не удалось подтвердить сохранение. Нажми выбранное ощущение ещё раз — повтор не создаст дубль. Не закрывай приложение до подтверждения."
-          : error.message);
-      } finally {
-        clearTimeout(timeout);
-        saving = false;
-        if (!pendingMark) tg?.disableClosingConfirmation?.();
-        render();
-      }
+      await mutate(draft?.id ? {
+        action: "edit", eventId: draft.id, version: draft.version,
+        date: draft.date, kind: draft.kind, feeling,
+      } : {date: selected, kind: draft.kind, feeling});
       return;
     }
     const editing = draft?.id,
@@ -247,11 +219,64 @@
       tg?.HapticFeedback.notificationOccurred("success");
     } catch {}
   }
+  async function mutate(body) {
+    if (saving) return;
+    pendingMark ||= {requestId: crypto.randomUUID(), ...body};
+    saving = true;
+    app.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    tg?.enableClosingConfirmation?.();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const deleting = pendingMark.action === "delete";
+    try {
+      const result = await live.create(pendingMark, controller.signal);
+      selected = pendingMark.date;
+      month = selected.slice(0, 7);
+      pendingMark = null;
+      draft = null;
+      revealed = null;
+      screen = "calendar";
+      announce(deleting ? "Отметка удалена" : "Отметка сохранена");
+      tg?.HapticFeedback?.notificationOccurred("success");
+      await refresh();
+      if (result.messageUpdated === false)
+        notice("Изменение сохранено. Сообщение в чате пока не обновилось; статистика уже учитывает правку.");
+    } catch (error) {
+      if (error.definitive) {
+        pendingMark = null;
+        draft = null;
+        revealed = null;
+        screen = "calendar";
+        await refresh();
+      }
+      notice(pendingMark
+        ? deleting
+          ? "Не удалось подтвердить удаление. Нажми корзину ещё раз — повтор безопасен. Не закрывай приложение до подтверждения."
+          : "Не удалось подтвердить сохранение. Нажми выбранное ощущение ещё раз — повтор безопасен. Не закрывай приложение до подтверждения."
+        : error.message);
+    } finally {
+      clearTimeout(timeout);
+      saving = false;
+      if (!pendingMark) tg?.disableClosingConfirmation?.();
+      render();
+    }
+  }
+  function confirmDelete() {
+    return new Promise(resolve => {
+      if (tg?.isVersionAtLeast?.("6.2"))
+        tg.showConfirm("Удалить эту отметку? Статистика и серия будут пересчитаны.", resolve);
+      else resolve(window.confirm("Удалить эту отметку? Статистика и серия будут пересчитаны."));
+    });
+  }
   app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
     if (!b || b.disabled || saving) return;
-    if (pendingMark && b.dataset.choice === undefined) {
-      notice("Сначала подтверди сохранение: нажми выбранное ощущение ещё раз.");
+    if (pendingMark) {
+      const retry = pendingMark.action === "delete"
+        ? b.dataset.delete === pendingMark.eventId
+        : screen === "feeling" && b.dataset.choice !== undefined;
+      if (retry) await mutate(pendingMark);
+      else notice("Сначала повтори неподтверждённое действие.");
       return;
     }
     if (b.dataset.action === "retry") {
@@ -259,16 +284,9 @@
       return;
     }
     if (live && (!snapshot || loading || loadError)) return;
-    if (
-      live &&
-      (b.dataset.edit || b.dataset.delete)
-    ) {
-      readOnlyNotice();
-      return;
-    }
     if (b.dataset.choice !== undefined) {
       const value = Number(b.dataset.choice);
-      if (live && selected !== today) {
+      if (live && !draft?.id && selected !== today) {
         notice("Добавить отметку можно только за сегодня. Для прошлых дней используй восстановление в боте.");
         return;
       }
@@ -300,6 +318,12 @@
     }
     if (b.dataset.delete) {
       if (revealed !== b.dataset.delete) return;
+      if (live) {
+        const event = events.find(e => e.id === b.dataset.delete);
+        if (event && await confirmDelete())
+          await mutate({action: "delete", eventId: event.id, version: event.version, date: event.date});
+        return;
+      }
       events = events.filter((e) => e.id !== b.dataset.delete);
       persist();
       revealed = null;
@@ -345,14 +369,14 @@
   });
   let pointer = null;
   app.addEventListener("pointerdown", (e) => {
-    if (live) return;
+    if (saving || pendingMark) return;
     const row = e.target.closest("[data-event]");
     pointer = row
       ? { id: row.dataset.event, x: e.clientX, y: e.clientY }
       : null;
   });
   app.addEventListener("pointerup", (e) => {
-    if (!pointer) return;
+    if (!pointer || saving || pendingMark) return;
     const dx = e.clientX - pointer.x,
       dy = e.clientY - pointer.y;
     if (Math.abs(dx) > 45 && Math.abs(dy) < 35) {
@@ -365,7 +389,7 @@
     pointer = null;
   });
   app.addEventListener("keydown", (e) => {
-    if (live) return;
+    if (saving || pendingMark) return;
     const row = e.target.closest("[data-event]");
     if (row && e.key === "ArrowLeft") {
       revealed = row.dataset.event;
@@ -380,9 +404,6 @@
   try {
     tg?.BackButton.onClick(back);
   } catch {}
-  function readOnlyNotice() {
-    notice("Редактирование и удаление пока доступны через бота.");
-  }
   function notice(text) {
     if (tg?.isVersionAtLeast?.("6.2")) tg.showAlert(text);
     else window.alert(text);

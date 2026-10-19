@@ -1,4 +1,4 @@
-"""Chat-local Mini App projection and transactional mark creation."""
+"""Chat-local Mini App projection and transactional mark mutations."""
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import re
@@ -46,7 +46,7 @@ def read_view(db: Session, chat_id: int, user_id: int, month: str | None, *, now
     for day, event in rows:
         occurred = event_occurrence_time(event)
         events.append({
-            "id": str(event.id), "date": day.isoformat(),
+            "id": str(event.id), "version": event_version(event), "date": day.isoformat(),
             "time": occurred.astimezone(timezone).strftime("%H:%M") if occurred else None,
             "kind": (0 if event.bristol <= 2 else 1 if event.bristol <= 4 else 2 if event.bristol <= 6 else 3)
                     if event.bristol is not None else None,
@@ -94,6 +94,8 @@ def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: dat
     from app.services.repo_service import get_or_create_session
     from app.services.q1_service import apply_plus
 
+    if 'action' in body:
+        return change_mark(db, chat_id, user_id, body, now=now)
     if set(body) != {'requestId', 'date', 'kind', 'feeling'}:
         raise ValueError('Invalid mark')
     try:
@@ -146,3 +148,106 @@ def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: dat
     db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event.id))
     db.flush()
     return {'eventId': str(event.id), 'repeated': False}
+
+
+def event_version(event: PoopEvent) -> str:
+    """Opaque revision includes raw values, even values grouped together in the UI."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps([
+        event.id, event.session_id, event.user_id, event.origin_chat_id,
+        event.event_n, event.bristol, event.feeling, str(event.updated_at),
+        str(event.occurred_at), event.source,
+    ]).encode()).hexdigest()
+
+
+def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None) -> dict:
+    import hashlib
+    import hmac
+    import json
+    from uuid import UUID
+    from sqlalchemy import update
+    from app.db.models import MiniAppRequest, SessionUserState, User
+    from app.services.q1_service import _refresh_user_streak_cache_before_current_day
+
+    action = body.get('action')
+    fields = {'action', 'requestId', 'eventId', 'version', 'date'}
+    if action == 'edit':
+        fields |= {'kind', 'feeling'}
+    elif action != 'delete':
+        raise ValueError('Invalid action')
+    if set(body) != fields:
+        raise ValueError('Invalid mark')
+    try:
+        request_id = str(UUID(body['requestId']))
+        day = date.fromisoformat(body['date'])
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('Invalid request') from None
+    if (not isinstance(body['eventId'], str) or not re.fullmatch(r'[1-9][0-9]{0,9}', body['eventId'])
+            or not isinstance(body['version'], str) or not re.fullmatch(r'[0-9a-f]{64}', body['version'])
+            or body['date'] != day.isoformat()):
+        raise ValueError('Invalid event')
+    if action == 'edit' and (type(body['kind']) is not int or body['kind'] not in range(4)
+                            or type(body['feeling']) is not int or body['feeling'] not in range(3)):
+        raise ValueError('Invalid choices')
+    payload = hashlib.sha256(json.dumps([chat_id, body], sort_keys=True).encode()).hexdigest()
+    db.scalar(select(User).where(User.user_id == user_id).with_for_update())
+    chat = db.get(Chat, chat_id)
+    if chat is None or db.get(ChatMember, (chat_id, user_id)) is None:
+        raise PermissionError('Unavailable scope')
+    receipt = db.get(MiniAppRequest, (user_id, request_id))
+    if receipt:
+        if receipt.payload_hash != payload:
+            raise MarkRejected('Этот запрос уже использован для другого действия.')
+        return {'eventId': str(receipt.event_id) if receipt.event_id else None,
+                'repeated': True, 'date': body['date']}
+    local_now = (now or datetime.now(UTC)).astimezone(ZoneInfo(chat.timezone))
+    if day > local_now.date():
+        raise MarkRejected('Нельзя менять отметки за будущие дни.')
+    if local_now.hour * 60 + local_now.minute < 5 or local_now.hour * 60 + local_now.minute >= 1435:
+        raise MarkRejected('Попробуй после начала новой сессии в 00:05.')
+    sess = db.scalar(select(DaySession).where(DaySession.chat_id == chat_id,
+                                              DaySession.session_date == day).with_for_update())
+    # Query ownership before revealing whether this ID exists elsewhere.
+    event = db.scalar(select(PoopEvent).where(
+        PoopEvent.id == int(body['eventId']), PoopEvent.user_id == user_id,
+        PoopEvent.origin_chat_id == chat_id,
+        PoopEvent.session_id == (sess.session_id if sess else -1)).with_for_update())
+    if event is None:
+        raise MarkRejected('Отметка недоступна или уже удалена. Открой календарь заново.')
+    if not hmac.compare_digest(event_version(event), body['version']):
+        raise MarkRejected('Отметка уже изменилась. Открой календарь заново перед правкой.')
+    rows = db.scalars(select(PoopEvent).where(PoopEvent.session_id == sess.session_id,
+                                             PoopEvent.user_id == user_id).order_by(PoopEvent.event_n)).all()
+    state = db.get(SessionUserState, (sess.session_id, user_id))
+    if (any(e.origin_chat_id != chat_id for e in rows)
+            or [e.event_n for e in rows] != list(range(1, len(rows) + 1))
+            or state is None or state.poops_n != len(rows)):
+        raise MarkRejected('Данные этой сессии требуют проверки. Обратись к владельцу бота.')
+    if action == 'edit':
+        event.bristol = (2, 4, 6, 7)[body['kind']]
+        event.feeling = ('great', 'ok', 'bad')[body['feeling']]
+    else:
+        rows.remove(event)
+        # Explicit nulling also preserves receipts in test DBs without FK enforcement.
+        db.execute(update(MiniAppRequest).where(MiniAppRequest.event_id == event.id).values(event_id=None))
+        db.delete(event)
+        db.flush()
+        # Ascending single-row flushes avoid immediate UNIQUE conflicts when closing a gap.
+        for n, row in enumerate(rows, 1):
+            if row.event_n != n:
+                row.event_n = n
+                db.flush()
+        state.poops_n = len(rows)
+        if not rows:
+            state.achievement_text = None
+    state.bristol = rows[-1].bristol if rows else None
+    state.feeling = rows[-1].feeling if rows else None
+    db.flush()
+    if action == 'delete':
+        _refresh_user_streak_cache_before_current_day(
+            db, chat_id=chat_id, user_id=user_id, current_session_date=local_now.date())
+    event_id = event.id if action == 'edit' else None
+    db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event_id))
+    db.flush()
+    return {'eventId': str(event_id) if event_id else None, 'repeated': False, 'date': body['date']}

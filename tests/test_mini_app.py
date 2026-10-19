@@ -290,3 +290,149 @@ def test_invalid_marks_never_write(db,field,value):
     from app.services.mini_app_service import record_mark
     with pytest.raises(ValueError): record_mark(db,-100,10,new_mark(**{field:value}),now=datetime(2026,10,2,12,tzinfo=UTC))
     assert not db.new and not db.dirty and not db.deleted
+
+
+def mutation(event, action='edit', **kw):
+    from uuid import uuid4
+    from app.services.mini_app_service import event_version
+    return {'action':action, 'eventId':str(event.id), 'version':event_version(event),
+            'date':'2026-10-02', 'requestId':str(uuid4()),
+            **({'kind':2,'feeling':2} if action == 'edit' else {}), **kw}
+
+
+def test_edit_delete_middle_last_and_retries_preserve_bot_consistency(db):
+    from app.services.mini_app_service import record_mark, MarkRejected
+    from app.db.models import SessionUserState
+    from app.services.q1_service import apply_plus
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    original = new_mark()
+    ids = []
+    for body in [original, new_mark(), new_mark()]:
+        ids.append(int(record_mark(db,-100,10,body,now=now)['eventId'])); db.commit()
+    first, middle, last = [db.get(PoopEvent,i) for i in ids]
+    sid, occurred, source = first.session_id, first.occurred_at, first.source
+    edit = mutation(first)
+    assert not record_mark(db,-100,10,edit,now=now)['repeated']; db.commit()
+    assert first.bristol == 6 and first.feeling == 'bad'
+    assert (first.occurred_at,first.source) == (occurred,source)
+    assert record_mark(db,-100,10,edit,now=now)['repeated']; db.commit()
+    with pytest.raises(MarkRejected): record_mark(db,-100,10,{**edit,'kind':0},now=now)
+    db.rollback()
+    stale = mutation(first,version=edit['version'])
+    with pytest.raises(MarkRejected): record_mark(db,-100,10,stale,now=now)
+    db.rollback()
+    # Delete the middle row, retaining identities/times of all remaining records.
+    deletion = mutation(middle,'delete')
+    record_mark(db,-100,10,deletion,now=now); db.commit()
+    assert record_mark(db,-100,10,deletion,now=now)['repeated']; db.commit()
+    assert db.get(PoopEvent,ids[1]) is None
+    assert db.get(PoopEvent,ids[2]).event_n == 2
+    assert db.get(SessionUserState,(sid,10)).poops_n == 2
+    assert read_view(db,-100,10,None,now=now)['counts']['2026-10-02'] == 2
+    record_mark(db,-100,10,mutation(db.get(PoopEvent,ids[2]),'delete'),now=now); db.commit()
+    state = db.get(SessionUserState,(sid,10))
+    assert state.bristol == 6 and state.feeling == 'bad'
+    record_mark(db,-100,10,mutation(db.get(PoopEvent,ids[0]),'delete'),now=now); db.commit()
+    assert state.poops_n == 0 and state.bristol is None and state.achievement_text is None
+    assert '2026-10-02' not in read_view(db,-100,10,None,now=now)['counts']
+    # A creation retry cannot resurrect a deleted row. Bot creation still works.
+    assert record_mark(db,-100,10,original,now=now)['repeated']; db.commit()
+    assert apply_plus(db,sid,10,-100)[0]; db.commit()
+    assert db.get(SessionUserState,(sid,10)).poops_n == 1
+
+
+def test_mutations_isolate_other_users_chats_and_ambiguous_history(db):
+    from app.services.mini_app_service import record_mark, MarkRejected
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    for e in db.query(PoopEvent).all():
+        # All fixture rows are either ambiguous, missing state, foreign, or future.
+        body = mutation(e,'delete',date=str(db.get(DaySession,e.session_id).session_date))
+        with pytest.raises(MarkRejected): record_mark(db,-100,10,body,now=now)
+        db.rollback()
+    assert db.query(PoopEvent).count() == 7
+
+
+def test_closed_historical_edits_and_delete_refresh_streak_without_invented_time(db):
+    from app.services.mini_app_service import record_mark
+    from app.db.models import UserStreak, SessionUserState
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    event_id = int(record_mark(db,-100,10,new_mark(),now=now)['eventId']); db.commit()
+    event = db.get(PoopEvent,event_id)
+    sess = db.get(DaySession,event.session_id)
+    sess.status = 'closed'
+    event.source, event.occurred_at = 'restore', None
+    db.commit()
+    later = datetime(2026,10,3,12,tzinfo=UTC)
+    record_mark(db,-100,10,mutation(event),now=later); db.commit()
+    assert event.occurred_at is None and event.source == 'restore'
+    record_mark(db,-100,10,mutation(event,'delete'),now=later); db.commit()
+    assert db.get(SessionUserState,(sess.session_id,10)).poops_n == 0
+    streak = db.get(UserStreak,(-100,10))
+    assert streak.current_streak == 0 and streak.last_poop_date == date(2026,10,1)
+    assert read_view(db,-100,10,None,now=later)['stats']['total'] == 4
+
+
+@pytest.mark.parametrize('field,value', [('action','unknown'),('eventId','0'),('eventId',True),
+    ('version','bad'),('date',[]),('kind',True),('feeling',4),('requestId','bad'),('extra',1)])
+def test_invalid_mutations_never_write(db,field,value):
+    from app.services.mini_app_service import record_mark
+    event = db.query(PoopEvent).first()
+    with pytest.raises(ValueError):
+        record_mark(db,-100,10,mutation(event,**{field:value}),now=datetime(2026,10,2,12,tzinfo=UTC))
+    assert not db.new and not db.dirty and not db.deleted
+
+
+@pytest.mark.asyncio
+async def test_http_edit_delete_recheck_membership_and_notify_changed_day():
+    from app.services.mini_app_links import group_scope
+    calls = []
+    async def authorize(chat,user,*,writing):
+        calls.append(writing); return True
+    def writer(chat,user,body):
+        assert (chat,user['id']) == (-100,10)
+        return {'date':body['date']}
+    async def notifier(chat,user,day): calls.append(day)
+    headers = {'Origin':CONFIG.origin,'Authorization':'tma '+signed(start_param=group_scope(CONFIG.token,-100))}
+    async with TestClient(TestServer(create_app(CONFIG,lambda *a: {},writer,authorize,notifier))) as client:
+        for action in ['edit','delete']:
+            response = await client.post('/events',headers=headers,json={
+                'action':action,'eventId':'1','version':'a'*64,'date':'2026-10-02'})
+            assert response.status == 200
+    assert calls == [True,'2026-10-02',True,'2026-10-02']
+
+
+def test_mutation_cannot_edit_valid_event_of_another_user_or_chat(db):
+    from app.services.mini_app_service import record_mark, prepare_scope, MarkRejected
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    event_id = int(record_mark(db,-100,10,new_mark(),now=now)['eventId']); db.commit()
+    db.add(ChatMember(chat_id=-100,user_id=20))
+    prepare_scope(db,10,{'id':10}); db.commit()
+    body = mutation(db.get(PoopEvent,event_id))
+    for chat,user in [(-100,20),(10,10)]:
+        with pytest.raises(MarkRejected): record_mark(db,chat,user,body,now=now)
+        db.rollback()
+    assert db.get(PoopEvent,event_id).bristol == 4
+    for when in [datetime(2026,10,1,21,2,tzinfo=UTC), datetime(2026,10,2,20,56,tzinfo=UTC)]:
+        with pytest.raises(MarkRejected): record_mark(db,-100,10,body,now=when)
+        db.rollback()
+
+
+def test_refresh_closed_q1_keeps_closed_controls_and_corrected_count(db,monkeypatch):
+    from app.services import mini_app_message
+    from app.services.time_service import SessionWindow
+    from app.services.mini_app_service import record_mark
+    from app.db.models import SessionMessage
+    now = datetime(2026,10,2,12,tzinfo=UTC)
+    event_id = int(record_mark(db,-100,10,new_mark(),now=now)['eventId']); db.commit()
+    event = db.get(PoopEvent,event_id)
+    sess = db.get(DaySession,event.session_id)
+    sess.status = 'closed'
+    db.add(SessionMessage(session_id=sess.session_id,kind='Q1',message_id=123)); db.commit()
+    monkeypatch.setattr(mini_app_message,'get_session_window',lambda _:SessionWindow(date(2026,10,3),False,True))
+    record_mark(db,-100,10,mutation(event,'delete'),now=datetime(2026,10,3,12,tzinfo=UTC)); db.commit()
+    payload = mini_app_message.current_message(db,-100,10,date(2026,10,2))
+    assert payload['message_id'] == 123 and '🔒 Сессия закрыта.' in payload['text']
+    assert payload['reply_markup']['inline_keyboard'][0][0]['callback_data'] == 'q1:forgot'
+    assert '02.10.26' in payload['text'] and '— —' in payload['text']
+    monkeypatch.setattr(mini_app_message,'get_session_window',lambda _:SessionWindow(date(2026,10,4),False,True))
+    assert mini_app_message.current_message(db,-100,10,date(2026,10,2))['reply_markup'] == {'inline_keyboard':[]}

@@ -14,7 +14,7 @@ from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q2 import q2_keyboard
 from app.bot.keyboards.q3 import q3_keyboard
 from app.db.runtime import get_session_factory
-from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState
+from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState, User
 from app.db.session import db_session
 from app.services.poop_event_service import ensure_events_count, list_events, normalize_session_user_state_to_origin_chat
 from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
@@ -161,6 +161,7 @@ async def q2_callbacks(cb: CallbackQuery) -> None:
             await cb.answer("\u041d\u0435\u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e", show_alert=False)
             return
 
+        db.scalar(select(User).where(User.user_id == user.id).with_for_update())
         normalize_session_user_state_to_origin_chat(
             db,
             session_id=sess.session_id,

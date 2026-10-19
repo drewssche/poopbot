@@ -118,6 +118,31 @@ retains its date across midnight; an idle today view follows the server day and
 month. Existing loading/error UI is reused; CSS, fonts, icons and layout are
 unchanged. Historic statistics messages remain snapshots.
 
+
+Stage 4 keeps the menu and statistics placeholder unchanged. Telegram Back is
+visible on the first editing step: feeling → consistency → calendar cancels the
+edit without a write. Back from statistics restores the prior screen and draft;
+cancelling a new draft returns to a clean first step. Back is hidden during
+loading, confirmation, saving, recovery uncertainty and access errors.
+
+401/403 responses replace the content with a reopen instruction in the existing
+error area; they do not offer a retry with the same expired/denied credentials.
+No automatic reads or writes resume in that webview. A pending request UUID is
+retained for recovery after a fresh Telegram opening. Missing/malformed Telegram
+identity is handled the same way. Network/response errors use readable messages;
+invalid calendar responses cannot masquerade as an empty history, and invalid
+save responses go through recovery instead of being treated as success.
+
+Explicit date selection, opening/cancelling an edit and showing a saved mark keep
+the selected day/month across midnight. A failed read retry retains that choice;
+an idle today view still follows the server day. Calendar navigation stops at the
+API's January 2000 lower bound and the current month. Native delete confirmation
+blocks duplicate actions/navigation until answered. Empty history and zero
+statistics use the existing layout; recovery does not claim that the calendar
+updated when the subsequent read failed. CSS, fonts, icons, menu behavior and the
+statistics placeholder are unchanged. These changes are static frontend assets;
+no database migration or container rebuild is needed for this stage.
+
 The API permits two active operations plus eight queued operations, with a
 six-second queue wait limit, per-user 60/minute and global 600/minute limits.
 Excess traffic still receives 429. A disconnected client cannot free an active

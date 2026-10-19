@@ -58,3 +58,42 @@ test('storage refusal prevents starting a reliable mutation',()=>{
   assert.throws(()=>app(storage,null).remember(ID),/не отправлена/);
   assert.equal(storage.length,0);
 });
+
+test('missing or malformed Telegram identity is an access error before any request',async()=>{
+  for(const initData of ['',new URLSearchParams({user:'bad-json'}).toString(),new URLSearchParams({user:'null'}).toString()]) {
+    const window={localStorage:store(),Telegram:{WebApp:{initData}}};
+    vm.runInNewContext(code,{window,URLSearchParams,AbortController,setTimeout,clearTimeout,
+      fetch:()=>{throw new Error('must not fetch')}});
+    await assert.rejects(window.PoopLive.recoverPending(),error=>error.status===401 && /из Telegram/.test(error.message));
+  }
+});
+
+test('network and invalid JSON responses have readable errors; abort keeps its identity',async()=>{
+  const storage=store();
+  await assert.rejects(app(storage,async()=>{throw new TypeError('Failed to fetch')}).read(),/Нет связи с сервером/);
+  await assert.rejects(app(storage,async()=>({ok:true,json:async()=>{throw new SyntaxError('HTML')}})).read(),/ответ сервера/);
+  const aborted=Object.assign(new Error('aborted'),{name:'AbortError'});
+  await assert.rejects(app(storage,async()=>{throw aborted}).read(),error=>error.name==='AbortError');
+});
+
+test('empty history is valid; malformed calendar cannot become a false empty result',async()=>{
+  const empty={today:'2026-10-20',month:'2026-10',scope:'personal',events:[],counts:{},stats:{total:0,best:0,current:0}};
+  assert.deepEqual(await app(store(),async()=>response(empty)).read(),empty);
+  const unknown={...empty,events:[{id:'1',version:'v1',date:'2026-10-20',time:null,kind:null,feeling:null}],counts:{'2026-10-20':1}};
+  assert.deepEqual(await app(store(),async()=>response(unknown)).read(),unknown);
+  for(const malformed of [null,{}, {...empty,stats:{}},{...empty,counts:[]},{...empty,events:[null]},
+      {...empty,events:[{id:'1'}]},{...empty,month:'bad'},{...empty,counts:{'2026-10-20':-1}}]) {
+    await assert.rejects(app(store(),async()=>response(malformed)).read(),/данные календаря/);
+  }
+});
+
+test('malformed save and recovery responses cannot confirm a pending action',async()=>{
+  const storage=store();app(storage,null).remember(ID);
+  for(const result of [null,{}, {repeated:false},{eventId:1,repeated:false}]) {
+    await assert.rejects(app(storage,async()=>response(result)).create({requestId:ID}),/подтвердить сохранение/);
+    assert.equal(storage.length,1);
+  }
+  await assert.rejects(app(storage,async()=>response(null)).recoverOne(ID),/проверить результат/);
+  assert.equal(storage.length,1);
+  assert.deepEqual(await app(storage,async()=>response({eventId:null,repeated:true})).create({requestId:ID}),{eventId:null,repeated:true});
+});

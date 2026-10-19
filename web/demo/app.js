@@ -27,6 +27,9 @@
     requestNumber = 0,
     activeRequest = null,
     saving = false,
+    confirming = false,
+    accessBlocked = false,
+    retryFollowToday = true,
     pendingMark = null;
   let events = live ? [] : M.load(storage),
     screen = "kind",
@@ -113,7 +116,7 @@
       for (let i = 0; i < 7; i++)
         days += dayButton(M.addDays(monday, i), false);
     }
-    return `<section class="date-card" aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц">${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(month)}</button><button data-action="next-month" aria-label="Следующий месяц" ${month >= today.slice(0, 7) ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selected.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
+    return `<section class="date-card" aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц" ${live && month <= "2000-01" ? "disabled" : ""}>${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(month)}</button><button data-action="next-month" aria-label="Следующий месяц" ${month >= today.slice(0, 7) ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selected.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
   }
   function question() {
     const kind = screen === "kind",
@@ -142,11 +145,14 @@
         : "дней";
   }
   function render() {
+    updateBackButton();
     if (live && (loading || loadError || !snapshot)) {
       app.innerHTML =
         header() +
         (loadError
-          ? `<button class="empty" data-action="retry">${esc(loadError)}</button>`
+          ? accessBlocked
+            ? `<div class="empty" role="alert">${esc(loadError)}</div>`
+            : `<button class="empty" data-action="retry">${esc(loadError)}</button>`
           : '<div class="empty" role="status">Загрузка…</div>');
       return;
     }
@@ -157,25 +163,41 @@
         : screen === "stats"
           ? statistics()
           : question());
+  }
+  function updateBackButton() {
     try {
-      if (screen === "kind") tg?.BackButton.hide();
+      if (loading || saving || confirming || pendingMark || loadError || (screen === "kind" && !draft)) tg?.BackButton.hide();
       else tg?.BackButton.show();
     } catch {}
   }
-  async function go(next, revalidate = false) {
+  function blockAccess(error) {
+    if (error.status !== 401 && error.status !== 403) return false;
+    accessBlocked = true;
+    events = [];
+    loadError = error.message;
+    return true;
+  }
+  async function go(next, revalidate = false, followToday = true) {
     screen = next;
     revealed = null;
-    if (live && revalidate) await refresh();
+    if (live && revalidate) await refresh({followToday});
     else render();
     window.scrollTo(0, 0);
   }
   async function back() {
-    if (saving || loading || pendingMark) return;
+    if (saving || loading || confirming || pendingMark || loadError) return;
     if (screen === "feeling") {
       go("kind");
       return;
     }
-    await go(screen === "stats" ? returnScreen : "kind", true);
+    if (screen === "stats") {
+      await go(returnScreen, true);
+      return;
+    }
+    const editing = Boolean(draft?.id);
+    draft = null;
+    if (editing) month = selected.slice(0, 7);
+    await go(editing ? "calendar" : "kind", true, !editing);
   }
   async function fresh() {
     if (live) selected = today;
@@ -221,7 +243,7 @@
     } catch {}
   }
   async function mutate(body) {
-    if (saving) return;
+    if (saving || accessBlocked) return;
     if (!pendingMark) {
       const candidate = {requestId: crypto.randomUUID(), ...body};
       try { live.remember(candidate.requestId); }
@@ -229,6 +251,7 @@
       pendingMark = candidate;
     }
     saving = true;
+    updateBackButton();
     app.querySelectorAll("button").forEach(b => { b.disabled = true; });
     tg?.enableClosingConfirmation?.();
     const controller = new AbortController();
@@ -245,20 +268,20 @@
       screen = "calendar";
       announce(deleting ? "Отметка удалена" : "Отметка сохранена");
       try { tg?.HapticFeedback?.notificationOccurred("success"); } catch {}
-      await refresh();
+      await refresh({followToday: false});
     } catch (error) {
+      if (blockAccess(error)) return; // Keep the receipt marker for a fresh Telegram login.
       try {
         const outcome = await live.recoverOne(pendingMark.requestId);
         pendingMark = null;
         draft = null;
         revealed = null;
         screen = "calendar";
-        await refresh();
+        await refresh({followToday: false});
         notice(outcome === "completed" ? "Изменение сохранено. Результат подтверждён сервером."
           : error.definitive ? error.message : "Действие не успело выполниться. Повтори его — предыдущий запрос отменён.");
       } catch (recoveryError) {
-        notice(recoveryError.status === 401 || recoveryError.status === 403 ? recoveryError.message
-          : "Связь прервалась. Можно повторить действие или открыть приложение позже — результат будет проверен перед новой отметкой.");
+        if (!blockAccess(recoveryError)) notice("Связь прервалась. Можно повторить действие или открыть приложение позже — результат будет проверен перед новой отметкой.");
       }
     } finally {
       clearTimeout(timeout);
@@ -276,7 +299,7 @@
   }
   app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
-    if (!b || b.disabled || saving) return;
+    if (!b || b.disabled || saving || confirming || accessBlocked) return;
     if (b.dataset.action === "retry" && live) { await startLive(); return; }
     if (pendingMark) {
       const retry = pendingMark.action === "delete"
@@ -305,12 +328,12 @@
       revealed = null;
       if (screen === "feeling") screen = "kind";
       month = selected.slice(0, 7);
-      if (live) await refresh();
+      if (live) await refresh({followToday: false});
       else render();
       return;
     }
     if (b.dataset.edit) {
-      if (live && !await refresh()) return;
+      if (live && !await refresh({followToday: false})) return;
       const event = events.find((e) => e.id === b.dataset.edit);
       if (event) {
         draft = { ...event };
@@ -323,7 +346,14 @@
       if (revealed !== b.dataset.delete) return;
       if (live) {
         const event = events.find(e => e.id === b.dataset.delete);
-        if (event && await confirmDelete())
+        if (!event) return;
+        confirming = true;
+        updateBackButton();
+        let confirmed = false;
+        try { confirmed = await confirmDelete(); }
+        catch { notice("Не удалось открыть подтверждение. Попробуй ещё раз."); }
+        finally { confirming = false; updateBackButton(); }
+        if (confirmed)
           await mutate({action: "delete", eventId: event.id, version: event.version, date: event.date});
         return;
       }
@@ -361,10 +391,12 @@
         d.setMonth(
           d.getMonth() + (b.dataset.action === "previous-month" ? -1 : 1),
         );
-        month = M.dateKey(d).slice(0, 7);
+        const nextMonth = M.dateKey(d).slice(0, 7);
+        if (live && (nextMonth < "2000-01" || nextMonth > today.slice(0, 7))) return;
+        month = nextMonth;
         if (live) {
           selected = month === today.slice(0, 7) ? today : month + "-01";
-          await refresh();
+          await refresh({followToday: false});
         } else render();
         break;
       }
@@ -372,14 +404,14 @@
   });
   let pointer = null;
   app.addEventListener("pointerdown", (e) => {
-    if (saving || loading || pendingMark) return;
+    if (saving || loading || confirming || pendingMark || loadError) return;
     const row = e.target.closest("[data-event]");
     pointer = row
       ? { id: row.dataset.event, x: e.clientX, y: e.clientY }
       : null;
   });
   app.addEventListener("pointerup", (e) => {
-    if (!pointer || saving || loading || pendingMark) return;
+    if (!pointer || saving || loading || confirming || pendingMark || loadError) return;
     const dx = e.clientX - pointer.x,
       dy = e.clientY - pointer.y;
     if (Math.abs(dx) > 45 && Math.abs(dy) < 35) {
@@ -392,7 +424,7 @@
     pointer = null;
   });
   app.addEventListener("keydown", (e) => {
-    if (saving || loading || pendingMark) return;
+    if (saving || loading || confirming || pendingMark || loadError) return;
     const row = e.target.closest("[data-event]");
     if (row && e.key === "ArrowLeft") {
       revealed = row.dataset.event;
@@ -411,8 +443,9 @@
     if (tg?.isVersionAtLeast?.("6.2")) tg.showAlert(text);
     else window.alert(text);
   }
-  async function refresh() {
-    if (!live) return;
+  async function refresh({followToday = true} = {}) {
+    if (!live || accessBlocked) return false;
+    retryFollowToday = followToday;
     const number = ++requestNumber;
     activeRequest?.abort();
     const controller = new AbortController();
@@ -423,12 +456,12 @@
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       // Follow today across midnight only when no unfinished form is bound to it.
-      const requestedMonth = !snapshot || (!draft && selected === today) ? null : month;
+      const requestedMonth = !snapshot || (followToday && !draft && selected === today) ? null : month;
       const data = await live.read(requestedMonth, controller.signal);
       if (number !== requestNumber) return;
       const oldToday = today;
       today = data.today;
-      if (!snapshot || (!draft && selected === oldToday)) selected = today;
+      if (!snapshot || (followToday && !draft && selected === oldToday)) selected = today;
       month = data.month;
       snapshot = data;
       app.setAttribute("aria-label", data.scope === "personal" ? "PoopCheck — личные отметки" : "PoopCheck — отметки в группе");
@@ -436,6 +469,7 @@
       return true;
     } catch (error) {
       if (number !== requestNumber) return;
+      if (blockAccess(error)) return false;
       events = [];
       loadError =
         error.name === "AbortError"
@@ -451,7 +485,7 @@
     }
   }
   async function startLive() {
-    if (saving) return;
+    if (saving || accessBlocked) return;
     saving = true;
     loading = true;
     loadError = "";
@@ -464,22 +498,22 @@
         revealed = null;
         screen = "calendar";
       }
-      await refresh();
+      const refreshed = await refresh({followToday: retryFollowToday});
       if (outcomes.length) notice(outcomes.includes("cancelled")
-        ? "Результаты проверены. Невыполненные действия отменены — при необходимости повтори их. Календарь показывает сохранённые отметки."
-        : "Предыдущее действие сохранено. Календарь обновлён.");
+        ? "Результаты проверены. Невыполненные действия отменены — при необходимости повтори их."
+        : refreshed ? "Предыдущее действие сохранено. Календарь обновлён."
+        : "Предыдущее действие сохранено, но календарь не загрузился. Следуй подсказке на экране.");
       tg?.disableClosingConfirmation?.();
     } catch (error) {
       loading = false;
-      loadError = error.status === 401 || error.status === 403 ? error.message
-        : "Не удалось проверить предыдущее действие. Проверь связь и нажми, чтобы повторить.";
+      if (!blockAccess(error)) loadError = "Не удалось проверить предыдущее действие. Проверь связь и нажми, чтобы повторить.";
     } finally {
       saving = false;
       render();
     }
   }
   function resume() {
-    if (document.visibilityState !== "visible") return;
+    if (document.visibilityState !== "visible" || accessBlocked || confirming) return;
     if (live && !saving && !loading && (pendingMark || loadError || live.pendingIds().length)) {
       startLive();
       return;

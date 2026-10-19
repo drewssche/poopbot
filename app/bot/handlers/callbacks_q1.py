@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q2 import q2_keyboard
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.models import CommandMessage, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
 from app.services.command_message_service import (
@@ -42,7 +42,6 @@ from app.services.time_service import get_session_window, now_in_tz
 logger = logging.getLogger(__name__)
 router = Router()
 
-_engine = None
 _session_factory = None
 
 
@@ -59,10 +58,8 @@ def _log_q1_result(cb: CallbackQuery, outcome: str, session_id: int | None = Non
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _resolve_reminder_context(db, chat_id: int, current_sess, cb: CallbackQuery, command: str) -> bool:
@@ -241,7 +238,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
-                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
                             show_restore_streak_button=should_show_restore_streak_button(
                                 db,
                                 chat_id=chat_id,
@@ -263,7 +259,6 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         text=text,
                         reply_markup=q1_keyboard(
                             has_any_members,
-                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
                             show_restore_streak_button=should_show_restore_streak_button(
                                 db,
                                 chat_id=chat_id,

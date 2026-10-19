@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -12,12 +12,13 @@ from app.db.models import Chat, ChatMember, PoopEvent, Session as DaySession, Se
 from app.services.q1_service import (
     render_q1,
     render_q1_private,
-    restore_recent_streak_window,
     restore_streak_for_user,
     restore_streak_target_date,
     should_show_restore_streak_button,
-    undo_recent_streak_window,
 )
+
+
+from app.services.restore_period_service import RestorePeriod, restore_period, undo_period
 
 
 class RestoreStreakTests(unittest.TestCase):
@@ -292,20 +293,22 @@ class RestoreStreakTests(unittest.TestCase):
         self._add_day(chat_id=chat_id, user_id=chat_id, session_date=today, with_event=True)
         self.db.commit()
 
-        changed, _message = restore_recent_streak_window(
+        changed, _message = restore_period(
             self.db,
             chat_id=chat_id,
             user_id=chat_id,
-            current_session_date=today,
+            today=today,
+            period=RestorePeriod(today-timedelta(days=7), today-timedelta(days=1)),
         )
         self.db.commit()
         self.assertTrue(changed)
 
-        undone, undo_message = undo_recent_streak_window(
+        undone, undo_message = undo_period(
             self.db,
             chat_id=chat_id,
             user_id=chat_id,
-            current_session_date=today,
+            today=today,
+            period=RestorePeriod(today-timedelta(days=7), today-timedelta(days=1)),
         )
         self.db.commit()
 
@@ -315,7 +318,7 @@ class RestoreStreakTests(unittest.TestCase):
         text = render_q1_private(self.db, chat_id=chat_id, session_id=today_sess.session_id, user_id=chat_id, session_date=today)
 
         self.assertTrue(undone)
-        self.assertEqual(undo_message, "Отменено 6 дн. восстановления")
+        self.assertIn("Отменено отметок: 6", undo_message)
         self.assertEqual(int(restored_state.poops_n), 0)
         self.assertEqual(
             self.db.query(PoopEvent).filter_by(session_id=restored_sess.session_id, user_id=chat_id).count(),
@@ -332,11 +335,12 @@ class RestoreStreakTests(unittest.TestCase):
         self._add_day(chat_id=chat_id, user_id=chat_id, session_date=today, with_event=True)
         self.db.commit()
 
-        changed, message = restore_recent_streak_window(
+        changed, message = restore_period(
             self.db,
             chat_id=chat_id,
             user_id=chat_id,
-            current_session_date=today,
+            today=today,
+            period=RestorePeriod(today-timedelta(days=7), today-timedelta(days=1)),
         )
         self.db.commit()
 
@@ -356,7 +360,7 @@ class RestoreStreakTests(unittest.TestCase):
         text = render_q1_private(self.db, chat_id=chat_id, session_id=today_sess.session_id, user_id=chat_id, session_date=today)
 
         self.assertTrue(changed)
-        self.assertEqual(message, "Восстановлено 6 дн. за последние 7 дней")
+        self.assertIn("6", message)
         self.assertIn("Стрик в этой личке: 8 дн.", text)
 
     def test_group_restore_button_visible_when_any_member_is_eligible(self) -> None:

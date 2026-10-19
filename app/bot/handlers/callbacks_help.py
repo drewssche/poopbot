@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import logging
 
 from aiogram import F, Router
@@ -23,7 +25,7 @@ from app.bot.keyboards.help import (
     help_root_kb,
     help_settings_kb,
 )
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.models import User
 from app.db.session import db_session
 from app.services.help_service import (
@@ -41,7 +43,6 @@ from app.services.repo_service import upsert_chat
 logger = logging.getLogger(__name__)
 router = Router()
 
-_engine = None
 _session_factory = None
 
 _SHARED_SETTING_ACTIONS = {
@@ -74,10 +75,8 @@ def _is_stale_callback_error(e: TelegramBadRequest) -> bool:
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _parse_owner(data: str) -> int:
@@ -226,7 +225,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 )
 
             elif data.startswith("help:delete_me:"):
-                mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
+                mention = escape(f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name)
                 await cb.message.edit_text(
                     f"⚠️ {mention}, удалить тебя из базы полностью?\n\n"
                     "Что это значит:\n"
@@ -242,7 +241,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 if is_private_chat:
                     await cb.answer("В личке этот пункт недоступен", show_alert=False)
                     return
-                mention = f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name
+                mention = escape(f"@{cb.from_user.username}" if cb.from_user.username else cb.from_user.full_name)
                 await cb.message.edit_text(
                     f"⚠️ {mention}, удалить тебя только из этого чата?\n\n"
                     "Что это значит:\n"

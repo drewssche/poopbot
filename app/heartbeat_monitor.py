@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -24,13 +25,11 @@ def env_int(name: str, default: int) -> int:
 
 def read_heartbeat() -> tuple[dict | None, float | None]:
     path = heartbeat_path()
-    if not path.exists():
-        return None, None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload, max(0, time.time() - path.stat().st_mtime)
     except Exception:
-        payload = None
-    return payload, time.time() - path.stat().st_mtime
+        return None, None
 
 
 def heartbeat_failure_reason() -> str | None:
@@ -40,19 +39,20 @@ def heartbeat_failure_reason() -> str | None:
         "SUPERVISOR_HEARTBEAT_TIMEOUT_SEC",
         max(heartbeat_stale_sec + 120, heartbeat_interval_sec * 3),
     )
-    max_idle_sec = env_int("SUPERVISOR_MAX_IDLE_SEC", 43200)
 
     payload, age_sec = read_heartbeat()
-    if payload is None or age_sec is None:
+    if not isinstance(payload, dict) or age_sec is None:
         return "heartbeat_missing"
     if age_sec >= heartbeat_timeout_sec:
         return f"heartbeat_stale age={int(age_sec)} timeout={heartbeat_timeout_sec}"
-    if max_idle_sec > 0:
-        last_received = int(payload.get("last_received_sec", 0) or 0)
-        last_handled = int(payload.get("last_handled_sec", 0) or 0)
-        if last_received >= max_idle_sec and last_handled >= max_idle_sec:
-            return (
-                "polling_idle "
-                f"last_received={last_received} last_handled={last_handled} limit={max_idle_sec}"
-            )
+    poll_age = payload.get("last_poll_success_sec")
+    if poll_age is not None:
+        try:
+            poll_age = float(poll_age) + age_sec
+        except (TypeError, ValueError):
+            return "heartbeat_invalid"
+        if not math.isfinite(poll_age) or poll_age < 0:
+            return "heartbeat_invalid"
+        if poll_age >= heartbeat_timeout_sec:
+            return f"polling_stale age={int(poll_age)} timeout={heartbeat_timeout_sec}"
     return None

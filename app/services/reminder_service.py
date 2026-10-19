@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,17 +16,17 @@ def _user_mention_html(user: User | None, user_id: int) -> str:
         last = (user.last_name if user else "") or ""
         full_name = " ".join(x.strip() for x in (first, last) if x and x.strip()).strip()
         if full_name:
-            return full_name
+            return escape(full_name)
         if user.username:
-            return user.username
+            return escape(user.username)
         return f"id:{user_id}"
     if user is not None and user.username:
-        return f"@{user.username}"
+        return escape(f"@{user.username}")
 
     first = (user.first_name if user else "") or ""
     last = (user.last_name if user else "") or ""
     full_name = " ".join(x.strip() for x in (first, last) if x and x.strip()).strip() or "Пользователь"
-    return f'<a href="tg://user?id={user_id}">{full_name}</a>'
+    return f'<a href="tg://user?id={user_id}">{escape(full_name)}</a>'
 
 
 def _collect_debtors(db: Session, session_id: int) -> list[tuple[int, User | None]]:

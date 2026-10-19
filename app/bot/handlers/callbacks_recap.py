@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import logging
 import re
 
@@ -8,7 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from app.bot.keyboards.recap import recap_chat_card_kb, recap_chat_pick_mode_kb, recap_entry_kb, recap_next_kb
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.session import db_session
 from app.services.recap_service import (
     build_chat_year_recap_cards,
@@ -24,7 +26,6 @@ from app.services.time_service import now_in_tz
 logger = logging.getLogger(__name__)
 router = Router()
 
-_engine = None
 _session_factory = None
 
 GROUP_MENU_TEXT = (
@@ -44,10 +45,8 @@ OWNER_PRIVATE_MENU_TEXT = (
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _is_owner(settings, user_id: int) -> bool:
@@ -65,9 +64,9 @@ def _user_ping(cb: CallbackQuery) -> str:
     if cb.from_user is None:
         return "Пользователь"
     if cb.from_user.username:
-        return f"@{cb.from_user.username}"
+        return escape(f"@{cb.from_user.username}")
     name = cb.from_user.full_name or "Пользователь"
-    safe_name = name.replace("<", "").replace(">", "")
+    safe_name = escape(name)
     return f'<a href="tg://user?id={cb.from_user.id}">{safe_name}</a>'
 
 
@@ -106,7 +105,7 @@ async def _enrich_chat_titles(cards: list[str], cb: CallbackQuery) -> list[str]:
         try:
             chat = await cb.bot.get_chat(cid)
             title = getattr(chat, "title", None) or getattr(chat, "full_name", None) or f"Чат {cid}"
-            titles[cid] = str(title).strip()
+            titles[cid] = escape(str(title).strip())
         except Exception:
             titles[cid] = f"Чат {cid}"
 

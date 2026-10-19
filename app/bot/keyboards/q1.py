@@ -6,7 +6,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 def q1_keyboard(
     has_any_members: bool,
-    show_remind: bool = True,
     show_q2_q3_button: bool = False,
     show_restore_streak_button: bool = False,
 ) -> InlineKeyboardMarkup:

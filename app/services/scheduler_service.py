@@ -261,7 +261,6 @@ async def _process_chat(bot: Bot, session_factory: sessionmaker, chat_id: int) -
                     sess.session_id,
                     window.session_date,
                     q2_q3_enabled=q2_q3_enabled,
-                    show_remind=(local_time < time(22, 0)),
                 )
 
         # Catch-up for late reminder in the same active session.
@@ -325,7 +324,6 @@ async def _recover_chat_q1_on_startup(bot: Bot, session_factory: sessionmaker, c
             sess.session_id,
             window.session_date,
             q2_q3_enabled=bool(chat.q2_q3_enabled),
-            show_remind=(local_time < time(22, 0)),
         )
         logger.warning(
             "Recovered missing Q1 on startup chat_id=%s session_id=%s delayed_by_min=%s",
@@ -343,7 +341,6 @@ async def _post_q1(
     session_id: int,
     session_date,
     q2_q3_enabled: bool,
-    show_remind: bool = True,
 ) -> None:
     if session_date.month == 12 and session_date.day == 30:
         sent_recap_mid = get_command_message_id(db, chat_id, 0, "recap_announce", session_date)
@@ -379,7 +376,6 @@ async def _post_q1(
         text=text,
         reply_markup=q1_keyboard(
             has_any_members,
-            show_remind=show_remind,
             show_restore_streak_button=should_show_restore_streak_button(
                 db,
                 chat_id=chat_id,
@@ -493,9 +489,9 @@ async def _lock_q1(bot: Bot, db, chat_id: int, session_id: int) -> None:
 
     sess = db.get(DaySession, session_id)
     text = (
-        render_q1_private(db, chat_id=chat_id, session_id=session_id, user_id=chat_id, session_date=sess.session_date)
+        render_q1_private(db, chat_id=chat_id, session_id=session_id, user_id=chat_id, session_date=sess.session_date, closed=True)
         if chat_id > 0
-        else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date)
+        else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=sess.session_date, closed=True)
     )
     chat = db.get(Chat, chat_id)
     today = now_in_tz(chat.timezone if chat else "Europe/Minsk").date()
@@ -556,10 +552,9 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
     )
     has_any_members = True if chat_id > 0 else ("Участники:" in text)
     chat = db.get(Chat, chat_id)
-    show_remind = True
+
     show_q2_q3_button = False
     if chat is not None:
-        show_remind = now_in_tz(chat.timezone).time() < time(22, 0)
         show_q2_q3_button = not bool(chat.q2_q3_enabled)
     await safe_edit_message_text(
         bot,
@@ -568,7 +563,6 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
         text=text,
         reply_markup=q1_keyboard(
             has_any_members,
-            show_remind=show_remind,
             show_restore_streak_button=should_show_restore_streak_button(
                 db,
                 chat_id=chat_id,

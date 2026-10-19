@@ -13,7 +13,7 @@ from app.bot.callback_answers import answer_callback
 from app.bot.keyboards.q1 import q1_keyboard
 from app.bot.keyboards.q2 import q2_keyboard
 from app.bot.keyboards.q3 import q3_keyboard
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState
 from app.db.session import db_session
 from app.services.poop_event_service import ensure_events_count, list_events, normalize_session_user_state_to_origin_chat
@@ -37,15 +37,12 @@ from app.services.time_service import get_session_window, now_in_tz
 logger = logging.getLogger(__name__)
 router = Router()
 
-_engine = None
 _session_factory = None
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _parse_q3(data: str, poops_n: int) -> tuple[int, str | None]:
@@ -218,7 +215,6 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
                         render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=window.session_date),
                         reply_markup=q1_keyboard(
                             has_any_members=True,
-                            show_remind=now_in_tz(chat.timezone).time().hour < 22,
                             show_restore_streak_button=should_show_restore_streak_button(
                                 db,
                                 chat_id=chat_id,
@@ -257,7 +253,6 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
                     text=text,
                     reply_markup=q1_keyboard(
                         has_any_members,
-                        show_remind=now_in_tz(chat.timezone).time().hour < 22,
                         show_restore_streak_button=should_show_restore_streak_button(
                             db,
                             chat_id=chat_id,

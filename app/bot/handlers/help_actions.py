@@ -96,7 +96,6 @@ async def refresh_q1_after_settings_change(
                 text=text,
                 reply_markup=q1_keyboard(
                     has_any_members,
-                    show_remind=now_in_tz(chat.timezone).time().hour < 22,
                     show_restore_streak_button=should_show_restore_streak_button(
                         db,
                         chat_id=chat_id,

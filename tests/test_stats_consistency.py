@@ -11,7 +11,7 @@ from app.db.base import Base
 from app.db.models import Chat, PoopEvent, Session as DaySession, SessionUserState, User
 from app.services.event_time_service import event_occurrence_time
 from app.services.poop_event_service import create_event
-from app.services.q1_service import _get_user_slot_counts, restore_streak_for_date, restore_recent_streak_window
+from app.services.q1_service import _get_user_slot_counts, restore_streak_for_date
 from app.services.restore_period_service import add_missing_mark, RestorePeriod, restore_period, mark_forgotten_day
 from app.services.stats_common import Range
 from app.services.stats_metrics import compute_chat_period_metrics
@@ -90,7 +90,7 @@ def test_legacy_time_is_preserved_as_utc_until_history_is_reviewed():
     assert event_occurrence_time(ev)==datetime(2026,2,11,9,0,tzinfo=UTC)
 
 
-@pytest.mark.parametrize('flow', ['period','forgotten','old_single','old_window'])
+@pytest.mark.parametrize('flow', ['period','forgotten','old_single'])
 def test_all_recovery_entry_points_create_unknown_time_once(db,flow):
     today=date(2026,10,19);yesterday=date(2026,10,18)
     prev=session(db,-1,date(2026,10,17));create_event(db,prev.session_id,1,1,origin_chat_id=-1)
@@ -99,10 +99,8 @@ def test_all_recovery_entry_points_create_unknown_time_once(db,flow):
         action=lambda:restore_period(db,chat_id=-1,user_id=1,period=RestorePeriod(yesterday,yesterday),today=today)
     elif flow=='forgotten':
         action=lambda:mark_forgotten_day(db,sess=closed,user_id=1,today=today)
-    elif flow=='old_single':
-        action=lambda:restore_streak_for_date(db,-1,1,yesterday)
     else:
-        action=lambda:restore_recent_streak_window(db,chat_id=-1,user_id=1,current_session_date=today,days_back=1)
+        action=lambda:restore_streak_for_date(db,-1,1,yesterday)
     assert action()[0]
     db.flush();action();db.flush()
     evs=db.scalars(select(PoopEvent).where(PoopEvent.session_id==closed.session_id)).all()

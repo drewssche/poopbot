@@ -53,6 +53,7 @@ docker compose exec bot python -m pytest tests/ -v
 | `test_streak_restore_service.py` | Сервис восстановления стриков |
 | `test_healthcheck.py` | Health check бота |
 | `test_heartbeat_monitor.py` | Мониторинг пульса |
+| `test_runtime_cleanup.py` | Общий пул обработчиков, завершение ресурсов, успешные пустые опросы Telegram, восстановление webhook, HTML-имена и закрытая сессия |
 | `test_time_slots.py` | Временные слоты, титулы, popups |
 
 **Запуск:**
@@ -78,15 +79,18 @@ docker compose exec bot python -m pytest tests/ -v
 - Batch vs N+1 запросы
 - Рендеринг статистики
 
-**Запуск:**
+**Запуск в одноразовой SQLite-базе в памяти:**
 ```bash
-# Docker/VPS-сценарий
-docker compose exec db psql -U poopbot -d poopbot -c "TRUNCATE TABLE poop_events, session_user_state, sessions, user_streaks, chat_members, users RESTART IDENTITY CASCADE;"
-docker compose exec -e PYTHONPATH=/app bot python /app/tests/load_test.py
-
-# Локально через pytest
 RUN_LOAD_TESTS=1 ./.venv/bin/pytest -q tests/load_test.py
+# Короткий замер: 2 чата × 12 участников × 30 дней
+PYTHONPATH=. ./.venv/bin/python tests/load_test.py
+# Большой замер на машине с запасом RAM/CPU
+PYTHONPATH=. ./.venv/bin/python tests/load_test.py --full
 ```
+
+Команда игнорирует `DATABASE_URL`, создаёт отдельную базу в памяти и удаляет её при завершении.
+Очистка рабочей базы не нужна. Эти замеры проверяют логику и относительную скорость SQLite;
+они не заменяют проверку запросов на отдельной тестовой PostgreSQL-базе.
 
 **Ожидаемые результаты:**
 | Метрика | Ожидание |

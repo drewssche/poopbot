@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
@@ -169,12 +171,12 @@ def _user_label(user: User | None, user_id: int) -> str:
     if bool(getattr(user, "disable_mentions", False)):
         full = " ".join(part for part in [user.first_name or "", user.last_name or ""] if part).strip()
         if full:
-            return full
-        return (user.username or "").strip() or f"id:{user_id}"
+            return escape(full)
+        return escape((user.username or "").strip() or f"id:{user_id}")
     if user.username:
-        return f"@{user.username}"
+        return escape(f"@{user.username}")
     full = " ".join(part for part in [user.first_name or "", user.last_name or ""] if part).strip()
-    return full or f"id:{user_id}"
+    return escape(full or f"id:{user_id}")
 
 
 def build_chat_year_recap_cards(db: Session, chat_id: int, year: int) -> list[str]:

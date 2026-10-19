@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import calendar
 import logging
 from datetime import date, timedelta
@@ -24,7 +26,7 @@ from app.bot.keyboards.stats import (
     stats_period_kb,
     stats_root_kb,
 )
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.session import db_session
 from app.services.recap_service import is_recap_available
 from app.services.repo_service import upsert_chat, upsert_user
@@ -46,15 +48,12 @@ from app.services.time_service import now_in_tz
 logger = logging.getLogger(__name__)
 router = Router()
 
-_engine = None
 _session_factory = None
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _stats_root_text(show_recap: bool, is_owner_private: bool, is_private_chat: bool) -> str:
@@ -302,7 +301,7 @@ async def _render_among_chats(cb: CallbackQuery, db, period: str | None = None, 
             names[cid] = f"Чат {cid}"
 
     def chat_name(cid: int) -> str:
-        return names.get(cid, f"Чат {cid}")
+        return escape(names.get(cid, f"Чат {cid}"))
 
     lines = [
         "🏟️ Среди чатов",

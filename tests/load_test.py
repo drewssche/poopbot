@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.db.models import Chat, User, ChatMember, Session as DaySession, SessionUserState, PoopEvent, UserStreak
-from app.db.engine import make_engine
 from app.services.scheduler_service import _recalculate_streaks_from_history
 from app.services.stats_streaks import compute_chat_user_streaks_live, compute_user_chat_streak_live
 from app.services.stats_service import build_stats_text_chat, build_stats_text_my
@@ -24,7 +23,6 @@ NUM_CHATS = 10
 NUM_USERS = 118
 DAYS_HISTORY = 365
 
-DATABASE_URL = "postgresql+psycopg://poopbot:super_strong_password@db:5432/poopbot"
 
 pytestmark = [
     pytest.mark.slow,
@@ -228,71 +226,35 @@ def test_stats_rendering(db: Session, chat_id: int, user_id: int, today: date) -
     """Тест производительности рендеринга статистики."""
     print(f"\n📊 Тест рендеринга статистики для user_id={user_id}...")
     
-    # Моя статистика
-    start = time.perf_counter()
-    try:
-        stats_my = build_stats_text_my(db, chat_id, user_id, today, "month")
-        elapsed = time.perf_counter() - start
-        print(f"   /stats my (месяц): {elapsed*1000:.1f}ms")
-    except Exception as e:
-        elapsed = time.perf_counter() - start
-        print(f"   /stats my (месяц): {elapsed*1000:.1f}ms — ошибка: {e}")
-    
-    # Статистика чата
-    start = time.perf_counter()
-    try:
-        stats_chat = build_stats_text_chat(db, chat_id, today, "month")
-        elapsed = time.perf_counter() - start
-        print(f"   /stats chat (месяц): {elapsed*1000:.1f}ms")
-    except Exception as e:
-        elapsed = time.perf_counter() - start
-        print(f"   /stats chat (месяц): {elapsed*1000:.1f}ms — ошибка: {e}")
+    for label, render in [
+        ('my', lambda: build_stats_text_my(db, chat_id, user_id, today, 'month')),
+        ('chat', lambda: build_stats_text_chat(db, chat_id, today, 'month')),
+    ]:
+        start = time.perf_counter()
+        assert render()
+        print(f"   /stats {label}: {(time.perf_counter()-start)*1000:.1f}ms")
 
 
 def main():
-    print("🧪 Нагрузочный тест Poopbot")
-    print("=" * 60)
-    print(f"Масштаб: {NUM_CHATS} чатов × {NUM_USERS} пользователей × {DAYS_HISTORY} дней")
-    print("=" * 60)
-    
-    engine = make_engine(DATABASE_URL, pool_size=6, max_overflow=4)
-    
+    import argparse
+    parser = argparse.ArgumentParser(description="Isolated SQLite benchmark; never connects to DATABASE_URL")
+    parser.add_argument('--full', action='store_true', help='Use the large dataset; requires more RAM and CPU')
+    args = parser.parse_args()
+    dimensions = (NUM_CHATS, NUM_USERS, DAYS_HISTORY) if args.full else (2, 12, 30)
+    print(f"Disposable SQLite database: {dimensions[0]} chats, {dimensions[1]} users, {dimensions[2]} days")
+    engine = create_engine("sqlite+pysqlite:///:memory:")
     try:
-        with engine.connect() as conn:
-            conn.execute(select(func.now()))
-        print("✅ Подключение к БД успешно")
-    except Exception as e:
-        print(f"❌ Ошибка подключения к БД: {e}")
-        print("   Убедитесь, что Docker запущен: docker compose up -d db")
-        return 1
-    
-    Base.metadata.create_all(engine)
-    
-    with Session(engine) as db:
-        today = date.today()
-        
-        existing_chats = db.scalars(select(Chat.chat_id).where(Chat.chat_id < 0)).all()
-        
-        if not existing_chats:
-            print("\n📝 БД пустая. Создаю тестовые данные...")
-            create_test_data(db)
-            print("✅ Тестовые данные созданы")
-        
-        existing_chats = db.scalars(select(Chat.chat_id).where(Chat.chat_id < 0)).all()
-        existing_users = db.scalars(select(User.user_id).where(User.user_id >= 100000)).all()
-        
-        if existing_chats and existing_users:
-            chat_id = existing_chats[0]
-            user_id = existing_users[0]
-            
-            # Тесты производительности
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            create_test_data(db, num_chats=dimensions[0], num_users=dimensions[1], days_history=dimensions[2])
+            chat_id = int(db.scalar(select(Chat.chat_id).where(Chat.chat_id < 0).limit(1)))
+            user_id = int(db.scalar(select(User.user_id).where(User.user_id >= 100000).limit(1)))
+            today = date.today()
             test_streak_recalc_performance(db, chat_id, today)
             test_batch_streak_query(db, chat_id, today)
             test_stats_rendering(db, chat_id, user_id, today)
-        
-        print("\n" + "=" * 60)
-        print("✅ Нагрузочный тест завершён")
-    
+    finally:
+        engine.dispose()
     return 0
 
 

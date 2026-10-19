@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery
 from app.bot.handlers.streak_admin_content import streak_admin_group_picker_text, streak_admin_result_text, streak_admin_text
 from app.bot.keyboards.streak_admin import streak_admin_group_picker_kb, streak_admin_kb, streak_period_picker_kb
 from app.core.config import load_settings
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.session import db_session
 from app.services.app_setting_service import RESTORE_CLAIM_ENABLED_KEY, get_bool_setting, set_bool_setting
 from app.services.restore_period_service import choose_restore_period, ensure_restore_period, lock_restore_chat, undo_period
@@ -26,15 +26,12 @@ from app.services.repo_service import upsert_chat
 
 logger = logging.getLogger(__name__)
 router = Router()
-_engine = None
 _session_factory = None
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 def _is_owner(settings, user_id: int) -> bool:

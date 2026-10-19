@@ -59,16 +59,38 @@ class HeartbeatMonitorTests(unittest.TestCase):
             with patch("app.heartbeat_monitor.time.time", return_value=10_000.0):
                 assert heartbeat_failure_reason() == "heartbeat_stale age=500 timeout=420"
 
-    def test_heartbeat_failure_reason_reports_polling_idle(self) -> None:
+    def test_quiet_chat_is_not_a_failure(self) -> None:
         self._write_heartbeat(last_received=700, last_handled=700, age_sec=10)
         with patch("app.heartbeat_monitor.tempfile.gettempdir", return_value=self.temp_dir.name):
             with patch("app.heartbeat_monitor.time.time", return_value=10_000.0):
-                assert heartbeat_failure_reason() == "polling_idle last_received=700 last_handled=700 limit=600"
+                assert heartbeat_failure_reason() is None
 
     def test_heartbeat_failure_reason_ignores_partial_idle(self) -> None:
         self._write_heartbeat(last_received=700, last_handled=30, age_sec=10)
         with patch("app.heartbeat_monitor.tempfile.gettempdir", return_value=self.temp_dir.name):
             with patch("app.heartbeat_monitor.time.time", return_value=10_000.0):
+                assert heartbeat_failure_reason() is None
+
+    def test_stalled_polling_is_unhealthy_even_with_fresh_heartbeat(self) -> None:
+        self._write_heartbeat(last_received=1, last_handled=1, age_sec=0)
+        path = self._heartbeat_file()
+        payload = json.loads(path.read_text())
+        payload['last_poll_success_sec'] = 500
+        path.write_text(json.dumps(payload))
+        os.utime(path, (10_000.0, 10_000.0))
+        with patch('app.heartbeat_monitor.tempfile.gettempdir', return_value=self.temp_dir.name):
+            with patch('app.heartbeat_monitor.time.time', return_value=10_000.0):
+                assert heartbeat_failure_reason() == 'polling_stale age=500 timeout=420'
+
+    def test_successful_empty_polls_keep_quiet_bot_healthy(self) -> None:
+        self._write_heartbeat(last_received=90000, last_handled=90000, age_sec=0)
+        path = self._heartbeat_file()
+        payload = json.loads(path.read_text())
+        payload['last_poll_success_sec'] = 5
+        path.write_text(json.dumps(payload))
+        os.utime(path, (10_000.0, 10_000.0))
+        with patch('app.heartbeat_monitor.tempfile.gettempdir', return_value=self.temp_dir.name):
+            with patch('app.heartbeat_monitor.time.time', return_value=10_000.0):
                 assert heartbeat_failure_reason() is None
 
     def test_heartbeat_failure_reason_treats_broken_json_as_missing(self) -> None:

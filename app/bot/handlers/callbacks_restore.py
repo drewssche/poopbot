@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
 from app.core.config import load_settings
-from app.db.engine import make_engine, make_session_factory
+from app.db.runtime import get_session_factory
 from app.db.models import Chat, Session as DaySession, SessionMessage
 from app.db.session import db_session
 from app.services.app_setting_service import RESTORE_CLAIM_ENABLED_KEY, get_bool_setting
@@ -22,15 +22,12 @@ from app.services.time_service import now_in_tz
 
 logger = logging.getLogger(__name__)
 router = Router()
-_engine = None
 _session_factory = None
 
 
 def init_db(database_url: str) -> None:
-    global _engine, _session_factory
-    if _engine is None:
-        _engine = make_engine(database_url)
-        _session_factory = make_session_factory(_engine)
+    global _session_factory
+    _session_factory = get_session_factory(database_url)
 
 
 async def _answer(cb, message: str) -> None:

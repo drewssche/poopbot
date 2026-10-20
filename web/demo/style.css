@@ -23,6 +23,15 @@
 * {
   box-sizing: border-box;
 }
+/* Keep the same content width when switching to a scrollable screen. */
+html[data-layout="desktop"] {
+  scrollbar-gutter: stable;
+}
+@supports not (scrollbar-gutter: stable) {
+  html[data-layout="desktop"] {
+    overflow-y: scroll;
+  }
+}
 body {
   margin: 0;
   background: #fff;
@@ -202,6 +211,8 @@ img {
   margin-bottom: 12px;
 }
 .days.month {
+  --month-mark-width: 42px;
+  --month-selection-size: 38px;
   row-gap: 0;
 }
 .month .day {
@@ -209,7 +220,7 @@ img {
 }
 .month .day .poop-mark {
   position: absolute;
-  width: 42px;
+  width: var(--month-mark-width);
   height: 40px;
   top: 0;
   left: 50%;
@@ -231,14 +242,29 @@ img {
 .month .day:not(.has-events) .date-number {
   color: var(--muted);
 }
-.month .day.selected:not(.has-events) {
+.month .day.selected .date-number {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+  width: var(--month-selection-size);
+  height: var(--month-selection-size);
+  display: grid;
+  place-items: center;
   background: var(--pale);
   border-radius: 50%;
 }
+.month .day.selected.has-events .date-number {
+  background: var(--brown);
+  color: #fff;
+}
+.month .day.selected .poop-mark {
+  visibility: hidden;
+}
 .badge {
   position: absolute;
-  right: -1px;
-  top: -4px;
+  right: calc(50% - var(--month-mark-width) / 2);
+  top: calc((40px - var(--month-mark-width) * 40 / 42) / 2);
   border-radius: 50%;
   background: #ffe30b;
   color: var(--brown);
@@ -250,6 +276,10 @@ img {
   line-height: 15px;
   font-weight: 600;
   z-index: 2;
+}
+.month .day.selected .badge {
+  right: calc(50% - var(--month-selection-size) / 2);
+  top: 0;
 }
 .question {
   padding: 40px 44px 110px;
@@ -618,8 +648,9 @@ img {
     width: 34px;
     height: 34px;
   }
-  .month .day .poop-mark {
-    width: 38px;
+  .days.month {
+    --month-mark-width: 38px;
+    --month-selection-size: 34px;
   }
   .chart {
     gap: 6px;
@@ -681,6 +712,9 @@ img {
   }
   html[data-layout="desktop"] .month .day {
     height: 44px;
+  }
+  html[data-layout="desktop"] .days.month {
+    --month-selection-size: 34px;
   }
   html[data-layout="desktop"] .question {
     padding-top: 24px;
@@ -787,6 +821,9 @@ img {
   }
   html[data-layout="desktop"] .month .day {
     height: 42px;
+  }
+  html[data-layout="desktop"] .days.month {
+    --month-selection-size: 30px;
   }
   html[data-layout="desktop"] .question {
     padding-top: 16px;

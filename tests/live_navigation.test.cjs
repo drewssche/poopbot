@@ -50,7 +50,7 @@ async function boot(options = {}) {
     reveal:id=>handlers.keydown({key:"ArrowLeft",target:{closest:()=>({dataset:{event:id}})}}),
     click:async (dataset,detail=0)=>{await handlers.click({detail,preventDefault(){},target:{closest:()=>({dataset})}});await settle()},
     pointer:async (type,values={},row=null)=>{await handlers[type]({pointerId:1,isPrimary:true,button:0,
-      clientX:100,clientY:200,target:{closest:()=>row?{dataset:{event:row}}:null},...values});await settle()},
+      clientX:100,clientY:200,target:{closest:selector=>selector==='[data-event]'&&row?{dataset:{event:row}}:null},...values});await settle()},
   };
 }
 
@@ -59,6 +59,73 @@ async function swipe(a,dx,dy=0,row=null) {
   await a.pointer('pointermove',{clientX:100+dx,clientY:200+dy},row);
   await a.pointer('pointerup',{clientX:100+dx,clientY:200+dy},row);
 }
+
+const weekTarget={closest:selector=>selector==='[data-week-draggable]'?{}:null};
+async function weekSwipe(a,dx,dy=0) {
+  await a.pointer('pointerdown',{target:weekTarget});
+  await a.pointer('pointermove',{clientX:100+dx,clientY:200+dy});
+  await a.pointer('pointerup',{clientX:100+dx,clientY:200+dy});
+}
+
+test('week follows the pointer, previews correct selection/counts, reuses one read and suppresses click',async()=>{
+  const a=await boot({visual:true});a.state.data.counts['2026-10-13']=3;
+  const reads=a.reads.length;
+  await a.pointer('pointerdown',{target:weekTarget});
+  await a.pointer('pointermove',{clientX:160});
+  assert.equal(a.dragCard.style.transform,'translateX(60px)');
+  assert.match(a.neighbors[0].innerHTML,/2026-10-13, отметок: 3" aria-pressed="true"/);
+  assert.match(a.neighbors[0].innerHTML,/aria-label="Неделя"/);
+  await a.pointer('pointermove',{clientX:220});await a.pointer('pointerup',{clientX:220});
+  assert.equal(a.reads.length,reads+1);
+  assert.match(a.element.innerHTML,/2026-10-13, отметок: 3" aria-pressed="true"/);
+  assert.equal(a.attributes['data-screen'],'kind');
+  await a.click({choice:'1'},1);assert.equal(a.attributes['data-screen'],'kind');
+  await a.click({action:'calendar'});assert.match(a.element.innerHTML,/2026-10-13, отметок: 3" aria-pressed="true"/);
+  assert.equal(a.writes.length,0);
+});
+
+test('week navigation crosses months and years, selects the same weekday and feeds statistics',async()=>{
+  const a=await boot({visual:true});await a.click({date:'2026-01-02'});
+  await weekSwipe(a,120);assert.equal(a.reads.at(-1),'2025-12');
+  assert.match(a.element.innerHTML,/2025-12-26[^>]*aria-pressed="true"/);
+  await weekSwipe(a,-120);assert.equal(a.reads.at(-1),'2026-01');
+  assert.match(a.element.innerHTML,/2026-01-02[^>]*aria-pressed="true"/);
+  assert.match(a.element.innerHTML,/data-date="2025-12-29"/);
+  await a.click({action:'stats'});assert.match(a.element.innerHTML,/2025-12-29: 0/);
+});
+
+test('week bounds clamp selection to today and minimum date, with no future-week requests',async()=>{
+  const a=await boot({visual:true});await a.click({date:'2026-10-18'});
+  await weekSwipe(a,-120);assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  let reads=a.reads.length;await weekSwipe(a,-120);assert.equal(a.reads.length,reads);
+  await a.click({date:'2000-01-03'});await weekSwipe(a,120);
+  assert.match(a.element.innerHTML,/2000-01-01[^>]*aria-pressed="true"/);
+  assert.match(a.element.innerHTML,/data-date="1999-12-31"[^>]*disabled/);
+  reads=a.reads.length;await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+});
+
+test('short/vertical/cancelled week drags do not move; drafts and form area cannot be swiped',async()=>{
+  const a=await boot({visual:true});await weekSwipe(a,30);await weekSwipe(a,120,150);
+  await a.pointer('pointerdown',{target:weekTarget});await a.pointer('pointermove',{clientX:220});
+  await a.pointer('pointercancel');await settle();
+  assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  let reads=a.reads.length;await swipe(a,120);assert.equal(a.reads.length,reads);
+  await a.click({choice:'1'});reads=a.reads.length;await weekSwipe(a,120);
+  assert.equal(a.reads.length,reads);assert.equal(a.attributes['data-screen'],'feeling');
+  await a.lifecycle.back();await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+  assert.match(a.element.innerHTML,/choice selected/);
+  await a.click({action:'home'});await a.click({action:'calendar'});await a.click({edit:'1'});
+  reads=a.reads.length;await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+  assert.match(a.element.innerHTML,/2026-10-20, отметок: 1" aria-pressed="true"/);
+  assert.equal(a.writes.length,0);
+});
+
+test('failed week preview preserves the target date on retry without empty data or duplicate requests',async()=>{
+  const a=await boot({visual:true});a.state.fail=true;const reads=a.reads.length;
+  await weekSwipe(a,120);assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/offline/);
+  a.state.fail=false;await a.click({action:'retry'});
+  assert.match(a.element.innerHTML,/2026-10-13[^>]*aria-pressed="true"/);
+});
 
 test('calendar follows a held pointer and a short slow drag returns without changing selection',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});const reads=a.reads.length;

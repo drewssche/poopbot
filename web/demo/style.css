@@ -81,13 +81,15 @@ img {
   height: 80px;
   position: relative;
 }
-.app[data-screen="calendar"] {
+.app[data-screen="calendar"],
+.week-viewport[data-week-draggable] {
   touch-action: pan-y pinch-zoom;
   overflow-anchor: none;
   user-select: none;
   -webkit-user-select: none;
 }
-.date-card:has(.month) {
+.date-card:has(.month),
+.week-viewport[data-week-draggable] .date-card {
   cursor: grab;
 }
 .month-viewport {
@@ -126,7 +128,7 @@ img {
   font-size: 16px;
 }
 .month-drag-neighbor[data-preview-error] .date-card::after {
-  content: "Не удалось загрузить месяц";
+  content: "Не удалось загрузить календарь";
 }
 .app:is([data-month-motion="next"], [data-month-motion="previous"]) {
   overflow-x: clip;

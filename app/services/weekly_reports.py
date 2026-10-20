@@ -17,7 +17,8 @@ from app.services.command_message_service import set_command_message_id
 from app.services.mini_app_notifications import database_work
 from app.services.stats_common import period_to_range, previous_period_range
 from app.services.report_periods import report_period
-from app.services.weekly_report_card import project_card, render_card
+from app.services.weekly_report_card import project_card
+from app.services.report_image_cache import visual_fingerprint, shared_image
 from app.services.weekly_report_caption import build_caption
 
 log = logging.getLogger(__name__)
@@ -111,7 +112,12 @@ class ReportWorker:
             else:
                 caption = build_caption(db, row.source_chat_id, card)
             # Both projections see one database snapshot; rendering runs off-loop.
-        return row, render_card(card), caption
+        row._visual_hash = visual_fingerprint(card)
+        # The durable fingerprint avoids rendering unchanged visuals even after
+        # a restart or cache eviction. Never skip media for a new publication.
+        unchanged = row.photo_message_id and row.card_hash and row.visual_hash == row._visual_hash
+        picture = None if unchanged else shared_image(row.source_chat_id, card, row._visual_hash)
+        return row, picture, caption
 
     async def _edit(self, method, **kwargs):
         try:
@@ -138,7 +144,8 @@ class ReportWorker:
                 return
             row, picture, caption = snapshot
             revision = row.revision
-            picture_hash, caption_hash = digest(picture), digest(caption)
+            picture_hash = digest(picture) if picture is not None else row.card_hash
+            caption_hash = digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
             keyboard = debug_explain_kb(row.report_period) if row.delivery_key.startswith('debug:') else None
             parse_mode = None
@@ -160,7 +167,8 @@ class ReportWorker:
                 await self._edit(self.bot.edit_message_caption, chat_id=row.destination_chat_id,
                     message_id=row.photo_message_id, caption=caption, parse_mode=parse_mode, reply_markup=keyboard)
             await database_work(self.save_values, report_id,
-                {'photo_message_id': row.photo_message_id, 'card_hash': picture_hash, 'caption_hash': caption_hash})
+                {'photo_message_id': row.photo_message_id, 'card_hash': picture_hash,
+                 'visual_hash': row._visual_hash, 'caption_hash': caption_hash})
             # Conversion of reports published before captions were introduced.
             # IDs are recorded by the old publisher; never infer a message to delete.
             messages = json.loads(row.text_messages)

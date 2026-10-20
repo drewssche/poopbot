@@ -131,3 +131,47 @@ def test_large_caption_preserves_mentions_and_handles_unicode():
     assert caption.endswith('Полный список и отметки: /app')
     assert 'Участник 💩 & друг 0' in plain_text(caption)
     assert units(question_caption('<b>' + '💩'*2000 + '</b>')) <= 1024
+
+
+def test_seven_daily_messages_share_one_render_per_visual_change(env, monkeypatch):
+    from unittest.mock import Mock
+    from app.services import report_image_cache as cache
+    cache.clear_image_cache()
+    render = Mock(wraps=cache.renderer.render_card)
+    monkeypatch.setattr(cache.renderer, 'render_card', render)
+    factory, bot, worker = env
+    monday = DAY - timedelta(days=DAY.weekday())
+    posts = [post(factory, bot, day=monday+timedelta(days=n)) for n in range(7)]
+    assert render.call_count == 1
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=posts[0][1], user_id=1, origin_chat_id=-1, event_n=1))
+        for rid, _, _ in posts:
+            db.get(WeeklyReport, rid).revision += 1
+    for rid, _, _ in posts:
+        asyncio.run(worker.deliver(rid))
+    assert render.call_count == 2
+    assert bot.edit_message_media.await_count == 7
+    calls = [c.kwargs for c in bot.edit_message_media.await_args_list]
+    assert len({c['media'].media.data for c in calls}) == 1
+    assert len({c['media'].caption for c in calls}) == 7
+    assert {c['message_id'] for c in calls} == {mid for _, _, mid in posts}
+    assert all(worker.get(rid).revision == worker.get(rid).delivered_revision for rid, _, _ in posts)
+
+
+def test_private_caption_change_skips_render_after_cache_loss(env, monkeypatch):
+    from unittest.mock import Mock
+    from app.services import report_image_cache as cache
+    factory, bot, worker = env
+    rid, _, mid = post(factory, bot, 1)
+    cache.clear_image_cache()
+    render = Mock(side_effect=AssertionError('Caption-only refresh must not render'))
+    monkeypatch.setattr(cache.renderer, 'render_card', render)
+    with factory.begin() as db:
+        asyncio.run(edit_question(bot, db, chat_id=1, message_id=mid, text='Самочувствие?',
+                                  reply_markup=q2_keyboard(private_flow=True, event_n=1)))
+    worker = ReportWorker(bot, factory, 'unused')
+    asyncio.run(worker.deliver(rid))
+    render.assert_not_called()
+    bot.edit_message_media.assert_not_awaited()
+    assert bot.edit_message_caption.await_args.kwargs['caption'] == 'Самочувствие?'
+    assert worker.get(rid).revision == worker.get(rid).delivered_revision

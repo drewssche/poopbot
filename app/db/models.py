@@ -212,6 +212,7 @@ class WeeklyReport(Base):
     photo_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     text_messages: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     card_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    visual_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     caption_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     delivered_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

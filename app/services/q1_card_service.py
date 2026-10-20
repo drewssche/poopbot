@@ -10,7 +10,8 @@ from app.db.models import Session as DaySession, WeeklyReport
 from app.services.q1_card_state import queue_question_view, question_caption
 from app.services.scheduler_telegram import safe_edit_message_text
 from app.services.stats_common import period_to_range
-from app.services.weekly_report_card import project_card, render_card
+from app.services.weekly_report_card import project_card
+from app.services.report_image_cache import visual_fingerprint, shared_image
 
 
 async def edit_question(bot, db, *, chat_id, message_id, text, reply_markup=None, **kwargs):
@@ -33,7 +34,8 @@ async def send_question(bot, db, *, chat_id, session_id, text, reply_markup=None
             title = chat.title or 'Групповой чат'
     db.flush()
     card = project_card(db, chat_id, period.start, period.end, title, 'Текущая неделя')
-    picture = await asyncio.to_thread(render_card, card)
+    fingerprint = await asyncio.to_thread(visual_fingerprint, card)
+    picture = await asyncio.to_thread(shared_image, chat_id, card, fingerprint)
     caption = question_caption(text)
     sent = await bot.send_photo(chat_id=chat_id, photo=BufferedInputFile(picture, 'daily-week.png'),
                                 caption=caption, parse_mode='HTML', reply_markup=reply_markup,
@@ -45,6 +47,7 @@ async def send_question(bot, db, *, chat_id, session_id, text, reply_markup=None
         period_start=period.start, period_end=period.end, anchor_date=sess.session_date,
         chat_title=title, label='Текущая неделя', photo_message_id=sent.message_id,
         card_hash=sha256(picture).hexdigest(),
+        visual_hash=fingerprint,
         caption_hash=sha256(json.dumps([caption, markup], ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
         revision=1, delivered_revision=1))
     db.flush()

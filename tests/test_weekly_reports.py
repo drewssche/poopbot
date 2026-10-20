@@ -125,6 +125,29 @@ def test_quality_edit_updates_only_text_and_delete_clears_card(env):
     assert 'пока нет отметок' in bot.edit_message_media.await_args.kwargs['media'].caption
 
 
+@pytest.mark.parametrize('period', ['week', 'month', 'year'])
+def test_quality_edit_skips_render_after_restart_for_each_period(env, monkeypatch, period):
+    from app.services import report_image_cache as cache
+    from app.services.weekly_reports import enqueue_report
+    factory, bot, worker = env
+    with factory.begin() as db:
+        eid = mark(db).id
+        rid = enqueue_report(db, -1, START, period=period, chat_title='Тест').id
+    asyncio.run(worker.deliver(rid))
+    cache.clear_image_cache()
+    def forbidden_render(*args):
+        raise AssertionError('Quality-only edit must not render')
+    monkeypatch.setattr(cache.renderer, 'render_card', forbidden_render)
+    with factory.begin() as db:
+        db.get(PoopEvent, eid).bristol = 7
+        db.get(WeeklyReport, rid).revision += 1
+    worker = WeeklyReportWorker(bot, factory, 'unused')
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_caption.assert_awaited_once()
+    bot.edit_message_media.assert_not_awaited()
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+
+
 def test_new_revision_while_sending_is_not_consumed(env):
     factory, bot, worker = env
     rid = queued(factory)

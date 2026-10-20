@@ -46,6 +46,43 @@ def add_mark(db, sid):
     return row.id
 
 
+def test_daily_questions_only_refresh_their_chat_week_and_survive_rollback(pg):
+    _, factory, sid, _ = pg
+    from app.services.weekly_reports import enqueue_report
+    with factory.begin() as db:
+        tomorrow = DaySession(chat_id=-11, session_date=DAY+timedelta(days=1))
+        next_week = DaySession(chat_id=-11, session_date=DAY+timedelta(days=7))
+        foreign = DaySession(chat_id=-12, session_date=DAY)
+        db.add_all([tomorrow, next_week, foreign]); db.flush()
+        ids = []
+        for sess in [db.get(DaySession, sid), tomorrow, next_week, foreign]:
+            row = enqueue_report(db, sess.chat_id, sess.session_date, chat_title='Тест')
+            row.q1_session_id = sess.session_id
+            row.previous_period_start = row.period_start
+            ids.append(row.id)
+        tomorrow_id = tomorrow.session_id
+    def revisions():
+        with factory() as db:
+            return [db.get(WeeklyReport, rid).revision for rid in ids]
+    before = revisions()
+    with factory() as db:
+        add_mark(db, sid)
+        db.rollback()
+    assert revisions() == before
+    with factory.begin() as db:
+        eid = add_mark(db, sid)
+    after = revisions()
+    assert after[0] > before[0] and after[1] > before[1]
+    assert after[2:] == before[2:]
+    with factory.begin() as db:
+        db.get(PoopEvent, eid).bristol = 7
+    assert revisions()[0] > after[0]
+    with factory.begin() as db:
+        db.delete(db.get(DaySession, tomorrow_id))
+    with factory() as db:
+        assert db.get(WeeklyReport, ids[1]) is None
+
+
 def test_committed_triggers_cover_insert_edit_bulk_delete_restore_and_session_delete(pg):
     _, factory, sid, rid = pg
     def rev():

@@ -17,6 +17,7 @@ from app.db.runtime import get_session_factory
 from app.db.models import ChatMember, Session as DaySession, SessionMessage, SessionUserState, User
 from app.db.session import db_session
 from app.services.poop_event_service import ensure_events_count, list_events, normalize_session_user_state_to_origin_chat
+from app.services.q1_card_service import edit_question
 from app.services.q1_service import render_q1, render_q1_private, should_show_restore_streak_button
 from app.services.q2_q3_service import (
     q2_choice_from_bristol,
@@ -203,8 +204,9 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
                 if is_back_q2:
                     evt2 = events_by_n.get(selected_n)
                     active_q2 = q2_choice_from_bristol(evt2.bristol if evt2 else None)
-                    await cb.message.edit_text(
-                        render_q2_private_text(db, sess.session_id, user.id, selected_n),
+                    await edit_question(
+                        cb.bot, db, chat_id=chat_id, message_id=cb.message.message_id,
+                        text=render_q2_private_text(db, sess.session_id, user.id, selected_n),
                         reply_markup=q2_keyboard(
                             selected_choice=active_q2,
                             private_flow=True,
@@ -212,8 +214,9 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
                         ),
                     )
                 else:
-                    await cb.message.edit_text(
-                        render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=window.session_date),
+                    await edit_question(
+                        cb.bot, db, chat_id=chat_id, message_id=cb.message.message_id,
+                        text=render_q1_private(db, chat_id=chat_id, session_id=sess.session_id, user_id=user.id, session_date=window.session_date),
                         reply_markup=q1_keyboard(
                             has_any_members=True,
                             show_restore_streak_button=should_show_restore_streak_button(
@@ -248,7 +251,7 @@ async def q3_callbacks(cb: CallbackQuery) -> None:
                 db.scalar(select(func.count()).select_from(ChatMember).where(ChatMember.chat_id == chat_id))
             )
             try:
-                await cb.bot.edit_message_text(
+                await edit_question(cb.bot, db,
                     chat_id=chat_id,
                     message_id=q1_msg_id,
                     text=text,

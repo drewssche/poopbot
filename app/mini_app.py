@@ -275,6 +275,9 @@ def main():
                     historical = current_messages(db, chat, user, date.fromisoformat(changed_date))
                     known = {p['message_id'] for p in payloads}
                     payloads.extend(p for p in historical if p['message_id'] not in known)
+                from app.services.q1_card_state import queue_photo_questions
+                payloads = queue_photo_questions(db, payloads)
+                db.commit()
                 return payloads
         from app.services.mini_app_notifications import database_work
         payloads = await database_work(read_message)

@@ -51,18 +51,24 @@ def current_message(db, chat_id, user_id, changed_date=None):
     sess = db.scalar(select(DaySession).where(DaySession.chat_id == chat_id, DaySession.session_date == (changed_date or window.session_date)))
     if not sess:
         return None
+    if sess.status != 'closed' and sess.session_date != window.session_date:
+        return None
+    return session_question(db, chat, sess, user_id, window.session_date)
+
+
+def session_question(db, chat, sess, user_id, today):
+    """Render a known session, also usable during the daily rollover."""
+    chat_id = chat.chat_id
     mid = get_session_message_id(db, sess.session_id, 'Q1')
     if not mid:
         return None
     private = chat_id > 0
     closed = sess.status == 'closed'
-    if not closed and sess.session_date != window.session_date:
-        return None
     text = (render_q1_private(db, chat_id, sess.session_id, user_id, sess.session_date, closed=closed) if private
             else render_q1(db, chat_id, sess.session_id, sess.session_date, closed=closed))
     if closed:
         from app.services.restore_period_service import can_mark_closed_session
-        can_mark = can_mark_closed_session(sess, window.session_date)
+        can_mark = can_mark_closed_session(sess, today)
         text = '🔒 Сессия закрыта.\n\n' + text
         if can_mark:
             text += f"\n\nЗабыл отметиться? Можно добавить одну отметку за {sess.session_date:%d.%m} до конца {(sess.session_date + timedelta(days=1)):%d.%m}."

@@ -39,6 +39,7 @@ from app.services.reminder_service import (
     build_late_reminder_text,
 )
 from app.services.scheduler_telegram import safe_edit_message_text, safe_send_message
+from app.services.q1_card_service import edit_question, send_question
 from app.services.scheduler_scan import load_scheduler_snapshot
 from app.bot.keyboards.q1 import q1_keyboard, closed_q1_keyboard
 from app.bot.keyboards.recap import recap_announce_kb
@@ -374,8 +375,8 @@ async def _post_q1(
         if chat_id > 0
         else render_q1(db, chat_id=chat_id, session_id=session_id, session_date=session_date)
     )
-    sent = await safe_send_message(
-        bot,
+    sent = await send_question(
+        bot, db, session_id=session_id,
         chat_id=chat_id,
         text=text,
         reply_markup=q1_keyboard(
@@ -503,7 +504,7 @@ async def _lock_q1(bot: Bot, db, chat_id: int, session_id: int) -> None:
     text = f"{LOCK_LINE}\n\n{text}"
     if can_mark:
         text += f"\n\nЗабыл отметиться? Можно добавить одну отметку за {sess.session_date:%d.%m} до конца {(sess.session_date + timedelta(days=1)):%d.%m}."
-    await safe_edit_message_text(bot, chat_id=chat_id, message_id=mid, text=text,
+    await edit_question(bot, db, chat_id=chat_id, message_id=mid, text=text,
                                  reply_markup=closed_q1_keyboard() if can_mark else None)
 
 
@@ -560,8 +561,8 @@ async def _refresh_current_q1_view(bot: Bot, db, chat_id: int, session_date: dat
     show_q2_q3_button = False
     if chat is not None:
         show_q2_q3_button = not bool(chat.q2_q3_enabled)
-    await safe_edit_message_text(
-        bot,
+    await edit_question(
+        bot, db,
         chat_id=chat_id,
         message_id=q1_id,
         text=text,

@@ -27,6 +27,7 @@ from app.services.q1_service import (
 )
 from app.services.q2_q3_service import ensure_q2_q3_exist, render_q2_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
+from app.services.q1_card_service import edit_question, send_question
 from app.services.reminder_service import LATE_REMINDER_COMMAND
 from app.services.time_service import get_time_slot, get_slot_popup
 from app.services.repo_service import (
@@ -232,7 +233,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             has_any_members = True if is_private_chat else ("Участники:" in text)
             try:
                 if q1_msg_id:
-                    await cb.bot.edit_message_text(
+                    await edit_question(cb.bot, db,
                         chat_id=chat_id,
                         message_id=q1_msg_id,
                         text=text,
@@ -254,7 +255,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         ),
                     )
                 else:
-                    sent = await cb.bot.send_message(
+                    sent = await send_question(cb.bot, db, session_id=sess.session_id,
                         chat_id=chat_id,
                         text=text,
                         reply_markup=q1_keyboard(
@@ -275,6 +276,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         ),
                     )
                     set_session_message_id(db, sess.session_id, "Q1", sent.message_id)
+                    q1_msg_id = sent.message_id
             except TelegramBadRequest as e:
                 if "message is not modified" not in str(e).lower():
                     logger.exception("Failed to edit Q1 message: %s", e)
@@ -283,7 +285,7 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                 state = db.get(SessionUserState, {"session_id": sess.session_id, "user_id": user.id})
                 target_n = max(1, int(state.poops_n)) if state is not None else 1
                 try:
-                    await cb.bot.edit_message_text(
+                    await edit_question(cb.bot, db,
                         chat_id=chat_id,
                         message_id=q1_msg_id or cb.message.message_id,
                         text=render_q2_private_text(db, sess.session_id, user.id, target_n),
@@ -376,7 +378,7 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
                 q1_text = render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=sess.session_date)
                 has_any_members = "Участники:" in q1_text
                 try:
-                    await cb.bot.edit_message_text(
+                    await edit_question(cb.bot, db,
                         chat_id=chat_id,
                         message_id=get_session_message_id(db, sess.session_id, "Q1") or cb.message.message_id,
                         text=q1_text,
@@ -404,7 +406,7 @@ async def q1_open_q2_q3(cb: CallbackQuery) -> None:
             q1_id = get_session_message_id(db, sess.session_id, "Q1")
             if q1_id:
                 try:
-                    await cb.bot.edit_message_text(
+                    await edit_question(cb.bot, db,
                         chat_id=chat_id,
                         message_id=q1_id,
                         text=q1_text,

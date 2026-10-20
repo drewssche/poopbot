@@ -173,3 +173,25 @@ def test_refresh_failure_preserves_mark_without_prompting_duplicate(scenario, ca
     assert_mark(s.factory, 1, 1)
     assert s.cb.answer.await_args.args[0] == "Изменения сохранены, но сообщение не обновилось"
     assert "outcome=post_commit_error" in caplog.text
+
+
+def test_photo_question_saves_mark_and_queues_its_existing_message(scenario):
+    from app.services.weekly_reports import enqueue_report, ReportWorker
+    s = scenario
+    s.cb.bot.edit_message_media = AsyncMock()
+    s.cb.bot.edit_message_caption = AsyncMock()
+    with s.factory.begin() as db:
+        row = enqueue_report(db, -100, s.today, chat_title='Тест')
+        row.q1_session_id = 1
+        row.photo_message_id = 10
+        row.card_hash = 'previous-image'
+        row.delivered_revision = 1
+        rid = row.id
+    asyncio.run(handler.q1_callbacks(s.cb))
+    assert_mark(s.factory, 1, 1)
+    s.cb.bot.edit_message_text.assert_not_awaited()
+    s.cb.bot.send_message.assert_not_awaited()
+    worker = ReportWorker(s.cb.bot, s.factory, 'unused')
+    asyncio.run(worker.deliver(rid))
+    assert s.cb.bot.edit_message_media.await_args.kwargs['message_id'] == 10
+    assert worker.get(rid).revision == worker.get(rid).delivered_revision

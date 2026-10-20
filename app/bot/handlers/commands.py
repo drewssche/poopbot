@@ -33,6 +33,7 @@ from app.services.repo_service import (
 from app.services.app_setting_service import RESTORE_CLAIM_ENABLED_KEY, get_bool_setting
 from app.services.restore_period_service import ensure_restore_period
 from app.services.scheduler_telegram import safe_edit_message_text
+from app.services.q1_card_service import edit_question, send_question
 from app.services.time_service import get_session_window, now_in_tz
 
 router = Router()
@@ -132,8 +133,8 @@ async def start_cmd(message: Message) -> None:
                     else render_q1(db, chat_id=chat_id, session_id=sess.session_id, session_date=window.session_date)
                 )
                 has_any_members = True if is_private_chat else ("Участники:" in text)
-                await safe_edit_message_text(
-                    message.bot,
+                await edit_question(
+                    message.bot, db,
                     chat_id=chat_id,
                     message_id=q1_msg_id,
                     text=text,
@@ -187,8 +188,8 @@ async def start_cmd(message: Message) -> None:
                 recap_sent = await message.answer(recap_text, reply_markup=recap_announce_kb())
                 set_command_message_id(db, chat_id, 0, "recap_announce", window.session_date, recap_sent.message_id)
 
-        sent = await message.answer(
-            text,
+        sent = await send_question(
+            message.bot, db, chat_id=chat_id, session_id=sess.session_id, text=text,
             reply_markup=q1_keyboard(
                 has_any_members,
                 show_restore_streak_button=should_show_restore_streak_button(

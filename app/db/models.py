@@ -196,6 +196,10 @@ class WeeklyReport(Base):
     __table_args__ = (CheckConstraint("report_period IN ('week', 'month', 'year')", name='ck_report_period'),)
     report_period: Mapped[str] = mapped_column(String(8), default='week', server_default='week')
     previous_period_start: Mapped[date] = mapped_column(Date)
+    q1_session_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=True, index=True)
+    q1_flow_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    q1_flow_markup: Mapped[str | None] = mapped_column(Text, nullable=True)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     delivery_key: Mapped[str] = mapped_column(String(100), unique=True)
     source_chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), index=True)

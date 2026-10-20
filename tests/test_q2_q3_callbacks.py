@@ -78,9 +78,9 @@ def test_save_before_answer_and_continue_refresh(scenario, chat_type, answer_err
     asyncio.run(s.run(s.cb))
     assert_value(s, s.value)
     s.cb.answer.assert_awaited_once()
-    s.cb.message.edit_text.assert_awaited_once()
+    s.cb.bot.edit_message_text.assert_awaited_once()
     if chat_type != 'private':
-        s.cb.bot.edit_message_text.assert_awaited_once()
+        s.cb.message.edit_text.assert_awaited_once()
 
 
 def test_commit_failure_does_not_confirm_success(scenario):
@@ -122,4 +122,29 @@ def test_expired_navigation_answer_still_opens_next_screen(scenario, navigation)
     s.cb.answer.side_effect = TelegramBadRequest(method=AnswerCallbackQuery(callback_query_id='test'), message='query is too old')
     asyncio.run(s.run(s.cb))
     assert_value(s, None)
-    s.cb.message.edit_text.assert_awaited_once()
+    s.cb.bot.edit_message_text.assert_awaited_once()
+
+
+def test_private_photo_flow_keeps_image_and_next_question(scenario):
+    from app.services.weekly_reports import enqueue_report, ReportWorker
+    s = scenario
+    s.cb.bot.edit_message_media = AsyncMock()
+    s.cb.bot.edit_message_caption = AsyncMock()
+    with s.factory.begin() as db:
+        row = enqueue_report(db, 1, date(2026, 10, 19), chat_title='Личные отметки')
+        row.q1_session_id = 1
+        row.photo_message_id = 10
+        row.card_hash = 'previous-image'
+        row.delivered_revision = 1
+        rid = row.id
+    asyncio.run(s.run(s.cb))
+    assert_value(s, s.value)
+    s.cb.message.edit_text.assert_not_awaited()
+    s.cb.bot.edit_message_text.assert_not_awaited()
+    worker = ReportWorker(s.cb.bot, s.factory, 'unused')
+    asyncio.run(worker.deliver(rid))
+    sent = s.cb.bot.edit_message_media.await_args.kwargs
+    assert sent['message_id'] == 10
+    buttons = [b.callback_data for r in sent['reply_markup'].inline_keyboard for b in r]
+    assert any(b.startswith('q3:') if s.kind == 'q2' else b == 'q1:plus' for b in buttons)
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision

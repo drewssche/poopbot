@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import psycopg
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, InputMediaPhoto
+from aiogram.types import BufferedInputFile, InputMediaPhoto, InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.engine import make_url
 
-from app.db.models import WeeklyReport
+from app.db.models import WeeklyReport, Chat, Session as DaySession
 from app.services.command_message_service import set_command_message_id
 from app.services.mini_app_notifications import database_work
 from app.services.stats_common import period_to_range, previous_period_range
@@ -94,7 +94,22 @@ class ReportWorker:
                 return None
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
                                 row.chat_title or 'Личные отметки', row.label, period=row.report_period)
-            caption = build_caption(db, row.source_chat_id, card)
+            if row.q1_session_id is not None:
+                from app.services.mini_app_message import session_question
+                from app.services.q1_card_state import question_caption
+                from app.services.time_service import now_in_tz
+                sess = db.get(DaySession, row.q1_session_id)
+                chat = db.get(Chat, row.source_chat_id)
+                if row.q1_flow_text is not None and sess.status != 'closed':
+                    caption = row.q1_flow_text
+                    row._q1_markup = json.loads(row.q1_flow_markup)
+                else:
+                    payload = session_question(db, chat, sess, row.source_chat_id, now_in_tz(chat.timezone).date())
+                    caption = payload['text']
+                    row._q1_markup = payload['reply_markup']
+                caption = question_caption(caption)
+            else:
+                caption = build_caption(db, row.source_chat_id, card)
             # Both projections see one database snapshot; rendering runs off-loop.
         return row, render_card(card), caption
 
@@ -126,19 +141,24 @@ class ReportWorker:
             picture_hash, caption_hash = digest(picture), digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
             keyboard = debug_explain_kb(row.report_period) if row.delivery_key.startswith('debug:') else None
+            parse_mode = None
+            if row.q1_session_id is not None:
+                keyboard = InlineKeyboardMarkup(**row._q1_markup) if row._q1_markup else None
+                caption_hash = digest(json.dumps([caption, row._q1_markup], ensure_ascii=False, sort_keys=True))
+                parse_mode = 'HTML'
             if not row.photo_message_id:
                 sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
                     photo=BufferedInputFile(picture, f'{row.report_period}-report.png'), caption=caption,
-                    parse_mode=None, reply_markup=keyboard, request_timeout=20)
+                    parse_mode=parse_mode, reply_markup=keyboard, request_timeout=20)
                 row.photo_message_id = sent.message_id
             elif row.card_hash != picture_hash:
                 await self._edit(self.bot.edit_message_media, chat_id=row.destination_chat_id,
                     message_id=row.photo_message_id, reply_markup=keyboard,
                     media=InputMediaPhoto(media=BufferedInputFile(picture, f'{row.report_period}-report.png'),
-                                          caption=caption, parse_mode=None))
+                                          caption=caption, parse_mode=parse_mode))
             elif row.caption_hash != caption_hash:
                 await self._edit(self.bot.edit_message_caption, chat_id=row.destination_chat_id,
-                    message_id=row.photo_message_id, caption=caption, parse_mode=None, reply_markup=keyboard)
+                    message_id=row.photo_message_id, caption=caption, parse_mode=parse_mode, reply_markup=keyboard)
             await database_work(self.save_values, report_id,
                 {'photo_message_id': row.photo_message_id, 'card_hash': picture_hash, 'caption_hash': caption_hash})
             # Conversion of reports published before captions were introduced.

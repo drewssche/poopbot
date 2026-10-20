@@ -191,3 +191,30 @@ def test_text_chunks_preserve_html_and_telegram_utf16_limits():
         assert chunk.count('<a ') == chunk.count('</a>')
         assert len(chunk.encode('utf-16-le'))//2 <= 3500
     assert '\n'.join(chunks)+'\n' == ''.join(lines)
+
+
+def test_shrinking_old_report_reuses_extra_message_without_age_limited_deletion(env, monkeypatch):
+    factory, bot, worker = env
+    rid = queued(factory)
+    chunks = ['Первая часть', 'Вторая часть']
+    original = worker.snapshot
+    def snapshot(report_id):
+        row, picture, _ = original(report_id)
+        return row, picture, chunks[:]
+    monkeypatch.setattr(worker, 'snapshot', snapshot)
+    bot.send_message.side_effect = [SimpleNamespace(message_id=11), SimpleNamespace(message_id=12)]
+    asyncio.run(worker.deliver(rid))
+    chunks[:] = ['Итог стал короче']
+    with factory.begin() as db:
+        db.get(WeeklyReport, rid).revision += 1
+    asyncio.run(worker.deliver(rid))
+    bot.delete_message.assert_not_awaited()
+    assert bot.edit_message_text.await_args.kwargs['message_id'] == 12
+    assert 'Актуальные итоги' in bot.edit_message_text.await_args.kwargs['text']
+    chunks.append('Снова две части')
+    with factory.begin() as db:
+        db.get(WeeklyReport, rid).revision += 1
+    asyncio.run(worker.deliver(rid))
+    assert bot.send_message.await_count == 2
+    assert bot.edit_message_text.await_args.kwargs['message_id'] == 12
+    assert bot.edit_message_text.await_args.kwargs['text'] == 'Снова две части'

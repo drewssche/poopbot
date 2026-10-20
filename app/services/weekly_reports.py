@@ -158,14 +158,15 @@ class WeeklyReportWorker:
                 else:
                     continue
                 await database_work(self.save_values, report_id, {'text_messages': json.dumps(messages)})
-            while len(messages) > len(chunks):
-                try:
-                    await self.bot.delete_message(chat_id=row.destination_chat_id,
-                                                  message_id=messages[-1]['id'], request_timeout=20)
-                except TelegramBadRequest as exc:
-                    if 'message to delete not found' not in str(exc).lower():
-                        raise
-                messages.pop()
+            # Old Telegram messages may be too old to delete. Reuse extra parts
+            # instead, so shrinking a long report never leaves stale statistics.
+            placeholder = 'Отчёт обновлён. Актуальные итоги — в сообщениях выше.'
+            for n in range(len(chunks), len(messages)):
+                if messages[n]['hash'] == digest(placeholder):
+                    continue
+                await self._edit(self.bot.edit_message_text, chat_id=row.destination_chat_id,
+                                 message_id=messages[n]['id'], text=placeholder, parse_mode='HTML')
+                messages[n]['hash'] = digest(placeholder)
                 await database_work(self.save_values, report_id, {'text_messages': json.dumps(messages)})
             await database_work(self.finish, row, messages)
             log.info('Weekly report delivered id=%s revision=%s', report_id, revision)

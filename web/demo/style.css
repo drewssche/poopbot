@@ -81,6 +81,31 @@ img {
   height: 80px;
   position: relative;
 }
+.app[data-screen="calendar"] {
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.date-card:has(.month) {
+  cursor: grab;
+}
+.app:is([data-month-motion="next"], [data-month-motion="previous"]) {
+  overflow-x: clip;
+}
+.app[data-month-motion="next"] .date-card {
+  animation: month-next 220ms ease-out;
+}
+.app[data-month-motion="previous"] .date-card {
+  animation: month-previous 220ms ease-out;
+}
+@keyframes month-next {
+  from { transform: translateX(32px); opacity: 0.35; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes month-previous {
+  from { transform: translateX(-32px); opacity: 0.35; }
+  to { transform: translateX(0); opacity: 1; }
+}
 .icon-button {
   display: grid;
   place-items: center;
@@ -848,5 +873,6 @@ img {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
+    animation: none !important;
   }
 }

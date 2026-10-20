@@ -10,8 +10,11 @@ async function boot(options = {}) {
   const handlers={}, lifecycle={}, reads=[], writes=[], notices=[];
   const state={data:initial(),fail:false,hold:null,backVisible:false,...options};
   const markers=new Set(), recoveries=[];
+  const attributes={}, captured=new Set();
   const element={innerHTML:'',addEventListener:(name,fn)=>handlers[name]=fn,
-    setAttribute(){},querySelectorAll:()=>[],querySelector:()=>null};
+    setAttribute:(name,value)=>attributes[name]=value,
+    setPointerCapture:id=>captured.add(id),hasPointerCapture:id=>captured.has(id),
+    releasePointerCapture:id=>captured.delete(id),querySelectorAll:()=>[],querySelector:()=>null};
   const live={pendingIds:()=>[...markers],recoverPending:async()=>state.pendingResults||[],
     remember:id=>markers.add(id),forget:id=>markers.delete(id),
     async recoverOne(id){recoveries.push(id);if(state.recoveryError)throw state.recoveryError;
@@ -35,11 +38,71 @@ async function boot(options = {}) {
   vm.runInContext(fs.readFileSync('web/demo/model.js','utf8'),context);
   vm.runInContext(fs.readFileSync('web/demo/app.js','utf8'),context);
   await settle();
-  return {state,reads,writes,notices,element,lifecycle,document,markers,recoveries,
+  return {state,reads,writes,notices,element,lifecycle,document,markers,recoveries,attributes,captured,
     reveal:id=>handlers.keydown({key:"ArrowLeft",target:{closest:()=>({dataset:{event:id}})}}),
-    click:async dataset=>{await handlers.click({target:{closest:()=>({dataset})}});await settle()},
+    click:async (dataset,detail=0)=>{await handlers.click({detail,preventDefault(){},target:{closest:()=>({dataset})}});await settle()},
+    pointer:async (type,values={},row=null)=>{await handlers[type]({pointerId:1,isPrimary:true,button:0,
+      clientX:100,clientY:200,target:{closest:()=>row?{dataset:{event:row}}:null},...values});await settle()},
   };
 }
+
+async function swipe(a,dx,dy=0,row=null) {
+  await a.pointer('pointerdown',{},row);
+  await a.pointer('pointermove',{clientX:100+dx,clientY:200+dy},row);
+  await a.pointer('pointerup',{clientX:100+dx,clientY:200+dy},row);
+}
+
+test('calendar swipes navigate in both directions with bounds and no accidental date click',async()=>{
+  const a=await boot();await a.click({action:'calendar'});
+  await swipe(a,100);assert.equal(a.reads.at(-1),'2026-09');
+  assert.match(a.element.innerHTML,/2026-09-01[^>]*aria-pressed="true"/);
+  assert.equal(a.attributes['data-month-motion'],'previous');
+  const reads=a.reads.length;await a.click({date:'2026-09-10'},1);
+  assert.equal(a.reads.length,reads); // Generated click after dragging is consumed.
+  await swipe(a,-100);assert.equal(a.reads.at(-1),'2026-10');
+  assert.equal(a.attributes['data-month-motion'],'next');
+  const upper=a.reads.length;await swipe(a,-100);assert.equal(a.reads.length,upper);
+  await a.click({date:'2000-01-01'});const lower=a.reads.length;
+  await swipe(a,100);assert.equal(a.reads.length,lower);
+  assert.equal(a.writes.length,0);assert.equal(a.captured.size,0);
+});
+
+test('short, vertical, cancelled and secondary gestures do not change the month',async()=>{
+  const a=await boot();await a.click({action:'calendar'});const reads=a.reads.length;
+  await swipe(a,20);await swipe(a,80,100);
+  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:102,clientY:225});
+  await a.pointer('pointerup',{clientX:220,clientY:230}); // Vertical intent stays locked.
+  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:200});
+  await a.pointer('pointercancel');await a.pointer('pointerup',{clientX:200});
+  await a.pointer('pointerdown',{button:2});await a.pointer('pointerup',{clientX:200});
+  await a.pointer('pointerdown');await a.pointer('pointerdown',{pointerId:2,isPrimary:false});
+  await a.pointer('pointerup',{clientX:200});
+  assert.equal(a.reads.length,reads);assert.equal(a.captured.size,0);
+  await a.click({action:'home'});const formReads=a.reads.length;
+  await swipe(a,100);assert.equal(a.reads.length,formReads);
+});
+
+test('row drag reveals deletion without paging or opening the edit form',async()=>{
+  const a=await boot();await a.click({action:'calendar'});const reads=a.reads.length;
+  await swipe(a,-100,0,'1');
+  assert.match(a.element.innerHTML,/event revealed/);assert.equal(a.reads.length,reads);
+  await a.click({edit:'1'},1);assert.match(a.element.innerHTML,/Итоги дня/);
+  await swipe(a,100,0,'1');assert.doesNotMatch(a.element.innerHTML,/event revealed/);
+  await a.pointer('pointerdown',{},'1');await a.pointer('pointerup',{},'1');
+  await a.click({edit:'1'},1);assert.match(a.element.innerHTML,/choice selected/);
+  assert.equal(a.writes.length,0);
+});
+
+test('swipe cannot queue requests while reading; failed month stays selected on retry',async()=>{
+  const a=await boot();await a.click({action:'calendar'});let release;
+  a.state.hold=new Promise(r=>release=r);
+  const first=swipe(a,100);await settle();await settle();await settle();
+  const reads=a.reads.length;await swipe(a,100);assert.equal(a.reads.length,reads);
+  release();await first;a.state.hold=null;a.state.fail=true;
+  await swipe(a,100);assert.equal(a.reads.at(-1),'2026-08');
+  assert.match(a.element.innerHTML,/offline/);a.state.fail=false;
+  await a.click({action:'retry'});assert.equal(a.reads.at(-1),'2026-08');
+});
 
 test('bot changes appear on calendar, day, statistics and back; no idle polling',async()=>{
   const a=await boot();assert.equal(a.reads.length,1);

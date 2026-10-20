@@ -145,6 +145,8 @@
         : "дней";
   }
   function render() {
+    app.setAttribute("data-screen", screen);
+    app.setAttribute("data-month-motion", "");
     updateBackButton();
     if (live && (loading || loadError || !snapshot)) {
       app.innerHTML =
@@ -297,7 +299,27 @@
       else resolve(window.confirm("Удалить эту отметку? Статистика и серия будут пересчитаны."));
     });
   }
+  async function changeMonth(delta) {
+    if (screen !== "calendar" || saving || loading || confirming || pendingMark || loadError) return;
+    const d = M.parseDate(month + "-01");
+    d.setMonth(d.getMonth() + delta);
+    const nextMonth = M.dateKey(d).slice(0, 7);
+    if (nextMonth > today.slice(0, 7) || (live && nextMonth < "2000-01")) return;
+    month = nextMonth;
+    revealed = null;
+    if (live) {
+      selected = month === today.slice(0, 7) ? today : month + "-01";
+      if (!await refresh({followToday: false})) return;
+    } else render();
+    app.setAttribute("data-month-motion", delta > 0 ? "next" : "previous");
+  }
+  let suppressPointerClick = false;
   app.addEventListener("click", async (e) => {
+    // A completed drag must not also select the date/button under its release.
+    if (suppressPointerClick) {
+      suppressPointerClick = false;
+      if (e.detail !== 0) { e.preventDefault(); return; }
+    }
     const b = e.target.closest("button");
     if (!b || b.disabled || saving || confirming || accessBlocked) return;
     if (b.dataset.action === "retry" && live) { await startLive(); return; }
@@ -387,41 +409,57 @@
         break;
       case "previous-month":
       case "next-month": {
-        const d = M.parseDate(month + "-01");
-        d.setMonth(
-          d.getMonth() + (b.dataset.action === "previous-month" ? -1 : 1),
-        );
-        const nextMonth = M.dateKey(d).slice(0, 7);
-        if (live && (nextMonth < "2000-01" || nextMonth > today.slice(0, 7))) return;
-        month = nextMonth;
-        if (live) {
-          selected = month === today.slice(0, 7) ? today : month + "-01";
-          await refresh({followToday: false});
-        } else render();
+        await changeMonth(b.dataset.action === "previous-month" ? -1 : 1);
         break;
       }
     }
   });
   let pointer = null;
+  function resetPointer() {
+    const old = pointer;
+    pointer = null;
+    if (old && app.hasPointerCapture?.(old.pointerId)) app.releasePointerCapture(old.pointerId);
+  }
   app.addEventListener("pointerdown", (e) => {
+    resetPointer();
+    suppressPointerClick = false;
+    if (e.isPrimary === false || e.button !== 0) return;
     if (saving || loading || confirming || pendingMark || loadError) return;
     const row = e.target.closest("[data-event]");
-    pointer = row
-      ? { id: row.dataset.event, x: e.clientX, y: e.clientY }
-      : null;
+    if (!row && screen !== "calendar") return;
+    pointer = { id: row?.dataset.event, pointerId: e.pointerId,
+      x: e.clientX, y: e.clientY, axis: null, screen, month };
   });
-  app.addEventListener("pointerup", (e) => {
-    if (!pointer || saving || loading || confirming || pendingMark || loadError) return;
-    const dx = e.clientX - pointer.x,
-      dy = e.clientY - pointer.y;
-    if (Math.abs(dx) > 45 && Math.abs(dy) < 35) {
-      revealed = dx < 0 ? pointer.id : null;
-      render();
+  app.addEventListener("pointermove", (e) => {
+    if (!pointer || e.pointerId !== pointer.pointerId) return;
+    const dx = Math.abs(e.clientX - pointer.x), dy = Math.abs(e.clientY - pointer.y);
+    if (!pointer.axis) {
+      if (dy > 10 && dy >= dx) pointer.axis = "vertical";
+      else if (dx > 10 && dx > dy * 1.5) {
+        pointer.axis = "horizontal";
+        app.setPointerCapture?.(e.pointerId);
+      }
     }
-    pointer = null;
   });
-  app.addEventListener("pointercancel", () => {
-    pointer = null;
+  app.addEventListener("pointerup", async (e) => {
+    if (!pointer || e.pointerId !== pointer.pointerId) return;
+    const gesture = pointer;
+    resetPointer();
+    if (saving || loading || confirming || pendingMark || loadError ||
+        gesture.screen !== screen || gesture.month !== month || gesture.axis === "vertical") return;
+    const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
+    if (Math.abs(dx) <= 45 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+    suppressPointerClick = true;
+    if (gesture.id) {
+      revealed = dx < 0 ? gesture.id : null;
+      render();
+    } else await changeMonth(dx < 0 ? 1 : -1);
+  });
+  app.addEventListener("pointercancel", resetPointer);
+  app.addEventListener("lostpointercapture", resetPointer);
+  window.addEventListener("blur", resetPointer);
+  app.addEventListener("dragstart", (e) => {
+    if (pointer) e.preventDefault();
   });
   app.addEventListener("keydown", (e) => {
     if (saving || loading || confirming || pendingMark || loadError) return;

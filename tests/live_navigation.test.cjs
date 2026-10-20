@@ -11,10 +11,18 @@ async function boot(options = {}) {
   const state={data:initial(),fail:false,hold:null,backVisible:false,...options};
   const markers=new Set(), recoveries=[];
   const attributes={}, captured=new Set();
+  const neighbors=[], animations=[];
+  const visualElement=()=>({style:{},attributes:{},innerHTML:'',removed:false,
+    setAttribute(name,value){this.attributes[name]=value},remove(){this.removed=true},
+    animate(frames,options){animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}}}});
+  const dragCard=visualElement();
+  const viewport={querySelector:()=>dragCard,getBoundingClientRect:()=>({width:320}),
+    appendChild:e=>neighbors.push(e)};
   const element={innerHTML:'',addEventListener:(name,fn)=>handlers[name]=fn,
     setAttribute:(name,value)=>attributes[name]=value,
     setPointerCapture:id=>captured.add(id),hasPointerCapture:id=>captured.has(id),
-    releasePointerCapture:id=>captured.delete(id),querySelectorAll:()=>[],querySelector:()=>null};
+    releasePointerCapture:id=>captured.delete(id),querySelectorAll:()=>[],
+    querySelector:selector=>state.visual&&selector==='.month-viewport'?viewport:null};
   const live={pendingIds:()=>[...markers],recoverPending:async()=>state.pendingResults||[],
     remember:id=>markers.add(id),forget:id=>markers.delete(id),
     async recoverOne(id){recoveries.push(id);if(state.recoveryError)throw state.recoveryError;
@@ -28,8 +36,8 @@ async function boot(options = {}) {
     async create(body){writes.push(structuredClone(body));state.onCreate?.();if(state.writeError)throw state.writeError;return {}},
   };
   const document={documentElement:{dataset:{mode:'live'}},visibilityState:'visible',
-    getElementById:id=>id==='app'?element:{textContent:''},addEventListener:(name,fn)=>lifecycle[name]=fn};
-  const window={PoopLive:live,matchMedia:()=>({matches:true}),scrollTo(){},alert:t=>notices.push(t),
+    createElement:visualElement,getElementById:id=>id==='app'?element:{textContent:''},addEventListener:(name,fn)=>lifecycle[name]=fn};
+  const window={PoopLive:live,matchMedia:q=>({matches:q.includes('reduced-motion')?Boolean(state.reducedMotion):true}),scrollTo(){},alert:t=>notices.push(t),
     addEventListener:(name,fn)=>lifecycle[name]=fn,confirm:()=>state.confirm??false,
     Telegram:{WebApp:{platform:'tdesktop',onEvent:(name,fn)=>lifecycle[name]=fn,
       BackButton:{onClick:fn=>lifecycle.back=fn,show(){state.backVisible=true},hide(){state.backVisible=false}}}}};
@@ -38,7 +46,7 @@ async function boot(options = {}) {
   vm.runInContext(fs.readFileSync('web/demo/model.js','utf8'),context);
   vm.runInContext(fs.readFileSync('web/demo/app.js','utf8'),context);
   await settle();
-  return {state,reads,writes,notices,element,lifecycle,document,markers,recoveries,attributes,captured,
+  return {state,reads,writes,notices,element,lifecycle,document,markers,recoveries,attributes,captured,dragCard,neighbors,animations,
     reveal:id=>handlers.keydown({key:"ArrowLeft",target:{closest:()=>({dataset:{event:id}})}}),
     click:async (dataset,detail=0)=>{await handlers.click({detail,preventDefault(){},target:{closest:()=>({dataset})}});await settle()},
     pointer:async (type,values={},row=null)=>{await handlers[type]({pointerId:1,isPrimary:true,button:0,
@@ -51,6 +59,88 @@ async function swipe(a,dx,dy=0,row=null) {
   await a.pointer('pointermove',{clientX:100+dx,clientY:200+dy},row);
   await a.pointer('pointerup',{clientX:100+dx,clientY:200+dy},row);
 }
+
+test('calendar follows a held pointer and a short slow drag returns without changing selection',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});const reads=a.reads.length;
+  await a.pointer('pointerdown',{timeStamp:1000});
+  await a.pointer('pointermove',{clientX:140,timeStamp:1200});
+  assert.equal(a.dragCard.style.transform,'translateX(40px)');
+  assert.equal(a.neighbors[0].style.transform,'translateX(-280px)');
+  await a.pointer('pointermove',{clientX:165,timeStamp:1400});
+  assert.equal(a.dragCard.style.transform,'translateX(65px)');
+  assert.equal(a.reads.length,reads+1); // One preview, not one request per movement.
+  assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  await a.pointer('pointerup',{clientX:165,timeStamp:1600});
+  assert.equal(a.dragCard.style.transform,'');assert.equal(a.neighbors[0].removed,true);
+  assert.equal(a.animations[0].frames.at(-1).transform,'translateX(0px)');
+  assert.match(a.element.innerHTML,/октябрь/);assert.equal(a.reads.length,reads+1);
+  assert.equal(a.writes.length,0);
+});
+
+test('a committed drag reuses the preview response and slides both cards to their destination',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});const reads=a.reads.length;
+  await swipe(a,120);
+  assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/сентябрь/);
+  assert.equal(a.animations[0].frames.at(-1).transform,'translateX(320px)');
+  assert.equal(a.animations[1].frames.at(-1).transform,'translateX(0px)');
+  assert.equal(a.attributes['data-month-motion'],''); // No second entry animation.
+  assert.equal(a.captured.size,0);assert.equal(a.attributes['data-month-drag'],'');
+});
+
+test('fast flick commits, but holding a short drag or reversing it returns to the current month',async()=>{
+  for(const [releaseTime,expected] of [[1020,'сентябрь'],[1300,'октябрь']]){
+    const a=await boot({visual:true});await a.click({action:'calendar'});
+    await a.pointer('pointerdown',{timeStamp:1000});
+    await a.pointer('pointermove',{clientX:135,timeStamp:1010});
+    await a.pointer('pointerup',{clientX:135,timeStamp:releaseTime});
+    assert.match(a.element.innerHTML,new RegExp(expected));
+  }
+  const a=await boot({visual:true});await a.click({action:'calendar'});
+  await a.pointer('pointerdown',{timeStamp:1000});
+  await a.pointer('pointermove',{clientX:220,timeStamp:1100});
+  await a.pointer('pointermove',{clientX:130,timeStamp:1120});
+  await a.pointer('pointerup',{clientX:130,timeStamp:1130});
+  assert.match(a.element.innerHTML,/октябрь/);
+});
+
+test('calendar boundary resists dragging without requesting a future month',async()=>{
+  const a=await boot({visual:true,reducedMotion:true});await a.click({action:'calendar'});
+  const reads=a.reads.length;await a.pointer('pointerdown');
+  await a.pointer('pointermove',{clientX:0});
+  assert.equal(a.dragCard.style.transform,'translateX(-22px)');
+  assert.equal(a.reads.length,reads);assert.equal(a.neighbors.length,0);
+  await a.pointer('pointerup',{clientX:0});
+  assert.match(a.element.innerHTML,/октябрь/);assert.equal(a.animations[0].options.duration,0);
+});
+
+test('changing drag direction loads each neighbor once; cancellation restores the current card',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});await a.click({date:'2026-09-01'});
+  const reads=a.reads.length;await a.pointer('pointerdown');
+  for(const x of [200,0,200,0])await a.pointer('pointermove',{clientX:x});
+  assert.equal(a.reads.length,reads+2);assert.equal(a.neighbors.length,2);
+  await a.pointer('pointercancel');await settle();
+  assert.match(a.element.innerHTML,/сентябрь/);assert.equal(a.dragCard.style.transform,'');
+  assert.ok(a.neighbors.every(n=>n.removed));assert.equal(a.captured.size,0);
+});
+
+test('a failed preview shows an error on commit rather than an empty history or another request',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});a.state.fail=true;
+  const reads=a.reads.length;await swipe(a,120);
+  assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/offline/);
+  assert.doesNotMatch(a.element.innerHTML,/Нет отметок/);
+  a.state.fail=false;await a.click({action:'retry'});assert.equal(a.reads.at(-1),'2026-09');
+});
+
+test('a late preview cannot replace the visible month after the app is hidden',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});let release;
+  a.state.hold=new Promise(r=>release=r);
+  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:220});
+  assert.equal(a.attributes['data-month-drag'],'true');
+  a.document.visibilityState='hidden';a.lifecycle.visibilitychange();
+  assert.equal(a.attributes['data-month-drag'],'');assert.equal(a.captured.size,0);
+  release();await settle();await settle();
+  assert.match(a.element.innerHTML,/октябрь/);assert.ok(a.neighbors.every(n=>n.removed));
+});
 
 test('calendar swipes navigate in both directions with bounds and no accidental date click',async()=>{
   const a=await boot();await a.click({action:'calendar'});

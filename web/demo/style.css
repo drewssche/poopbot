@@ -83,11 +83,50 @@ img {
 }
 .app[data-screen="calendar"] {
   touch-action: pan-y pinch-zoom;
+  overflow-anchor: none;
   user-select: none;
   -webkit-user-select: none;
 }
 .date-card:has(.month) {
   cursor: grab;
+}
+.month-viewport {
+  position: relative;
+  overflow-x: clip;
+}
+.month-drag-neighbor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+}
+.app[data-month-drag="true"] .month-viewport,
+.app[data-month-drag="true"] .month-viewport * {
+  cursor: grabbing;
+}
+.app[data-month-drag="true"] .month-viewport > .date-card,
+.month-drag-neighbor {
+  will-change: transform;
+}
+.month-drag-neighbor .date-card {
+  position: relative;
+}
+.date-card[data-preview-pending] .days {
+  visibility: hidden;
+}
+.date-card[data-preview-pending]::after {
+  content: "Загрузка…";
+  position: absolute;
+  top: 55%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 16px;
+}
+.month-drag-neighbor[data-preview-error] .date-card::after {
+  content: "Не удалось загрузить месяц";
 }
 .app:is([data-month-motion="next"], [data-month-motion="previous"]) {
   overflow-x: clip;

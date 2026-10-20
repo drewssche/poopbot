@@ -28,6 +28,8 @@
     activeRequest = null,
     saving = false,
     confirming = false,
+    settlingMonth = false,
+    calendarDrag = null,
     accessBlocked = false,
     retryFollowToday = true,
     pendingMark = null;
@@ -90,33 +92,33 @@
   function header() {
     return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><img src="${assetRoot}assets/logo.svg" alt="PoopCheck" width="203" height="47"></div></header>`;
   }
-  function dayButton(date, full) {
-    const n = count(date),
-      active = date === selected,
+  function dayButton(date, full, selection = selected, counts = null) {
+    const n = counts ? counts[date] || 0 : count(date),
+      active = date === selection,
       future = date > today;
     return `<button class="day ${n ? "has-events" : ""} ${active ? "selected" : ""}" data-date="${date}" aria-label="${date}${n ? ", отметок: " + n : ""}" aria-pressed="${active}" ${future ? "disabled" : ""}>${full ? `${n ? '<span class="poop-mark" aria-hidden="true"></span>' : ""}<span class="date-number">${Number(date.slice(-2))}</span>${n > 1 ? `<span class="badge">${n}</span>` : ""}` : `<span class="day-circle">${Number(date.slice(-2))}</span>`}</button>`;
   }
-  function calendar(full) {
+  function calendar(full, key = month, selection = selected, counts = null, pending = false) {
     let days = "";
-    const date = M.parseDate(selected);
+    const date = M.parseDate(selection);
     let weekday = (date.getDay() + 6) % 7;
     if (full) {
-      const start = month + "-01",
+      const start = key + "-01",
         offset = (M.parseDate(start).getDay() + 6) % 7,
         total = new Date(
-          Number(month.slice(0, 4)),
-          Number(month.slice(5)),
+          Number(key.slice(0, 4)),
+          Number(key.slice(5)),
           0,
         ).getDate();
       days = "<span></span>".repeat(offset);
       for (let i = 1; i <= total; i++)
-        days += dayButton(month + "-" + String(i).padStart(2, "0"), true);
+        days += dayButton(key + "-" + String(i).padStart(2, "0"), true, selection, counts);
     } else {
-      const monday = M.addDays(selected, -weekday);
+      const monday = M.addDays(selection, -weekday);
       for (let i = 0; i < 7; i++)
         days += dayButton(M.addDays(monday, i), false);
     }
-    return `<section class="date-card" aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц" ${live && month <= "2000-01" ? "disabled" : ""}>${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(month)}</button><button data-action="next-month" aria-label="Следующий месяц" ${month >= today.slice(0, 7) ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selected.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
+    return `<section class="date-card" ${pending ? 'data-preview-pending="true"' : ""} aria-label="${full ? "Календарь" : "Неделя"}"><div class="date-heading">${full ? `<div class="month-nav"><button data-action="previous-month" aria-label="Предыдущий месяц" ${live && key <= "2000-01" ? "disabled" : ""}>${icon("left")}</button><button class="month-label" data-action="week" aria-label="Показать неделю">${monthName(key)}</button><button data-action="next-month" aria-label="Следующий месяц" ${key >= today.slice(0, 7) ? "disabled" : ""}>${icon("right")}</button></div>` : `<button class="month-button" data-action="calendar" aria-label="Открыть календарь">${monthName(selection.slice(0, 7))}${icon("down")}</button>`}<button class="icon-button" data-action="stats" aria-label="Статистика">${icon("stats")}</button></div><div class="weekdays" aria-hidden="true">${["пн", "вт", "ср", "чт", "пт", "сб", "вс"].map((d, i) => `<span class="${i === weekday ? "weekday-selected" : ""}">${d}</span>`).join("")}</div><div class="days ${full ? "month" : ""}">${days}</div></section>`;
   }
   function question() {
     const kind = screen === "kind",
@@ -127,7 +129,7 @@
     const rows = events
       .filter((e) => e.date === selected)
       .sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
-    return `${calendar(true)}<section class="history"><h1>Итоги дня:</h1>${rows.length ? rows.map((e) => `<article class="event ${revealed === e.id ? "revealed" : ""}" data-event="${esc(e.id)}"><button class="delete" data-delete="${esc(e.id)}" aria-label="Удалить запись ${esc(e.time || "время не указано")}" ${revealed !== e.id ? 'tabindex="-1" aria-hidden="true"' : ""}>${icon("trash")}</button><div class="event-content"><div><time>${[e.date.slice(8), e.date.slice(5, 7), e.date.slice(2, 4)].join(".")} ${esc(e.time || "время не указано")}</time><div class="description">${esc([M.kinds[e.kind] || "Консистенция не указана", M.feelings[e.feeling]?.toLowerCase() || "ощущения не указаны"].join(", "))}</div></div><button class="edit" data-edit="${esc(e.id)}" aria-label="Изменить запись ${esc(e.time || "время не указано")}">${icon("edit")}</button></div></article>`).join("") : '<div class="empty">Нет отметок</div>'}</section>`;
+    return `<div class="month-viewport">${calendar(true)}</div><section class="history"><h1>Итоги дня:</h1>${rows.length ? rows.map((e) => `<article class="event ${revealed === e.id ? "revealed" : ""}" data-event="${esc(e.id)}"><button class="delete" data-delete="${esc(e.id)}" aria-label="Удалить запись ${esc(e.time || "время не указано")}" ${revealed !== e.id ? 'tabindex="-1" aria-hidden="true"' : ""}>${icon("trash")}</button><div class="event-content"><div><time>${[e.date.slice(8), e.date.slice(5, 7), e.date.slice(2, 4)].join(".")} ${esc(e.time || "время не указано")}</time><div class="description">${esc([M.kinds[e.kind] || "Консистенция не указана", M.feelings[e.feeling]?.toLowerCase() || "ощущения не указаны"].join(", "))}</div></div><button class="edit" data-edit="${esc(e.id)}" aria-label="Изменить запись ${esc(e.time || "время не указано")}">${icon("edit")}</button></div></article>`).join("") : '<div class="empty">Нет отметок</div>'}</section>`;
   }
   function statistics() {
     const s = live ? snapshot.stats : M.stats(events),
@@ -145,6 +147,7 @@
         : "дней";
   }
   function render() {
+    clearCalendarDrag();
     app.setAttribute("data-screen", screen);
     app.setAttribute("data-month-motion", "");
     updateBackButton();
@@ -168,7 +171,7 @@
   }
   function updateBackButton() {
     try {
-      if (loading || saving || confirming || pendingMark || loadError || (screen === "kind" && !draft)) tg?.BackButton.hide();
+      if (loading || saving || confirming || settlingMonth || pendingMark || loadError || (screen === "kind" && !draft)) tg?.BackButton.hide();
       else tg?.BackButton.show();
     } catch {}
   }
@@ -187,7 +190,7 @@
     window.scrollTo(0, 0);
   }
   async function back() {
-    if (saving || loading || confirming || pendingMark || loadError) return;
+    if (saving || loading || confirming || settlingMonth || pendingMark || loadError) return;
     if (screen === "feeling") {
       go("kind");
       return;
@@ -299,19 +302,23 @@
       else resolve(window.confirm("Удалить эту отметку? Статистика и серия будут пересчитаны."));
     });
   }
-  async function changeMonth(delta) {
-    if (screen !== "calendar" || saving || loading || confirming || pendingMark || loadError) return;
+  function adjacentMonth(delta) {
     const d = M.parseDate(month + "-01");
     d.setMonth(d.getMonth() + delta);
-    const nextMonth = M.dateKey(d).slice(0, 7);
-    if (nextMonth > today.slice(0, 7) || (live && nextMonth < "2000-01")) return;
+    const key = M.dateKey(d).slice(0, 7);
+    return key > today.slice(0, 7) || (live && key < "2000-01") ? null : key;
+  }
+  async function changeMonth(delta, {prepared = null, animate = true} = {}) {
+    if (screen !== "calendar" || saving || loading || confirming || pendingMark || loadError) return;
+    const nextMonth = adjacentMonth(delta);
+    if (!nextMonth) return;
     month = nextMonth;
     revealed = null;
+    selected = month === today.slice(0, 7) ? today : month + "-01";
     if (live) {
-      selected = month === today.slice(0, 7) ? today : month + "-01";
-      if (!await refresh({followToday: false})) return;
+      if (!await refresh({followToday: false, prepared})) return;
     } else render();
-    app.setAttribute("data-month-motion", delta > 0 ? "next" : "previous");
+    if (animate) app.setAttribute("data-month-motion", delta > 0 ? "next" : "previous");
   }
   let suppressPointerClick = false;
   app.addEventListener("click", async (e) => {
@@ -321,7 +328,7 @@
       if (e.detail !== 0) { e.preventDefault(); return; }
     }
     const b = e.target.closest("button");
-    if (!b || b.disabled || saving || confirming || accessBlocked) return;
+    if (!b || b.disabled || saving || confirming || settlingMonth || accessBlocked) return;
     if (b.dataset.action === "retry" && live) { await startLive(); return; }
     if (pendingMark) {
       const retry = pendingMark.action === "delete"
@@ -414,6 +421,93 @@
       }
     }
   });
+  // The adjacent card is a read-only preview. Its response is reused on commit;
+  // moving the pointer never starts repeated requests or changes selected data.
+  function clearCalendarDrag(keep = null) {
+    const drag = calendarDrag;
+    calendarDrag = null;
+    settlingMonth = false;
+    if (!drag) return;
+    for (const animation of drag.animations) animation.cancel();
+    drag.card.style.transform = "";
+    for (const neighbor of drag.neighbors.values()) {
+      if (neighbor !== keep) neighbor.controller?.abort();
+      neighbor.element.remove();
+    }
+    app.setAttribute("data-month-drag", "");
+  }
+  function dragNeighbor(drag, delta) {
+    const key = adjacentMonth(delta);
+    if (!key) return null;
+    if (drag.neighbors.has(delta)) return drag.neighbors.get(delta);
+    const element = document.createElement("div");
+    element.className = "month-drag-neighbor";
+    element.setAttribute("aria-hidden", "true");
+    element.setAttribute("inert", "");
+    const selection = key === today.slice(0, 7) ? today : key + "-01";
+    element.innerHTML = calendar(true, key, selection, live ? {} : null, Boolean(live));
+    drag.viewport.appendChild(element);
+    const neighbor = {element, month: key, controller: live ? new AbortController() : null};
+    drag.neighbors.set(delta, neighbor);
+    if (live) {
+      const timeout = setTimeout(() => neighbor.controller.abort(), 15000);
+      neighbor.promise = live.read(key, neighbor.controller.signal).then(data => {
+        if (calendarDrag === drag) element.innerHTML = calendar(true, key, selection, data.counts);
+        return data;
+      }).finally(() => clearTimeout(timeout));
+      // Cancellation or an unavailable preview must never produce an unhandled rejection.
+      neighbor.promise.catch(() => {
+        if (calendarDrag === drag) element.setAttribute("data-preview-error", "true");
+      });
+    }
+    return neighbor;
+  }
+  function moveCalendarDrag(dx) {
+    if (!calendarDrag) {
+      const viewport = app.querySelector(".month-viewport"), card = viewport?.querySelector(".date-card");
+      if (!card) return;
+      app.setAttribute("data-month-motion", "");
+      calendarDrag = {viewport, card, width: viewport.getBoundingClientRect().width,
+        offset: 0, neighbors: new Map(), animations: []};
+      app.setAttribute("data-month-drag", "true");
+    }
+    const drag = calendarDrag, delta = dx < 0 ? 1 : -1;
+    const neighbor = dragNeighbor(drag, delta);
+    drag.delta = delta;
+    drag.offset = neighbor ? Math.max(-drag.width, Math.min(drag.width, dx))
+      : Math.sign(dx) * Math.min(Math.abs(dx) * 0.22, drag.width * 0.15);
+    drag.card.style.transform = `translateX(${drag.offset}px)`;
+    for (const [direction, entry] of drag.neighbors) {
+      entry.element.style.visibility = direction === delta ? "visible" : "hidden";
+      entry.element.style.transform = `translateX(${drag.offset + direction * drag.width}px)`;
+    }
+  }
+  async function finishCalendarDrag(commit, delta) {
+    const drag = calendarDrag;
+    if (!drag) { if (commit) await changeMonth(delta); return; }
+    settlingMonth = true;
+    updateBackButton();
+    const neighbor = drag.neighbors.get(delta), target = commit ? -delta * drag.width : 0;
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200;
+    const slide = (element, from, to) => {
+      const animation = element.animate?.([{transform: `translateX(${from}px)`},
+        {transform: `translateX(${to}px)`}], {duration, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards"});
+      if (animation) { drag.animations.push(animation); return animation.finished.catch(() => {}); }
+      element.style.transform = `translateX(${to}px)`;
+    };
+    await Promise.all([slide(drag.card, drag.offset, target),
+      neighbor && slide(neighbor.element, drag.offset + delta * drag.width, target + delta * drag.width)]);
+    if (calendarDrag !== drag) return;
+    if (commit) {
+      // Keep the incoming card visible while its data arrives, rather than
+      // snapping back to the outgoing month or displaying a false empty month.
+      if (neighbor?.promise) await neighbor.promise.catch(() => {});
+      if (calendarDrag !== drag) return;
+      clearCalendarDrag(neighbor);
+      await changeMonth(delta, {prepared: neighbor, animate: false});
+    } else clearCalendarDrag();
+    updateBackButton();
+  }
   let pointer = null;
   function resetPointer() {
     const old = pointer;
@@ -421,14 +515,17 @@
     if (old && app.hasPointerCapture?.(old.pointerId)) app.releasePointerCapture(old.pointerId);
   }
   app.addEventListener("pointerdown", (e) => {
+    if (settlingMonth) return;
     resetPointer();
+    clearCalendarDrag();
     suppressPointerClick = false;
     if (e.isPrimary === false || e.button !== 0) return;
-    if (saving || loading || confirming || pendingMark || loadError) return;
+    if (saving || loading || confirming || settlingMonth || pendingMark || loadError) return;
     const row = e.target.closest("[data-event]");
     if (!row && screen !== "calendar") return;
     pointer = { id: row?.dataset.event, pointerId: e.pointerId,
-      x: e.clientX, y: e.clientY, axis: null, screen, month };
+      x: e.clientX, y: e.clientY, lastX: e.clientX, lastTime: e.timeStamp,
+      velocity: 0, axis: null, screen, month };
   });
   app.addEventListener("pointermove", (e) => {
     if (!pointer || e.pointerId !== pointer.pointerId) return;
@@ -440,6 +537,11 @@
         app.setPointerCapture?.(e.pointerId);
       }
     }
+    const elapsed = e.timeStamp - pointer.lastTime;
+    if (elapsed > 0) pointer.velocity = (e.clientX - pointer.lastX) / elapsed;
+    pointer.lastX = e.clientX;
+    pointer.lastTime = e.timeStamp;
+    if (pointer.axis === "horizontal" && !pointer.id) moveCalendarDrag(e.clientX - pointer.x);
   });
   app.addEventListener("pointerup", async (e) => {
     if (!pointer || e.pointerId !== pointer.pointerId) return;
@@ -448,21 +550,38 @@
     if (saving || loading || confirming || pendingMark || loadError ||
         gesture.screen !== screen || gesture.month !== month || gesture.axis === "vertical") return;
     const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
-    if (Math.abs(dx) <= 45 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
-    suppressPointerClick = true;
     if (gesture.id) {
+      if (Math.abs(dx) <= 45 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+      suppressPointerClick = true;
       revealed = dx < 0 ? gesture.id : null;
       render();
-    } else await changeMonth(dx < 0 ? 1 : -1);
+    } else {
+      const horizontal = gesture.axis === "horizontal" || (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.5);
+      if (!horizontal) { clearCalendarDrag(); return; }
+      suppressPointerClick = true;
+      moveCalendarDrag(dx);
+      const delta = dx < 0 ? 1 : -1, width = calendarDrag?.width || 320;
+      const fast = Math.abs(dx) >= 24 && e.timeStamp - gesture.lastTime < 100 &&
+        Math.sign(gesture.velocity) === Math.sign(dx) && Math.abs(gesture.velocity) >= 0.5;
+      const commit = Boolean(adjacentMonth(delta)) && (Math.abs(dx) >= Math.max(48, width * 0.24) || fast);
+      await finishCalendarDrag(commit, delta);
+    }
   });
-  app.addEventListener("pointercancel", resetPointer);
-  app.addEventListener("lostpointercapture", resetPointer);
-  window.addEventListener("blur", resetPointer);
+  function cancelPointer(e) {
+    if (!pointer || (e && e.pointerId !== pointer.pointerId)) return;
+    if (pointer.axis === "horizontal") suppressPointerClick = true;
+    resetPointer();
+    finishCalendarDrag(false, calendarDrag?.delta || 1);
+  }
+  app.addEventListener("pointercancel", cancelPointer);
+  app.addEventListener("lostpointercapture", cancelPointer);
+  window.addEventListener("blur", () => { resetPointer(); clearCalendarDrag(); updateBackButton(); });
+  window.addEventListener("resize", () => { resetPointer(); clearCalendarDrag(); updateBackButton(); });
   app.addEventListener("dragstart", (e) => {
     if (pointer) e.preventDefault();
   });
   app.addEventListener("keydown", (e) => {
-    if (saving || loading || confirming || pendingMark || loadError) return;
+    if (saving || loading || confirming || settlingMonth || pendingMark || loadError) return;
     const row = e.target.closest("[data-event]");
     if (row && e.key === "ArrowLeft") {
       revealed = row.dataset.event;
@@ -470,6 +589,7 @@
       app.querySelector(`[data-delete="${revealed}"]`)?.focus();
     }
     if (e.key === "Escape") {
+      resetPointer();
       revealed = null;
       render();
     }
@@ -481,7 +601,7 @@
     if (tg?.isVersionAtLeast?.("6.2")) tg.showAlert(text);
     else window.alert(text);
   }
-  async function refresh({followToday = true} = {}) {
+  async function refresh({followToday = true, prepared = null} = {}) {
     if (!live || accessBlocked) return false;
     retryFollowToday = followToday;
     const number = ++requestNumber;
@@ -495,7 +615,7 @@
     try {
       // Follow today across midnight only when no unfinished form is bound to it.
       const requestedMonth = !snapshot || (followToday && !draft && selected === today) ? null : month;
-      const data = await live.read(requestedMonth, controller.signal);
+      const data = await (prepared?.month === requestedMonth ? prepared.promise : live.read(requestedMonth, controller.signal));
       if (number !== requestNumber) return;
       const oldToday = today;
       today = data.today;
@@ -551,7 +671,12 @@
     }
   }
   function resume() {
-    if (document.visibilityState !== "visible" || accessBlocked || confirming) return;
+    if (document.visibilityState !== "visible") {
+      resetPointer();
+      clearCalendarDrag();
+      return;
+    }
+    if (accessBlocked || confirming || settlingMonth || pointer) return;
     if (live && !saving && !loading && (pendingMark || loadError || live.pendingIds().length)) {
       startLive();
       return;

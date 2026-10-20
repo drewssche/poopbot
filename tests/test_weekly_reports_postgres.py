@@ -127,3 +127,46 @@ def test_listener_recovers_jobs_and_reacts_to_commits_without_idle_queries(pg):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('period,anchor,previous_day,current_day,future_day', [
+    ('month', date(2026, 3, 15), date(2026, 2, 1), date(2026, 3, 31), date(2026, 4, 1)),
+    ('year', date(2024, 10, 1), date(2023, 1, 1), date(2024, 2, 29), date(2025, 1, 1)),
+])
+def test_calendar_invalidation_spans_previous_period_and_all_changes(pg, period, anchor, previous_day, current_day, future_day):
+    from app.services.weekly_reports import enqueue_report
+    _, factory, _, _ = pg
+    with factory.begin() as db:
+        row = enqueue_report(db, -11, anchor, period=period, scheduled=True, chat_title='Тест')
+        rid = row.id
+    def revision():
+        with factory() as db:
+            return db.get(WeeklyReport, rid).revision
+    # This comparison date is much older than the old seven-day invalidation window.
+    with factory.begin() as db:
+        other = DaySession(chat_id=-12, session_date=previous_day)
+        db.add(other); db.flush()
+        db.add(PoopEvent(session_id=other.session_id, user_id=11, origin_chat_id=-12, event_n=1))
+    assert revision() > 1
+    old = revision()
+    with factory.begin() as db:
+        current = DaySession(chat_id=-11, session_date=current_day)
+        db.add(current); db.flush(); sid = current.session_id
+        eid = add_mark(db, sid)
+    assert revision() > old; old = revision()
+    with factory.begin() as db:
+        db.get(PoopEvent, eid).bristol = 7
+    assert revision() > old; old = revision()
+    with factory.begin() as db:
+        db.execute(delete(PoopEvent).where(PoopEvent.id == eid))
+    assert revision() > old; old = revision()
+    with factory.begin() as db:
+        add_mark(db, sid)
+    assert revision() > old; old = revision()
+    with factory.begin() as db:
+        db.delete(db.get(DaySession, sid))
+    assert revision() > old; old = revision()
+    with factory.begin() as db:
+        future = DaySession(chat_id=-11, session_date=future_day)
+        db.add(future); db.flush(); add_mark(db, future.session_id)
+    assert revision() == old

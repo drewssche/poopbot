@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, date, time
 from sqlalchemy import (
     BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, Integer,
-    String, Text, Time, UniqueConstraint, PrimaryKeyConstraint
+    String, Text, Time, UniqueConstraint, PrimaryKeyConstraint, CheckConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -191,8 +191,11 @@ class MiniAppRequest(Base):
 
 
 class WeeklyReport(Base):
-    """One durable delivery target and revision for a weekly card with a short caption."""
+    """Shared report outbox; the table name is kept for existing backups and IDs."""
     __tablename__ = "weekly_reports"
+    __table_args__ = (CheckConstraint("report_period IN ('week', 'month', 'year')", name='ck_report_period'),)
+    report_period: Mapped[str] = mapped_column(String(8), default='week', server_default='week')
+    previous_period_start: Mapped[date] = mapped_column(Date)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     delivery_key: Mapped[str] = mapped_column(String(100), unique=True)
     source_chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), index=True)

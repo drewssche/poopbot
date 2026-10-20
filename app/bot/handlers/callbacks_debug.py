@@ -14,7 +14,6 @@ from app.db.runtime import get_session_factory
 from app.db.session import db_session
 from app.services.reminder_service import build_late_reminder_text
 from app.services.repo_service import get_or_create_session, get_session_message_id, upsert_chat
-from app.services.scheduler_reports import build_periodic_report_text
 from app.services.stats_service import build_stats_raw_debug_text
 from app.services.time_service import get_session_window, now_in_tz
 from app.services.q1_service import render_q1
@@ -163,21 +162,11 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             await _send_output(cb, mode, text, explain_action=action, parse_mode="HTML", reply_to_message_id=q1_msg_id or None)
             return True
 
-        if action == "week":
-            from app.services.weekly_reports import enqueue_weekly_report
-            enqueue_weekly_report(db, chat_id, window.session_date,
-                                  label="Превью" if mode == "preview" else None,
-                                  chat_title=cb.message.chat.title if chat_id < 0 else "Личные отметки")
-            return True
-
-        if action == "month":
-            text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="month", title="📉 Итоги месяца")
-            await _send_output(cb, mode, text, explain_action=action)
-            return True
-
-        if action == "year":
-            text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="year", title="📉 Итоги года")
-            await _send_output(cb, mode, text, explain_action=action)
+        if action in {"week", "month", "year"}:
+            from app.services.weekly_reports import enqueue_report
+            enqueue_report(db, chat_id, window.session_date, period=action,
+                           label="Превью" if mode == "preview" else None,
+                           chat_title=cb.message.chat.title if chat_id < 0 else "Личные отметки")
             return True
 
         if action == "stats_raw":

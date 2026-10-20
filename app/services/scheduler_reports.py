@@ -162,13 +162,8 @@ async def send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> N
     async def _send(kind: str, period: str, title: str, anchor_date: date) -> None:
         if _already_sent(kind, anchor_date):
             return
-        if period == "week":
-            from app.services.weekly_reports import enqueue_weekly_report
-            enqueue_weekly_report(db, chat_id, anchor_date, scheduled=True)
-            return
-        text = build_periodic_report_text(db, chat_id=chat_id, local_date=anchor_date, period=period, title=title)
-        sent = await safe_send_message(bot, chat_id=chat_id, text=text)
-        set_command_message_id(db, chat_id, 0, kind, anchor_date, sent.message_id)
+        from app.services.weekly_reports import enqueue_report
+        enqueue_report(db, chat_id, anchor_date, period=period, scheduled=True)
 
     for kind, period, title in periodic_reports_due(report_for_date):
         await _send(kind, period, title, report_for_date)

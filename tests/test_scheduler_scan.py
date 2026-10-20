@@ -177,10 +177,10 @@ def test_all_due_reports_sent_once(setup, monkeypatch, today, kinds):
     monkeypatch.setattr(scheduler_reports, "safe_send_message", send)
     asyncio.run(scheduler._tick(None, factory, 0))
     asyncio.run(scheduler._tick(None, factory, 0))
-    assert send.await_count == len(kinds - {"weekly_stats"})
+    send.assert_not_awaited()
     from app.db.models import WeeklyReport
     with factory() as db:
-        assert len(db.scalars(select(WeeklyReport)).all()) == int("weekly_stats" in kinds)
+        assert len(db.scalars(select(WeeklyReport)).all()) == len(kinds)
     with db_session(factory) as db:
         assert set(db.scalars(select(CommandMessage.command))) == kinds
 

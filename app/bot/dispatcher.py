@@ -227,9 +227,9 @@ async def _run_bot(settings, bot, session_factory):
         telegram_guard_loop(bot, settings, lambda: last_received_ts)
     )
 
-    from app.services.weekly_reports import WeeklyReportWorker
+    from app.services.weekly_reports import ReportWorker
     weekly_reports_task = asyncio.create_task(
-        WeeklyReportWorker(bot, session_factory, settings.database_url, settings.bot_owner_id).run()
+        ReportWorker(bot, session_factory, settings.database_url, settings.bot_owner_id).run()
     )
     logging.getLogger(__name__).info("Bot started")
     polling_task = asyncio.create_task(dp.start_polling(bot, close_bot_session=False))

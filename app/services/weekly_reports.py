@@ -1,4 +1,4 @@
-"""Durable weekly-card delivery and refresh, woken by committed PostgreSQL changes."""
+"""Durable calendar-report delivery and refresh, woken by committed PostgreSQL changes."""
 import asyncio
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -15,7 +15,8 @@ from sqlalchemy.engine import make_url
 from app.db.models import WeeklyReport
 from app.services.command_message_service import set_command_message_id
 from app.services.mini_app_notifications import database_work
-from app.services.stats_common import period_to_range
+from app.services.stats_common import period_to_range, previous_period_range
+from app.services.report_periods import report_period
 from app.services.weekly_report_card import project_card, render_card
 from app.services.weekly_report_caption import build_caption
 
@@ -27,23 +28,32 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def enqueue_weekly_report(db, chat_id, anchor, *, destination=None, label=None, scheduled=False, chat_title=None):
-    period = period_to_range(anchor, 'week')
-    key = f'periodic:{chat_id}:{period.end}' if scheduled else f'debug:{uuid4()}'
+def enqueue_report(db, chat_id, anchor, *, period='week', destination=None, label=None,
+                   scheduled=False, chat_title=None):
+    spec = report_period(period)
+    current = period_to_range(anchor, period)
+    previous = previous_period_range(anchor, period)
+    # Keep legacy weekly keys so a restart/upgrade cannot publish them twice.
+    prefix = 'periodic' if period == 'week' else f'periodic:{period}'
+    key = f'{prefix}:{chat_id}:{current.end}' if scheduled else f'debug:{uuid4()}'
     existing = db.scalar(select(WeeklyReport).where(WeeklyReport.delivery_key == key))
     if existing:
         return existing
     row = WeeklyReport(delivery_key=key, source_chat_id=chat_id,
                        destination_chat_id=destination if destination is not None else chat_id,
-                       period_start=period.start, period_end=period.end, anchor_date=anchor,
+                       report_period=period, previous_period_start=previous.start,
+                       period_start=current.start, period_end=current.end, anchor_date=anchor,
                        chat_title=chat_title, label=label)
     db.add(row)
     db.flush()
     if scheduled:
-        # The durable outbox owns delivery from now on. Zero is a pending marker,
-        # replaced with the actual photo message ID once delivery succeeds.
-        set_command_message_id(db, chat_id, 0, 'weekly_stats', period.end, 0)
+        # The durable outbox owns delivery; replace the pending marker after sending.
+        set_command_message_id(db, chat_id, 0, spec.command, current.end, 0)
     return row
+
+
+def enqueue_weekly_report(db, chat_id, anchor, **kwargs):
+    return enqueue_report(db, chat_id, anchor, period='week', **kwargs)
 
 
 
@@ -51,7 +61,7 @@ def digest(value):
     return sha256(value.encode() if isinstance(value, str) else value).hexdigest()
 
 
-class WeeklyReportWorker:
+class ReportWorker:
     def __init__(self, bot, factory, database_url, owner_id=None):
         self.bot, self.factory, self.database_url, self.owner_id = bot, factory, database_url, owner_id
         self.wake = asyncio.Event()
@@ -83,7 +93,7 @@ class WeeklyReportWorker:
             if row is None or row.disabled or row.revision <= row.delivered_revision:
                 return None
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
-                                row.chat_title or 'Личные отметки', row.label)
+                                row.chat_title or 'Личные отметки', row.label, period=row.report_period)
             caption = build_caption(db, row.source_chat_id, card)
             # Both projections see one database snapshot; rendering runs off-loop.
         return row, render_card(card), caption
@@ -115,16 +125,16 @@ class WeeklyReportWorker:
             revision = row.revision
             picture_hash, caption_hash = digest(picture), digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
-            keyboard = debug_explain_kb('week') if row.delivery_key.startswith('debug:') else None
+            keyboard = debug_explain_kb(row.report_period) if row.delivery_key.startswith('debug:') else None
             if not row.photo_message_id:
                 sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
-                    photo=BufferedInputFile(picture, 'weekly-report.png'), caption=caption,
+                    photo=BufferedInputFile(picture, f'{row.report_period}-report.png'), caption=caption,
                     parse_mode=None, reply_markup=keyboard, request_timeout=20)
                 row.photo_message_id = sent.message_id
             elif row.card_hash != picture_hash:
                 await self._edit(self.bot.edit_message_media, chat_id=row.destination_chat_id,
                     message_id=row.photo_message_id, reply_markup=keyboard,
-                    media=InputMediaPhoto(media=BufferedInputFile(picture, 'weekly-report.png'),
+                    media=InputMediaPhoto(media=BufferedInputFile(picture, f'{row.report_period}-report.png'),
                                           caption=caption, parse_mode=None))
             elif row.caption_hash != caption_hash:
                 await self._edit(self.bot.edit_message_caption, chat_id=row.destination_chat_id,
@@ -147,15 +157,15 @@ class WeeklyReportWorker:
                 messages.pop(0)
                 await database_work(self.save_values, report_id, {'text_messages': json.dumps(messages)})
             await database_work(self.finish, row)
-            log.info('Weekly report delivered id=%s revision=%s', report_id, revision)
+            log.info('Calendar report delivered id=%s revision=%s', report_id, revision)
         except Exception as exc:
             # Never log full API exceptions: they can include private report content.
-            log.warning('Weekly report failed id=%s error=%s', report_id, type(exc).__name__)
+            log.warning('Calendar report failed id=%s error=%s', report_id, type(exc).__name__)
             notify = await database_work(self.failed, report_id, revision, exc)
             if notify and self.owner_id:
                 try:
                     await self.bot.send_message(chat_id=self.owner_id,
-                        text=f'⚠️ Не удалось обновить недельный отчёт №{report_id}. '
+                        text=f'⚠️ Не удалось обновить отчёт №{report_id}. '
                              'Задание сохранено. Требуется проверка журнала бота.', request_timeout=15)
                 except Exception:
                     log.warning('Could not notify owner about weekly report id=%s', report_id)
@@ -169,7 +179,7 @@ class WeeklyReportWorker:
             db.execute(update(WeeklyReport).where(WeeklyReport.id == snapshot.id).values(
                 delivered_revision=snapshot.revision, attempts=0, retry_at=None, last_error=None))
             if snapshot.delivery_key.startswith('periodic:'):
-                set_command_message_id(db, snapshot.source_chat_id, 0, 'weekly_stats',
+                set_command_message_id(db, snapshot.source_chat_id, 0, report_period(snapshot.report_period).command,
                                        snapshot.period_end, snapshot.photo_message_id)
 
     def failed(self, report_id, revision, exc):
@@ -226,7 +236,7 @@ class WeeklyReportWorker:
                         async for _ in conn.notifies():
                             self.wake.set()
                     tasks = [asyncio.create_task(listen()), asyncio.create_task(self.drain())]
-                    log.info('Weekly report listener ready')
+                    log.info('Calendar report listener ready')
                     try:
                         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                         for task in done:
@@ -239,9 +249,13 @@ class WeeklyReportWorker:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning('Weekly report listener reconnecting: %s', type(exc).__name__)
+                log.warning('Calendar report listener reconnecting: %s', type(exc).__name__)
             finally:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.sleep(10)
+
+
+# Existing operator scripts keep working while all periods share one worker.
+WeeklyReportWorker = ReportWorker

@@ -83,16 +83,7 @@ def build_periodic_report_text(db, chat_id: int, local_date: date, period: str, 
         return f"- Место чата среди чатов: #{curr_rank} из {total_chats} ({trend} к прошлому периоду)"
 
     is_private = chat_id > 0
-    report_user_id = None
-    if is_private:
-        report_user_id = db.scalar(
-            select(ChatMember.user_id)
-            .where(ChatMember.chat_id == chat_id)
-            .order_by(ChatMember.joined_at.asc())
-            .limit(1)
-        )
-        if report_user_id is None:
-            report_user_id = chat_id
+    report_user_id = chat_id if is_private else None
     curr_r = period_to_range(local_date, period)
     prev_r = previous_period_range(local_date, period)
 
@@ -170,6 +161,10 @@ async def send_periodic_stats(bot: Bot, db, chat_id: int, local_date: date) -> N
 
     async def _send(kind: str, period: str, title: str, anchor_date: date) -> None:
         if _already_sent(kind, anchor_date):
+            return
+        if period == "week":
+            from app.services.weekly_reports import enqueue_weekly_report
+            enqueue_weekly_report(db, chat_id, anchor_date, scheduled=True)
             return
         text = build_periodic_report_text(db, chat_id=chat_id, local_date=anchor_date, period=period, title=title)
         sent = await safe_send_message(bot, chat_id=chat_id, text=text)

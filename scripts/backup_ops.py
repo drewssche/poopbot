@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 DB_CONTAINER = "poopbot-db-1"
 TABLES = ("alembic_version", "chats", "users", "chat_members", "sessions",
           "session_messages", "user_streaks", "user_global_streaks",
-          "session_user_state", "poop_events", "rate_limits", "command_messages", "app_settings", "mini_app_requests")
+          "session_user_state", "poop_events", "rate_limits", "command_messages", "app_settings", "mini_app_requests", "weekly_reports")
 
 
 class BackupError(RuntimeError):
@@ -30,7 +30,7 @@ class BackupError(RuntimeError):
 
 def metrics_sql(tables=None):
     tables = TABLES if tables is None else tuple(tables)
-    if set(tables) not in (set(TABLES), set(TABLES) - {"mini_app_requests"}):
+    if set(tables) not in (set(TABLES), set(TABLES) - {"weekly_reports"}, set(TABLES) - {"mini_app_requests", "weekly_reports"}):
         raise BackupError("unsupported manifest table set")
     # Hash multisets of complete rows, including disputed historical records.
     # Both sides use UTC and the same PostgreSQL image. No personal data is logged.
@@ -287,7 +287,7 @@ class Operations:
                         source.close()
             self.stage = "data_validation"
             metrics = json.loads(run(psql_args(name, user, database) +
-                                     ["-c", "SET TIME ZONE 'UTC'; " + metrics_sql(manifest["metrics"] if manifest else [t for t in TABLES if t != "mini_app_requests"])]))
+                                     ["-c", "SET TIME ZONE 'UTC'; " + metrics_sql(manifest["metrics"] if manifest else [t for t in TABLES if t not in {"mini_app_requests", "weekly_reports"}])]))
             if manifest is not None and metrics != manifest["metrics"]:
                 raise BackupError("restored rows differ from the original snapshot")
             if metrics["alembic_version"]["rows"] != 1:

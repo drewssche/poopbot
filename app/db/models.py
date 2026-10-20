@@ -188,3 +188,27 @@ class MiniAppRequest(Base):
     notify_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     notify_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class WeeklyReport(Base):
+    """One durable delivery target and revision for a weekly card + full report."""
+    __tablename__ = "weekly_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    delivery_key: Mapped[str] = mapped_column(String(100), unique=True)
+    source_chat_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), index=True)
+    destination_chat_id: Mapped[int] = mapped_column(BigInteger)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    anchor_date: Mapped[date] = mapped_column(Date)
+    chat_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    photo_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    text_messages: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    card_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    delivered_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    last_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

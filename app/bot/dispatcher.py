@@ -227,13 +227,17 @@ async def _run_bot(settings, bot, session_factory):
         telegram_guard_loop(bot, settings, lambda: last_received_ts)
     )
 
+    from app.services.weekly_reports import WeeklyReportWorker
+    weekly_reports_task = asyncio.create_task(
+        WeeklyReportWorker(bot, session_factory, settings.database_url, settings.bot_owner_id).run()
+    )
     logging.getLogger(__name__).info("Bot started")
     polling_task = asyncio.create_task(dp.start_polling(bot, close_bot_session=False))
-    tasks = [polling_task, connectivity_guard_task, hb_task, heartbeat_file_task]
+    tasks = [polling_task, connectivity_guard_task, hb_task, heartbeat_file_task, weekly_reports_task]
     if handled_rate_task is not None:
         tasks.append(handled_rate_task)
     try:
-        done, _ = await asyncio.wait({polling_task, connectivity_guard_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({polling_task, connectivity_guard_task, weekly_reports_task}, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
     finally:

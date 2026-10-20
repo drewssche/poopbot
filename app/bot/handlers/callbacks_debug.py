@@ -164,8 +164,10 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
             return True
 
         if action == "week":
-            text = build_periodic_report_text(db, chat_id=chat_id, local_date=window.session_date, period="week", title="📉 Итоги недели")
-            await _send_output(cb, mode, text, explain_action=action)
+            from app.services.weekly_reports import enqueue_weekly_report
+            enqueue_weekly_report(db, chat_id, window.session_date,
+                                  label="Превью" if mode == "preview" else None,
+                                  chat_title=cb.message.chat.title if chat_id < 0 else "Личные отметки")
             return True
 
         if action == "month":

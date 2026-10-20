@@ -161,7 +161,7 @@ def render_card(card: WeeklyCard) -> bytes:
         if n < len(shown)-1:
             draw.line((48, y+52, 792, y+52), fill='#eee8e3')
     if extra:
-        text(48, 790+rows*61, f'И ещё {extra} {plural(extra, "участник", "участника", "участников")} · полный отчёт ниже', 20, MUTED)
+        text(48, 790+rows*61, f'И ещё {extra} {plural(extra, "участник", "участника", "участников")} · подробнее в /stats', 20, MUTED)
     draw.line((48, footer_y, 792, footer_y), fill='#eee8e3')
     text(48, footer_y+22, 'Личная история' if card.private else 'Отметки этого чата', 18, MUTED)
     text(792, footer_y+22, '@poopcheck_bot', 18, MUTED, anchor='rt')

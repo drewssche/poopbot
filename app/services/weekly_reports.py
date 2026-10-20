@@ -17,6 +17,7 @@ from app.services.command_message_service import set_command_message_id
 from app.services.mini_app_notifications import database_work
 from app.services.stats_common import period_to_range
 from app.services.weekly_report_card import project_card, render_card
+from app.services.weekly_report_caption import build_caption
 
 log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 8
@@ -40,24 +41,10 @@ def enqueue_weekly_report(db, chat_id, anchor, *, destination=None, label=None, 
     db.flush()
     if scheduled:
         # The durable outbox owns delivery from now on. Zero is a pending marker,
-        # replaced with the actual text message ID once delivery succeeds.
+        # replaced with the actual photo message ID once delivery succeeds.
         set_command_message_id(db, chat_id, 0, 'weekly_stats', period.end, 0)
     return row
 
-
-def split_report(text, limit=3500):
-    """Keep report HTML links intact: its formatting is confined to individual lines."""
-    chunks, current = [], ''
-    for line in text.splitlines(keepends=True):
-        if len(line.encode('utf-16-le')) // 2 > limit:
-            raise ValueError('Report line exceeds Telegram limit')
-        if current and len((current + line).encode('utf-16-le')) // 2 > limit:
-            chunks.append(current.rstrip())
-            current = ''
-        current += line
-    if current.strip():
-        chunks.append(current.rstrip())
-    return chunks
 
 
 def digest(value):
@@ -89,7 +76,6 @@ class WeeklyReportWorker:
             db.execute(update(WeeklyReport).where(WeeklyReport.id == report_id).values(**values))
 
     def snapshot(self, report_id):
-        from app.services.scheduler_reports import build_periodic_report_text
         with self.factory() as db:
             if db.get_bind().dialect.name == 'postgresql':
                 db.connection(execution_options={'isolation_level': 'REPEATABLE READ'})
@@ -98,12 +84,9 @@ class WeeklyReportWorker:
                 return None
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
                                 row.chat_title or 'Личные отметки', row.label)
-            text = build_periodic_report_text(db, row.source_chat_id, row.anchor_date, 'week', '📉 Итоги недели')
-            if row.label:
-                text = f'{row.label}\n\n{text}'
+            caption = build_caption(db, row.source_chat_id, card)
             # Both projections see one database snapshot; rendering runs off-loop.
-            chunks = split_report(text)
-        return row, render_card(card), chunks
+        return row, render_card(card), caption
 
     async def _edit(self, method, **kwargs):
         try:
@@ -128,47 +111,42 @@ class WeeklyReportWorker:
             snapshot = await database_work(self.snapshot, report_id)
             if snapshot is None:
                 return
-            row, picture, chunks = snapshot
+            row, picture, caption = snapshot
             revision = row.revision
-            picture_hash = digest(picture)
-            if not row.photo_message_id:
-                sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
-                    photo=BufferedInputFile(picture, 'weekly-report.png'), request_timeout=20)
-                row.photo_message_id = sent.message_id
-                await database_work(self.save_values, report_id,
-                                    {'photo_message_id': sent.message_id, 'card_hash': picture_hash})
-            elif row.card_hash != picture_hash:
-                await self._edit(self.bot.edit_message_media, chat_id=row.destination_chat_id,
-                    message_id=row.photo_message_id,
-                    media=InputMediaPhoto(media=BufferedInputFile(picture, 'weekly-report.png')))
-                await database_work(self.save_values, report_id, {'card_hash': picture_hash})
-            messages = json.loads(row.text_messages)
+            picture_hash, caption_hash = digest(picture), digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
             keyboard = debug_explain_kb('week') if row.delivery_key.startswith('debug:') else None
-            for n, chunk in enumerate(chunks):
-                text_hash = digest(chunk)
-                if n >= len(messages):
-                    sent = await self.bot.send_message(chat_id=row.destination_chat_id, text=chunk,
-                                                      parse_mode='HTML', reply_markup=keyboard, request_timeout=20)
-                    messages.append({'id': sent.message_id, 'hash': text_hash})
-                elif messages[n]['hash'] != text_hash:
-                    await self._edit(self.bot.edit_message_text, chat_id=row.destination_chat_id,
-                                     message_id=messages[n]['id'], text=chunk, parse_mode='HTML', reply_markup=keyboard)
-                    messages[n]['hash'] = text_hash
-                else:
-                    continue
+            if not row.photo_message_id:
+                sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
+                    photo=BufferedInputFile(picture, 'weekly-report.png'), caption=caption,
+                    parse_mode=None, reply_markup=keyboard, request_timeout=20)
+                row.photo_message_id = sent.message_id
+            elif row.card_hash != picture_hash:
+                await self._edit(self.bot.edit_message_media, chat_id=row.destination_chat_id,
+                    message_id=row.photo_message_id, reply_markup=keyboard,
+                    media=InputMediaPhoto(media=BufferedInputFile(picture, 'weekly-report.png'),
+                                          caption=caption, parse_mode=None))
+            elif row.caption_hash != caption_hash:
+                await self._edit(self.bot.edit_message_caption, chat_id=row.destination_chat_id,
+                    message_id=row.photo_message_id, caption=caption, parse_mode=None, reply_markup=keyboard)
+            await database_work(self.save_values, report_id,
+                {'photo_message_id': row.photo_message_id, 'card_hash': picture_hash, 'caption_hash': caption_hash})
+            # Conversion of reports published before captions were introduced.
+            # IDs are recorded by the old publisher; never infer a message to delete.
+            messages = json.loads(row.text_messages)
+            while messages:
+                message_id = messages[0]['id']
+                try:
+                    await self.bot.delete_message(chat_id=row.destination_chat_id, message_id=message_id, request_timeout=20)
+                except TelegramBadRequest as exc:
+                    if "message can't be deleted" in str(exc).lower():
+                        await self._edit(self.bot.edit_message_text, chat_id=row.destination_chat_id,
+                            message_id=message_id, text='Отчёт объединён с карточкой выше.', parse_mode=None)
+                    elif 'message to delete not found' not in str(exc).lower():
+                        raise
+                messages.pop(0)
                 await database_work(self.save_values, report_id, {'text_messages': json.dumps(messages)})
-            # Old Telegram messages may be too old to delete. Reuse extra parts
-            # instead, so shrinking a long report never leaves stale statistics.
-            placeholder = 'Отчёт обновлён. Актуальные итоги — в сообщениях выше.'
-            for n in range(len(chunks), len(messages)):
-                if messages[n]['hash'] == digest(placeholder):
-                    continue
-                await self._edit(self.bot.edit_message_text, chat_id=row.destination_chat_id,
-                                 message_id=messages[n]['id'], text=placeholder, parse_mode='HTML')
-                messages[n]['hash'] = digest(placeholder)
-                await database_work(self.save_values, report_id, {'text_messages': json.dumps(messages)})
-            await database_work(self.finish, row, messages)
+            await database_work(self.finish, row)
             log.info('Weekly report delivered id=%s revision=%s', report_id, revision)
         except Exception as exc:
             # Never log full API exceptions: they can include private report content.
@@ -185,14 +163,14 @@ class WeeklyReportWorker:
     def save_values(self, report_id, values):
         self.save(report_id, **values)
 
-    def finish(self, snapshot, messages):
+    def finish(self, snapshot):
         with self.factory.begin() as db:
             # Do not consume revisions committed while Telegram was being updated.
             db.execute(update(WeeklyReport).where(WeeklyReport.id == snapshot.id).values(
                 delivered_revision=snapshot.revision, attempts=0, retry_at=None, last_error=None))
-            if snapshot.delivery_key.startswith('periodic:') and messages:
+            if snapshot.delivery_key.startswith('periodic:'):
                 set_command_message_id(db, snapshot.source_chat_id, 0, 'weekly_stats',
-                                       snapshot.period_end, messages[0]['id'])
+                                       snapshot.period_end, snapshot.photo_message_id)
 
     def failed(self, report_id, revision, exc):
         permanent = isinstance(exc, TelegramForbiddenError) or (

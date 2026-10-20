@@ -15,10 +15,19 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import load_settings
 from app.db.base import Base
 from app.db.models import Chat, PoopEvent, Session as DaySession, User, WeeklyReport
-from app.services.scheduler_reports import build_periodic_report_text
+from app.services.weekly_report_caption import build_caption
 from app.services.stats_common import period_to_range
 from app.services.weekly_report_card import project_card, render_card
-from app.services.weekly_reports import WeeklyReportWorker, enqueue_weekly_report, split_report
+from app.services.weekly_reports import WeeklyReportWorker, enqueue_weekly_report
+
+
+def worker_caption(factory, rid, explanation):
+    with factory() as db:
+        row = db.get(WeeklyReport, rid)
+        card = project_card(db, row.source_chat_id, row.period_start, row.period_end, row.chat_title, row.label)
+        caption = build_caption(db, row.source_chat_id, card)
+    value = caption + '\n\n' + explanation
+    return value if len(value.encode('utf-16-le'))//2 <= 1024 else caption
 
 
 async def main(source_chat):
@@ -33,7 +42,7 @@ async def main(source_chat):
     results = []
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode='HTML'))
     try:
-        await bot.send_message(owner, 'Проверка недельных карточек. Первые три — снимки реальных данных '
+        await bot.send_message(owner, 'Обновлённая проверка: карточка и итоги теперь в одном сообщении. Первые три — снимки реальных данных '
             '(личка, группа и превью текущей недели). Затем четыре демонстрации обновления той же карточки: '
             'добавление, редактирование, удаление и восстановление. Демонстрационные отметки существуют '
             'только в памяти этого теста и не меняют историю бота.')
@@ -52,16 +61,14 @@ async def main(source_chat):
                     period = period_to_range(anchor, 'week')
                     card = project_card(db, cid, period.start, period.end,
                                         group.title if cid < 0 else 'Личные отметки', label)
-                    report = build_periodic_report_text(db, cid, anchor, 'week', '📉 Итоги недели')
+                    caption = build_caption(db, cid, card)
             sent = await bot.send_photo(owner, BufferedInputFile(render_card(card), 'weekly-report.png'),
-                                        caption='Тестовый снимок реальных данных. История не изменена.')
-            for chunk in split_report(label+'\n\n'+report):
-                await bot.send_message(owner, chunk)
+                                        caption=caption, parse_mode=None)
             results.append({'scenario': label, 'photo': sent.message_id, 'total': card.total})
         worker = WeeklyReportWorker(bot, factory, 'unused')
         for index, (kind, explanation) in enumerate([
             ('добавление', 'Добавление: было 1, стало 2 отметки. Появился жёлтый счётчик.'),
-            ('редактирование', 'Редактирование: количество осталось 1. Консистенция и самочувствие изменены в текстовом отчёте.'),
+            ('редактирование', 'Редактирование: количество осталось 1. Консистенция и самочувствие изменены в подписи.'),
             ('удаление', 'Удаление последней отметки: было 1, стало 0. День снова пустой.'),
             ('восстановление', 'Восстановление пропущенного дня: было 0, стало 1. День появился в календаре.'),
         ]):
@@ -100,12 +107,12 @@ async def main(source_chat):
             if after.delivered_revision != after.revision or after.photo_message_id != before.photo_message_id:
                 raise RuntimeError(f'Demo refresh failed: {kind}')
             await bot.edit_message_caption(chat_id=owner, message_id=after.photo_message_id,
-                                           caption='Тест выполнен. '+explanation+' Обновлено прежнее сообщение.')
+                                           caption=worker_caption(factory, rid, explanation), parse_mode=None)
             results.append({'scenario': kind, 'photo': after.photo_message_id,
                             'same_message': True, 'image_changed': before.card_hash != after.card_hash})
         await bot.send_message(owner, 'Проверка завершена: 7 карточек. В четырёх демонстрациях обновились '
             'прежние сообщения, новых копий при изменении отметок не создавалось. '
-            'При редактировании качества отметки изменился только текст — количество на карточке осталось прежним. '
+            'При редактировании качества отметки изменилась только подпись — количество на карточке осталось прежним. '
             'Эти тестовые снимки больше автоматически обновляться не будут.')
         print(json.dumps(results, ensure_ascii=False))
     finally:

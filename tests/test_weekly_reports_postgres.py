@@ -100,7 +100,7 @@ def test_previous_week_affects_trend_but_future_marks_do_not(pg):
 def test_listener_recovers_jobs_and_reacts_to_commits_without_idle_queries(pg):
     engine, factory, sid, rid = pg
     bot = SimpleNamespace(**{name: AsyncMock(return_value=SimpleNamespace(message_id=10 if name == 'send_photo' else 11))
-        for name in ('send_photo', 'send_message', 'edit_message_media', 'edit_message_text', 'delete_message')})
+        for name in ('send_photo', 'send_message', 'edit_message_media', 'edit_message_text', 'edit_message_caption', 'delete_message')})
     worker = WeeklyReportWorker(bot, factory, URL)
     async def wait_for(predicate):
         async with asyncio.timeout(8):
@@ -114,6 +114,7 @@ def test_listener_recovers_jobs_and_reacts_to_commits_without_idle_queries(pg):
                 add_mark(db, sid)
             await wait_for(lambda: worker.get(rid).delivered_revision == worker.get(rid).revision)
             bot.send_photo.assert_awaited_once()
+            bot.send_message.assert_not_awaited()
             bot.edit_message_media.assert_awaited_once()
             await asyncio.sleep(1.1)  # Let the final drain finish.
             statements = []

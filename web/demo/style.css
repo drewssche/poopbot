@@ -160,6 +160,7 @@ img {
   top: 21px;
 }
 .brand {
+  padding: 0;
   position: absolute;
   left: 50%;
   top: 12px;

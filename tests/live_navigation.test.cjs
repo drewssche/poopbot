@@ -16,7 +16,7 @@ async function boot(options = {}) {
     setAttribute(name,value){this.attributes[name]=value},remove(){this.removed=true},
     animate(frames,options){animations.push({frames,options});return {finished:Promise.resolve(),cancel(){}}}});
   const dragCard=visualElement();
-  const viewport={querySelector:()=>dragCard,getBoundingClientRect:()=>({width:320}),
+  const viewport={querySelector:()=>dragCard,getBoundingClientRect:()=>({width:state.width||320}),
     appendChild:e=>neighbors.push(e)};
   const element={innerHTML:'',addEventListener:(name,fn)=>handlers[name]=fn,
     setAttribute:(name,value)=>attributes[name]=value,
@@ -75,7 +75,7 @@ test('week follows the pointer, previews correct selection/counts, reuses one re
   assert.equal(a.dragCard.style.transform,'translateX(60px)');
   assert.match(a.neighbors[0].innerHTML,/2026-10-13, отметок: 3" aria-pressed="true"/);
   assert.match(a.neighbors[0].innerHTML,/aria-label="Неделя"/);
-  await a.pointer('pointermove',{clientX:220});await a.pointer('pointerup',{clientX:220});
+  await a.pointer('pointermove',{clientX:280});await a.pointer('pointerup',{clientX:280});
   assert.equal(a.reads.length,reads+1);
   assert.match(a.element.innerHTML,/2026-10-13, отметок: 3" aria-pressed="true"/);
   assert.equal(a.attributes['data-screen'],'kind');
@@ -86,9 +86,9 @@ test('week follows the pointer, previews correct selection/counts, reuses one re
 
 test('week navigation crosses months and years, selects the same weekday and feeds statistics',async()=>{
   const a=await boot({visual:true});await a.click({date:'2026-01-02'});
-  await weekSwipe(a,120);assert.equal(a.reads.at(-1),'2025-12');
+  await weekSwipe(a,180);assert.equal(a.reads.at(-1),'2025-12');
   assert.match(a.element.innerHTML,/2025-12-26[^>]*aria-pressed="true"/);
-  await weekSwipe(a,-120);assert.equal(a.reads.at(-1),'2026-01');
+  await weekSwipe(a,-180);assert.equal(a.reads.at(-1),'2026-01');
   assert.match(a.element.innerHTML,/2026-01-02[^>]*aria-pressed="true"/);
   assert.match(a.element.innerHTML,/data-date="2025-12-29"/);
   await a.click({action:'stats'});assert.match(a.element.innerHTML,/2025-12-29: 0/);
@@ -96,33 +96,33 @@ test('week navigation crosses months and years, selects the same weekday and fee
 
 test('week bounds clamp selection to today and minimum date, with no future-week requests',async()=>{
   const a=await boot({visual:true});await a.click({date:'2026-10-18'});
-  await weekSwipe(a,-120);assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
-  let reads=a.reads.length;await weekSwipe(a,-120);assert.equal(a.reads.length,reads);
-  await a.click({date:'2000-01-03'});await weekSwipe(a,120);
+  await weekSwipe(a,-180);assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  let reads=a.reads.length;await weekSwipe(a,-180);assert.equal(a.reads.length,reads);
+  await a.click({date:'2000-01-03'});await weekSwipe(a,180);
   assert.match(a.element.innerHTML,/2000-01-01[^>]*aria-pressed="true"/);
   assert.match(a.element.innerHTML,/data-date="1999-12-31"[^>]*disabled/);
-  reads=a.reads.length;await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+  reads=a.reads.length;await weekSwipe(a,180);assert.equal(a.reads.length,reads);
 });
 
 test('short/vertical/cancelled week drags do not move; drafts and form area cannot be swiped',async()=>{
-  const a=await boot({visual:true});await weekSwipe(a,30);await weekSwipe(a,120,150);
-  await a.pointer('pointerdown',{target:weekTarget});await a.pointer('pointermove',{clientX:220});
+  const a=await boot({visual:true});await weekSwipe(a,30);await weekSwipe(a,180,150);
+  await a.pointer('pointerdown',{target:weekTarget});await a.pointer('pointermove',{clientX:280});
   await a.pointer('pointercancel');await settle();
   assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
-  let reads=a.reads.length;await swipe(a,120);assert.equal(a.reads.length,reads);
-  await a.click({choice:'1'});reads=a.reads.length;await weekSwipe(a,120);
+  let reads=a.reads.length;await swipe(a,180);assert.equal(a.reads.length,reads);
+  await a.click({choice:'1'});reads=a.reads.length;await weekSwipe(a,180);
   assert.equal(a.reads.length,reads);assert.equal(a.attributes['data-screen'],'feeling');
-  await a.lifecycle.back();await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+  await a.lifecycle.back();await weekSwipe(a,180);assert.equal(a.reads.length,reads);
   assert.match(a.element.innerHTML,/choice selected/);
   await a.click({action:'home'});await a.click({action:'calendar'});await a.click({edit:'1'});
-  reads=a.reads.length;await weekSwipe(a,120);assert.equal(a.reads.length,reads);
+  reads=a.reads.length;await weekSwipe(a,180);assert.equal(a.reads.length,reads);
   assert.match(a.element.innerHTML,/2026-10-20, отметок: 1" aria-pressed="true"/);
   assert.equal(a.writes.length,0);
 });
 
 test('failed week preview preserves the target date on retry without empty data or duplicate requests',async()=>{
   const a=await boot({visual:true});a.state.fail=true;const reads=a.reads.length;
-  await weekSwipe(a,120);assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/offline/);
+  await weekSwipe(a,180);assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/offline/);
   a.state.fail=false;await a.click({action:'retry'});
   assert.match(a.element.innerHTML,/2026-10-13[^>]*aria-pressed="true"/);
 });
@@ -142,8 +142,8 @@ test('touch capture transfer from a child keeps month/week/row gestures alive un
     await a.pointer('pointermove',{pointerType:'touch',clientX:170},row);
     assert.equal(a.captured.has(1),true);
     if(!row) assert.equal(a.dragCard.style.transform,'translateX(70px)');
-    await a.pointer('pointermove',{pointerType:'touch',clientX:row?-20:220},row);
-    await a.pointer('pointerup',{pointerType:'touch',clientX:row?-20:220},row);
+    await a.pointer('pointermove',{pointerType:'touch',clientX:row?-20:280},row);
+    await a.pointer('pointerup',{pointerType:'touch',clientX:row?-20:280},row);
     if(surface==='week')assert.match(a.element.innerHTML,/2026-10-13[^>]*aria-pressed="true"/);
     if(surface==='month')assert.match(a.element.innerHTML,/сентябрь/);
     if(row)assert.match(a.element.innerHTML,/event revealed/);
@@ -154,16 +154,16 @@ test('touch capture transfer from a child keeps month/week/row gestures alive un
 test('actual loss of app capture still cancels a held gesture without navigating',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});
   await a.pointer('pointerdown',{pointerType:'touch'});
-  await a.pointer('pointermove',{pointerType:'touch',clientX:220});
+  await a.pointer('pointermove',{pointerType:'touch',clientX:280});
   a.captured.clear();
   await a.pointer('lostpointercapture',{pointerType:'touch',target:a.element});await settle();
-  await a.pointer('pointerup',{pointerType:'touch',clientX:220});
+  await a.pointer('pointerup',{pointerType:'touch',clientX:280});
   assert.match(a.element.innerHTML,/октябрь/);assert.equal(a.dragCard.style.transform,'');
   assert.ok(a.neighbors.every(n=>n.removed));
 });
 
-test('existing home and add controls return from distant dates to the current week without saving',async()=>{
-  for(const action of ['home','add']) {
+test('logo, home and add controls return from distant dates to the current week without saving',async()=>{
+  for(const action of ['home','add','today']) {
     const a=await boot();await a.click({date:'2024-02-29'});
     await a.click({action});assert.equal(a.attributes['data-screen'],'kind');
     assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
@@ -190,7 +190,7 @@ test('calendar follows a held pointer and a short slow drag returns without chan
 
 test('a committed drag reuses the preview response and slides both cards to their destination',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});const reads=a.reads.length;
-  await swipe(a,120);
+  await swipe(a,180);
   assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/сентябрь/);
   assert.equal(a.animations[0].frames.at(-1).transform,'translateX(320px)');
   assert.equal(a.animations[1].frames.at(-1).transform,'translateX(0px)');
@@ -198,20 +198,32 @@ test('a committed drag reuses the preview response and slides both cards to thei
   assert.equal(a.captured.size,0);assert.equal(a.attributes['data-month-drag'],'');
 });
 
-test('fast flick commits, but holding a short drag or reversing it returns to the current month',async()=>{
-  for(const [releaseTime,expected] of [[1020,'сентябрь'],[1300,'октябрь']]){
-    const a=await boot({visual:true});await a.click({action:'calendar'});
-    await a.pointer('pointerdown',{timeStamp:1000});
-    await a.pointer('pointermove',{clientX:135,timeStamp:1010});
-    await a.pointer('pointerup',{clientX:135,timeStamp:releaseTime});
-    assert.match(a.element.innerHTML,new RegExp(expected));
+test('month/week commit only beyond half width, regardless of speed or direction',async()=>{
+  for(const width of [320,378]) for(const surface of ['month','week']) for(const direction of [-1,1]) {
+    for(const [distance,committed] of [[35,false],[width/2-1,false],[width/2,false],[width/2+1,true]]) {
+      const a=await boot({visual:true,width});
+      await a.click({date:'2026-09-15'});
+      if(surface==='month')await a.click({action:'calendar'});
+      const target=surface==='week'?weekTarget:{closest:()=>null};
+      await a.pointer('pointerdown',{target,timeStamp:1000});
+      await a.pointer('pointermove',{clientX:100+direction*distance,timeStamp:1010});
+      await a.pointer('pointerup',{clientX:100+direction*distance,timeStamp:1011});
+      const expected=committed ? surface==='month'
+        ? direction===1?'2026-08-01':'2026-10-20'
+        : direction===1?'2026-09-08':'2026-09-22' : '2026-09-15';
+      assert.match(a.element.innerHTML,new RegExp(expected+'[^>]*aria-pressed="true"'));
+      assert.equal(a.writes.length,0);
+    }
   }
+});
+
+test('crossing halfway while held does not commit; returning before release restores the current month',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});
-  await a.pointer('pointerdown',{timeStamp:1000});
-  await a.pointer('pointermove',{clientX:220,timeStamp:1100});
-  await a.pointer('pointermove',{clientX:130,timeStamp:1120});
-  await a.pointer('pointerup',{clientX:130,timeStamp:1130});
-  assert.match(a.element.innerHTML,/октябрь/);
+  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:280});
+  assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  await a.pointer('pointermove',{clientX:230});await a.pointer('pointerup',{clientX:230});
+  assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+  assert.equal(a.animations[0].frames.at(-1).transform,'translateX(0px)');
 });
 
 test('calendar boundary resists dragging without requesting a future month',async()=>{
@@ -236,7 +248,7 @@ test('changing drag direction loads each neighbor once; cancellation restores th
 
 test('a failed preview shows an error on commit rather than an empty history or another request',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});a.state.fail=true;
-  const reads=a.reads.length;await swipe(a,120);
+  const reads=a.reads.length;await swipe(a,180);
   assert.equal(a.reads.length,reads+1);assert.match(a.element.innerHTML,/offline/);
   assert.doesNotMatch(a.element.innerHTML,/Нет отметок/);
   a.state.fail=false;await a.click({action:'retry'});assert.equal(a.reads.at(-1),'2026-09');
@@ -245,7 +257,7 @@ test('a failed preview shows an error on commit rather than an empty history or 
 test('a late preview cannot replace the visible month after the app is hidden',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});let release;
   a.state.hold=new Promise(r=>release=r);
-  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:220});
+  await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:280});
   assert.equal(a.attributes['data-month-drag'],'true');
   a.document.visibilityState='hidden';a.lifecycle.visibilitychange();
   assert.equal(a.attributes['data-month-drag'],'');assert.equal(a.captured.size,0);
@@ -255,16 +267,16 @@ test('a late preview cannot replace the visible month after the app is hidden',a
 
 test('calendar swipes navigate in both directions with bounds and no accidental date click',async()=>{
   const a=await boot();await a.click({action:'calendar'});
-  await swipe(a,100);assert.equal(a.reads.at(-1),'2026-09');
+  await swipe(a,180);assert.equal(a.reads.at(-1),'2026-09');
   assert.match(a.element.innerHTML,/2026-09-01[^>]*aria-pressed="true"/);
   assert.equal(a.attributes['data-month-motion'],'previous');
   const reads=a.reads.length;await a.click({date:'2026-09-10'},1);
   assert.equal(a.reads.length,reads); // Generated click after dragging is consumed.
-  await swipe(a,-100);assert.equal(a.reads.at(-1),'2026-10');
+  await swipe(a,-180);assert.equal(a.reads.at(-1),'2026-10');
   assert.equal(a.attributes['data-month-motion'],'next');
-  const upper=a.reads.length;await swipe(a,-100);assert.equal(a.reads.length,upper);
+  const upper=a.reads.length;await swipe(a,-180);assert.equal(a.reads.length,upper);
   await a.click({date:'2000-01-01'});const lower=a.reads.length;
-  await swipe(a,100);assert.equal(a.reads.length,lower);
+  await swipe(a,180);assert.equal(a.reads.length,lower);
   assert.equal(a.writes.length,0);assert.equal(a.captured.size,0);
 });
 
@@ -272,7 +284,7 @@ test('short, vertical, cancelled and secondary gestures do not change the month'
   const a=await boot();await a.click({action:'calendar'});const reads=a.reads.length;
   await swipe(a,20);await swipe(a,80,100);
   await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:102,clientY:225});
-  await a.pointer('pointerup',{clientX:220,clientY:230}); // Vertical intent stays locked.
+  await a.pointer('pointerup',{clientX:280,clientY:230}); // Vertical intent stays locked.
   await a.pointer('pointerdown');await a.pointer('pointermove',{clientX:200});
   await a.pointer('pointercancel');await a.pointer('pointerup',{clientX:200});
   await a.pointer('pointerdown',{button:2});await a.pointer('pointerup',{clientX:200});
@@ -280,15 +292,15 @@ test('short, vertical, cancelled and secondary gestures do not change the month'
   await a.pointer('pointerup',{clientX:200});
   assert.equal(a.reads.length,reads);assert.equal(a.captured.size,0);
   await a.click({action:'home'});const formReads=a.reads.length;
-  await swipe(a,100);assert.equal(a.reads.length,formReads);
+  await swipe(a,180);assert.equal(a.reads.length,formReads);
 });
 
 test('row drag reveals deletion without paging or opening the edit form',async()=>{
   const a=await boot();await a.click({action:'calendar'});const reads=a.reads.length;
-  await swipe(a,-100,0,'1');
+  await swipe(a,-180,0,'1');
   assert.match(a.element.innerHTML,/event revealed/);assert.equal(a.reads.length,reads);
   await a.click({edit:'1'},1);assert.match(a.element.innerHTML,/Итоги дня/);
-  await swipe(a,100,0,'1');assert.doesNotMatch(a.element.innerHTML,/event revealed/);
+  await swipe(a,180,0,'1');assert.doesNotMatch(a.element.innerHTML,/event revealed/);
   await a.pointer('pointerdown',{},'1');await a.pointer('pointerup',{},'1');
   await a.click({edit:'1'},1);assert.match(a.element.innerHTML,/choice selected/);
   assert.equal(a.writes.length,0);
@@ -297,10 +309,10 @@ test('row drag reveals deletion without paging or opening the edit form',async()
 test('swipe cannot queue requests while reading; failed month stays selected on retry',async()=>{
   const a=await boot();await a.click({action:'calendar'});let release;
   a.state.hold=new Promise(r=>release=r);
-  const first=swipe(a,100);await settle();await settle();await settle();
-  const reads=a.reads.length;await swipe(a,100);assert.equal(a.reads.length,reads);
+  const first=swipe(a,180);await settle();await settle();await settle();
+  const reads=a.reads.length;await swipe(a,180);assert.equal(a.reads.length,reads);
   release();await first;a.state.hold=null;a.state.fail=true;
-  await swipe(a,100);assert.equal(a.reads.at(-1),'2026-08');
+  await swipe(a,180);assert.equal(a.reads.at(-1),'2026-08');
   assert.match(a.element.innerHTML,/offline/);a.state.fail=false;
   await a.click({action:'retry'});assert.equal(a.reads.at(-1),'2026-08');
 });

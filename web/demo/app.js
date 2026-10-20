@@ -90,7 +90,7 @@
     );
   }
   function header() {
-    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><div class="brand"><img src="${assetRoot}assets/logo.svg" alt="PoopCheck" width="203" height="47"></div></header>`;
+    return `<header class="header"><button class="icon-button menu" data-action="home" aria-label="Главная">${icon("menu")}</button><button class="brand" data-action="today" aria-label="К текущей неделе"><img src="${assetRoot}assets/logo.svg" alt="PoopCheck" width="203" height="47"></button></header>`;
   }
   function dayButton(date, full, selection = selected, counts = null) {
     const n = counts ? counts[date] || 0 : count(date),
@@ -418,6 +418,9 @@
       return;
     }
     switch (b.dataset.action) {
+      case "today":
+        selected = today;
+        // Reuse the existing home flow, including revalidation and draft reset.
       case "home":
       case "add":
         await fresh();
@@ -549,8 +552,7 @@
     if (!row && screen !== "calendar" &&
         !(screen === "kind" && !draft && e.target.closest("[data-week-draggable]"))) return;
     pointer = { id: row?.dataset.event, pointerId: e.pointerId,
-      x: e.clientX, y: e.clientY, lastX: e.clientX, lastTime: e.timeStamp,
-      velocity: 0, axis: null, screen, month, selected };
+      x: e.clientX, y: e.clientY, axis: null, screen, month, selected };
   });
   app.addEventListener("pointermove", (e) => {
     if (!pointer || e.pointerId !== pointer.pointerId) return;
@@ -562,10 +564,6 @@
         app.setPointerCapture?.(e.pointerId);
       }
     }
-    const elapsed = e.timeStamp - pointer.lastTime;
-    if (elapsed > 0) pointer.velocity = (e.clientX - pointer.lastX) / elapsed;
-    pointer.lastX = e.clientX;
-    pointer.lastTime = e.timeStamp;
     if (pointer.axis === "horizontal" && !pointer.id) moveCalendarDrag(e.clientX - pointer.x);
   });
   app.addEventListener("pointerup", async (e) => {
@@ -586,9 +584,7 @@
       suppressPointerClick = true;
       moveCalendarDrag(dx);
       const delta = dx < 0 ? 1 : -1, width = calendarDrag?.width || 320;
-      const fast = Math.abs(dx) >= 24 && e.timeStamp - gesture.lastTime < 100 &&
-        Math.sign(gesture.velocity) === Math.sign(dx) && Math.abs(gesture.velocity) >= 0.5;
-      const commit = Boolean(adjacentCalendar(delta)) && (Math.abs(dx) >= Math.max(48, width * 0.24) || fast);
+      const commit = Boolean(adjacentCalendar(delta)) && Math.abs(dx) > width / 2;
       await finishCalendarDrag(commit, delta);
     }
   });

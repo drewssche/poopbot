@@ -599,7 +599,12 @@
     finishCalendarDrag(false, calendarDrag?.delta || 1);
   }
   app.addEventListener("pointercancel", cancelPointer);
-  app.addEventListener("lostpointercapture", cancelPointer);
+  app.addEventListener("lostpointercapture", (e) => {
+    // Touch implicitly captures the initial child. When horizontal dragging
+    // transfers capture to app, the child's loss bubbles here; it is not an
+    // interruption. Only losing our own capture cancels the active gesture.
+    if (e.target === app) cancelPointer(e);
+  });
   window.addEventListener("blur", () => { resetPointer(); clearCalendarDrag(); updateBackButton(); });
   window.addEventListener("resize", () => { resetPointer(); clearCalendarDrag(); updateBackButton(); });
   app.addEventListener("dragstart", (e) => {

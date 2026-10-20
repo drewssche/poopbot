@@ -127,6 +127,50 @@ test('failed week preview preserves the target date on retry without empty data 
   assert.match(a.element.innerHTML,/2026-10-13[^>]*aria-pressed="true"/);
 });
 
+test('touch capture transfer from a child keeps month/week/row gestures alive until release',async()=>{
+  for(const surface of ['month','week','row']) {
+    const a=await boot({visual:true});
+    if(surface!=='week') await a.click({action:'calendar'});
+    const row=surface==='row'?'1':null;
+    const target=surface==='week'?weekTarget:{closest:selector=>selector==='[data-event]'&&row?{dataset:{event:row}}:null};
+    await a.pointer('pointerdown',{pointerType:'touch',target},row);
+    await a.pointer('pointermove',{pointerType:'touch',clientX:130},row);
+    assert.equal(a.captured.has(1),true);
+    // Touch starts with implicit capture on the child. Moving capture to app
+    // bubbles this loss from the child before the next pointermove arrives.
+    await a.pointer('lostpointercapture',{pointerType:'touch',target},row);
+    await a.pointer('pointermove',{pointerType:'touch',clientX:170},row);
+    assert.equal(a.captured.has(1),true);
+    if(!row) assert.equal(a.dragCard.style.transform,'translateX(70px)');
+    await a.pointer('pointermove',{pointerType:'touch',clientX:row?-20:220},row);
+    await a.pointer('pointerup',{pointerType:'touch',clientX:row?-20:220},row);
+    if(surface==='week')assert.match(a.element.innerHTML,/2026-10-13[^>]*aria-pressed="true"/);
+    if(surface==='month')assert.match(a.element.innerHTML,/сентябрь/);
+    if(row)assert.match(a.element.innerHTML,/event revealed/);
+    assert.equal(a.captured.size,0);assert.equal(a.writes.length,0);
+  }
+});
+
+test('actual loss of app capture still cancels a held gesture without navigating',async()=>{
+  const a=await boot({visual:true});await a.click({action:'calendar'});
+  await a.pointer('pointerdown',{pointerType:'touch'});
+  await a.pointer('pointermove',{pointerType:'touch',clientX:220});
+  a.captured.clear();
+  await a.pointer('lostpointercapture',{pointerType:'touch',target:a.element});await settle();
+  await a.pointer('pointerup',{pointerType:'touch',clientX:220});
+  assert.match(a.element.innerHTML,/октябрь/);assert.equal(a.dragCard.style.transform,'');
+  assert.ok(a.neighbors.every(n=>n.removed));
+});
+
+test('existing home and add controls return from distant dates to the current week without saving',async()=>{
+  for(const action of ['home','add']) {
+    const a=await boot();await a.click({date:'2024-02-29'});
+    await a.click({action});assert.equal(a.attributes['data-screen'],'kind');
+    assert.match(a.element.innerHTML,/2026-10-20[^>]*aria-pressed="true"/);
+    assert.equal(a.reads.at(-1),null);assert.equal(a.writes.length,0);
+  }
+});
+
 test('calendar follows a held pointer and a short slow drag returns without changing selection',async()=>{
   const a=await boot({visual:true});await a.click({action:'calendar'});const reads=a.reads.length;
   await a.pointer('pointerdown',{timeStamp:1000});

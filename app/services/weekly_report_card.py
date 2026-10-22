@@ -1,6 +1,6 @@
 """Deterministic, CPU-only rendering of the approved PoopCheck calendar cards."""
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +26,17 @@ class Participant:
 
 
 @dataclass(frozen=True)
+class WeeklyDetails:
+    previous_total: int
+    previous_active_days: int
+    bristol: tuple[int, ...]  # hard, normal, soft, liquid, missing
+    feeling: tuple[int, ...]  # great, ok, bad, missing
+    rank: int | None = None
+    rank_total: int = 0
+    previous_rank: int | None = None
+
+
+@dataclass(frozen=True)
 class ReportCard:
     start: date
     end: date
@@ -35,6 +46,8 @@ class ReportCard:
     private: bool = False
     label: str | None = None
     period: str = 'week'
+    layout: str = 'summary'
+    details: WeeklyDetails | None = None
 
     @property
     def total(self):
@@ -61,8 +74,10 @@ class ReportCard:
 WeeklyCard = ReportCard
 
 
-def project_card(db, chat_id, start, end, title, label=None, *, period='week'):
+def project_card(db, chat_id, start, end, title, label=None, *, period='week', layout='summary'):
     report_period(period)
+    if layout not in ('summary', 'daily', 'weekly') or (layout != 'summary' and period != 'week'):
+        raise ValueError('Unsupported calendar layout')
     expected = period_to_range(start, period)
     if (start, end) != (expected.start, expected.end):
         raise ValueError('Report must cover a complete calendar period')
@@ -76,8 +91,24 @@ def project_card(db, chat_id, start, end, title, label=None, *, period='week'):
         user = users.get(uid)
         name = (user.first_name or user.username) if user else None
         participants.append(Participant(name or 'Участник', count))
-    return ReportCard(start, end, title, tuple(by_day[start + timedelta(days=n)] for n in range((end-start).days+1)),
-                      tuple(participants), chat_id > 0, label, period)
+    card = ReportCard(start, end, title, tuple(by_day[start + timedelta(days=n)] for n in range((end-start).days+1)),
+                      tuple(participants), chat_id > 0, label, period, layout)
+    if layout == 'weekly':
+        from app.services.stats_common import previous_period_range
+        from app.services.stats_metrics import compute_chat_period_metrics, bristol_bucket, feeling_emoji
+        from app.services.stats_rankings import rank_chat_among_groups_by_total
+        previous_range = previous_period_range(start, 'week')
+        previous = compute_chat_period_metrics(db, chat_id, previous_range, user_id=chat_id if card.private else None)
+        br = Counter(bristol_bucket(row[3]) for row in rows)
+        fe = Counter(feeling_emoji(row[4]) for row in rows)
+        rank, rank_total, previous_rank = None, 0, None
+        if not card.private:
+            rank, rank_total = rank_chat_among_groups_by_total(db, chat_id, Range(start, end))
+            previous_rank, _ = rank_chat_among_groups_by_total(db, chat_id, previous_range)
+        card = replace(card, details=WeeklyDetails(previous.total_poops, previous.active_days_count,
+            tuple(br[key] for key in ('🧱', '🍌', '🍦', '💦', None)),
+            tuple(fe[key] for key in ('😇', '😐', '😫', None)), rank, rank_total, previous_rank))
+    return card
 
 
 def plural(n, one, few, many):
@@ -93,6 +124,15 @@ def period_text(start, end):
 
 
 def render_card(card: ReportCard) -> bytes:
+    if card.layout != 'summary':
+        from app.services.report_layouts import render_daily, render_weekly
+        if card.period != 'week' or len(card.days) != 7:
+            raise ValueError('Daily and weekly layouts require seven days')
+        if card.layout == 'daily':
+            return render_daily(card)
+        if card.layout == 'weekly':
+            return render_weekly(card)
+        raise ValueError('Unsupported calendar layout')
     # Keep the approved typography, spacing, assets and round shapes at 840 px.
     spec = report_period(card.period)
     if len(card.days) != card.period_days:

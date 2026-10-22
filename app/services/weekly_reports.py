@@ -94,7 +94,9 @@ class ReportWorker:
             if row is None or row.disabled or row.revision <= row.delivered_revision:
                 return None
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
-                                row.chat_title or 'Личные отметки', row.label, period=row.report_period)
+                                row.chat_title or 'Личные отметки', row.label, period=row.report_period,
+                                layout='daily' if row.q1_session_id is not None else
+                                       'weekly' if row.report_period == 'week' else 'summary')
             if row.q1_session_id is not None:
                 from app.services.mini_app_message import session_question
                 from app.services.q1_card_state import question_caption

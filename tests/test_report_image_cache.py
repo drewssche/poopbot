@@ -32,12 +32,11 @@ def test_simultaneous_requests_render_once_without_changing_pixels(monkeypatch):
     assert render.call_count == 1
 
 
-def test_counts_names_periods_and_renderer_identity_invalidate_image(monkeypatch):
+def test_counts_periods_and_renderer_identity_invalidate_image(monkeypatch):
     value = card(); key = cache.visual_fingerprint(value)
     for changed in (replace(value, days=(2,0,0,0,0,0,0)),
-                    replace(value, participants=(Participant('Борис',1),)),
                     replace(value, start=date(2026,10,26), end=date(2026,11,1)),
-                    replace(value, label='Текущая неделя'), replace(value, chat_title='Другой чат')):
+                    replace(value, label='Текущая неделя')):
         assert cache.visual_fingerprint(changed) != key
     monkeypatch.setattr(cache, 'renderer_identity', lambda: 'new-font-or-layout')
     assert cache.visual_fingerprint(value) != key
@@ -54,3 +53,11 @@ def test_cache_is_bounded_and_scoped_to_chat(monkeypatch):
     cache.shared_image(-1, value, key)
     assert render.call_count == 3
     assert cache._bytes <= 8 and len(cache._images) <= 2
+
+
+def test_caption_only_title_and_invisible_daily_names_do_not_invalidate():
+    value = replace(card(), layout='daily')
+    key = cache.visual_fingerprint(value)
+    assert cache.visual_fingerprint(replace(value, chat_title='Другой чат', label='Превью',
+        participants=(Participant('Борис',1),))) == key
+    assert cache.visual_fingerprint(replace(value, layout='summary')) != key

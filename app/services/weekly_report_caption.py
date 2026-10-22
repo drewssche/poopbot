@@ -11,6 +11,9 @@ from app.services.report_periods import report_period
 def build_caption(db, chat_id, card):
     spec = report_period(card.period)
     title = ' '.join(card.chat_title.split())[:90]
+    if card.layout == 'weekly':
+        # The complete report is on the image; do not repeat it below.
+        return '\n'.join(filter(None, [(card.label or '')[:60], title, 'Подробности: /stats · /app']))
     lines = []
     if card.label:
         lines.append(card.label[:60])

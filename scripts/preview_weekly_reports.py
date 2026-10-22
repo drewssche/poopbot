@@ -25,7 +25,8 @@ def worker_caption(factory, rid, explanation):
     with factory() as db:
         row = db.get(WeeklyReport, rid)
         card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
-                            row.chat_title, row.label, period=row.report_period)
+                            row.chat_title, row.label, period=row.report_period,
+                            layout='weekly' if row.report_period == 'week' else 'summary')
         caption = build_caption(db, row.source_chat_id, card)
     value = caption + '\n\n' + explanation
     return value if len(value.encode('utf-16-le'))//2 <= 1024 else caption
@@ -64,7 +65,7 @@ async def main(source_chat, period_kind='week', preview_only=False):
                     period = period_to_range(anchor, period_kind)
                     card = project_card(db, cid, period.start, period.end,
                                         group.title if cid < 0 else 'Личные отметки', label,
-                                        period=period_kind)
+                                        period=period_kind, layout='weekly' if period_kind == 'week' else 'summary')
                     caption = build_caption(db, cid, card)
             sent = await bot.send_photo(owner, BufferedInputFile(render_card(card), f'{period_kind}-report.png'),
                                         caption=caption, parse_mode=None)
@@ -75,7 +76,7 @@ async def main(source_chat, period_kind='week', preview_only=False):
         worker = ReportWorker(bot, factory, 'unused')
         for index, (kind, explanation) in enumerate([
             ('добавление', 'Добавление: было 1, стало 2 отметки. Жёлтый счётчик изменился с 1 на 2.'),
-            ('редактирование', 'Редактирование: количество осталось 1. Консистенция и самочувствие изменены в подписи.'),
+            ('редактирование', 'Редактирование: количество осталось 1. Консистенция и самочувствие обновлены в отчёте.'),
             ('удаление', 'Удаление последней отметки: было 1, стало 0. День снова пустой.'),
             ('восстановление', 'Восстановление пропущенного дня: было 0, стало 1. День появился в календаре.'),
         ]):
@@ -119,7 +120,7 @@ async def main(source_chat, period_kind='week', preview_only=False):
                             'same_message': True, 'image_changed': before.card_hash != after.card_hash})
         await bot.send_message(owner, 'Проверка завершена: 7 карточек. В четырёх демонстрациях обновились '
             'прежние сообщения, новых копий при изменении отметок не создавалось. '
-            'При редактировании качества отметки изменилась только подпись — количество на карточке осталось прежним. '
+            'При редактировании качества отметки обновился отчёт — количество отметок осталось прежним. '
             'Эти тестовые снимки больше автоматически обновляться не будут.')
         print(json.dumps(results, ensure_ascii=False))
     finally:

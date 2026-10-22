@@ -19,7 +19,9 @@ _lock = RLock()
 @lru_cache(maxsize=1)
 def renderer_identity():
     # A design/font/asset update must invalidate persisted fingerprints too.
-    digest = sha256(Path(renderer.__file__).read_bytes())
+    source = Path(renderer.__file__)
+    digest = sha256(source.read_bytes())
+    digest.update(source.with_name('report_layouts.py').read_bytes())
     for path in sorted(renderer.ASSETS.iterdir()):
         if path.suffix in {'.png', '.ttf'}:
             digest.update(path.name.encode())
@@ -28,8 +30,21 @@ def renderer_identity():
 
 
 def visual_fingerprint(card):
-    # Quality answers and per-message buttons/captions are absent from ReportCard.
-    value = json.dumps([renderer_identity(), asdict(card)], ensure_ascii=False,
+    # Weekly visuals include quality, comparison and rank; daily visuals do not.
+    # Per-message text/buttons remain outside the image fingerprint.
+    fields = asdict(card)
+    fields.pop('chat_title')  # Only present in the message caption.
+    if card.layout in ('daily', 'summary'):
+        fields['participants'] = len(card.participants)
+    if card.layout == 'daily':
+        fields.pop('label')
+        fields.pop('details')
+        if card.private:
+            fields['participants'] = 0
+    elif card.layout == 'weekly':
+        fields['participant_count'] = len(card.participants)
+        fields['participants'] = fields['participants'][:3]
+    value = json.dumps([renderer_identity(), fields], ensure_ascii=False,
                        sort_keys=True, separators=(',', ':'), default=str)
     return sha256(value.encode()).hexdigest()
 

@@ -108,7 +108,7 @@ def test_delivery_refresh_and_repeated_revision_are_in_place(env):
     assert row.delivered_revision == row.revision
 
 
-def test_quality_edit_updates_only_text_and_delete_clears_card(env):
+def test_weekly_quality_edit_updates_visual_and_delete_clears_card(env):
     factory, bot, worker = env
     with factory.begin() as db:
         event_id = mark(db).id
@@ -117,15 +117,15 @@ def test_quality_edit_updates_only_text_and_delete_clears_card(env):
         db.get(PoopEvent, event_id).bristol = 7
         db.get(WeeklyReport, rid).revision += 1
     asyncio.run(worker.deliver(rid))
-    bot.edit_message_media.assert_not_awaited(); bot.edit_message_caption.assert_awaited_once()
+    bot.edit_message_media.assert_awaited_once(); bot.edit_message_caption.assert_not_awaited()
     with factory.begin() as db:
         db.delete(db.get(PoopEvent, event_id)); db.get(WeeklyReport, rid).revision += 1
     asyncio.run(worker.deliver(rid))
-    bot.edit_message_media.assert_awaited_once()
-    assert 'пока нет отметок' in bot.edit_message_media.await_args.kwargs['media'].caption
+    assert bot.edit_message_media.await_count == 2
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
 
 
-@pytest.mark.parametrize('period', ['week', 'month', 'year'])
+@pytest.mark.parametrize('period', ['month', 'year'])
 def test_quality_edit_skips_render_after_restart_for_each_period(env, monkeypatch, period):
     from app.services import report_image_cache as cache
     from app.services.weekly_reports import enqueue_report
@@ -172,7 +172,7 @@ def test_failed_caption_refresh_survives_new_worker(env):
     rid = queued(factory)
     asyncio.run(worker.deliver(rid))
     with factory.begin() as db:
-        db.get(PoopEvent, eid).bristol = 7
+        db.get(WeeklyReport, rid).chat_title = 'Переименованный чат'
         db.get(WeeklyReport, rid).revision += 1
     bot.edit_message_caption.side_effect = OSError('network')
     asyncio.run(worker.deliver(rid))
@@ -357,3 +357,85 @@ def test_compact_card_omits_names_and_title_and_marks_one():
         cx = 48 + (744 / 7) * (index + .5)
         # Top inside edge of the badge, away from its digit.
         assert (image.getpixel((round(cx+25), 314)) == (255,219,0)) == has_badge
+
+
+def test_visual_weekly_details_have_scoped_answers_previous_period_and_rank(env):
+    factory, _, _ = env
+    with factory.begin() as db:
+        for n, br in enumerate((1, 3, 6, 7, None), 1):
+            event = mark(db, n=n)
+            event.bristol = br
+            event.feeling = ('great', 'ok', 'bad', None, 'ok')[n-1]
+        mark(db, origin=-2, n=6)  # Copied mark excluded.
+        for n in range(1, 7):
+            mark(db, chat=-2, n=n)
+        mark(db, day=START-timedelta(days=1))
+        mark(db, day=START-timedelta(days=1), n=2)
+        db.flush()
+        card = project_card(db, -1, START, END, 'Чат', layout='weekly')
+        assert card.total == 5
+        assert card.details.bristol == (1,1,1,1,1)
+        assert card.details.feeling == (1,2,1,1)
+        assert card.details.previous_total == 2
+        assert (card.details.rank, card.details.rank_total, card.details.previous_rank) == (2,2,1)
+        picture = render_card(card)
+        assert Image.open(BytesIO(picture)).height > 992  # Space for all recorded answer groups.
+        from app.services.weekly_report_caption import build_caption
+        caption = build_caption(db, -1, card)
+        assert 'Консистенция' not in caption and 'К прошлой' not in caption
+        assert '/stats' in caption and 'Чат' in caption
+
+
+def test_private_weekly_excludes_other_users_and_group_rank(env):
+    factory, _, _ = env
+    with factory.begin() as db:
+        mark(db, chat=1)
+        mark(db, chat=1, uid=2).bristol = 7
+        mark(db, chat=-1)
+        card = project_card(db, 1, START, END, 'Личные', layout='weekly')
+        assert card.total == 1 and card.details.bristol == (0,1,0,0,0)
+        assert card.details.rank is None and card.details.rank_total == 0
+        assert len(card.participants) == 1 and card.participants[0].name == 'Аня'
+        assert render_card(card)
+
+
+def test_weekly_same_bucket_edit_does_not_render_after_restart(env, monkeypatch):
+    from app.services import report_image_cache as cache
+    factory, bot, worker = env
+    with factory.begin() as db:
+        eid = mark(db).id
+    rid = queued(factory); asyncio.run(worker.deliver(rid))
+    cache.clear_image_cache()
+    def forbidden(*args):
+        raise AssertionError('Same visual answer bucket must not render')
+    monkeypatch.setattr(cache.renderer, 'render_card', forbidden)
+    with factory.begin() as db:
+        db.get(PoopEvent, eid).bristol = 4  # Still the same visible category as 3.
+        db.get(WeeklyReport, rid).revision += 1
+    worker = WeeklyReportWorker(bot, factory, 'unused')
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_media.assert_not_awaited()
+    bot.edit_message_caption.assert_not_awaited()
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+
+
+def test_previous_week_change_refreshes_visual_comparison(env):
+    factory, bot, worker = env
+    rid = queued(factory); asyncio.run(worker.deliver(rid))
+    before = worker.get(rid).visual_hash
+    with factory.begin() as db:
+        mark(db, day=START-timedelta(days=1))
+        db.get(WeeklyReport, rid).revision += 1
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_media.assert_awaited_once()
+    assert worker.get(rid).visual_hash != before
+
+
+@pytest.mark.parametrize('private', [False, True])
+def test_visual_weekly_empty_and_cross_year_periods(private):
+    from app.services.weekly_report_card import ReportCard, WeeklyDetails
+    start = date(2026,12,28)
+    card = ReportCard(start, start+timedelta(days=6), 'Чат', (0,)*7, (), private,
+        layout='weekly', details=WeeklyDetails(0,0,(0,)*5,(0,)*4))
+    image = Image.open(BytesIO(render_card(card)))
+    assert image.size == (840,992)

@@ -76,41 +76,38 @@ def post_legacy_photo(factory, bot, chat=-1, day=DAY):
         return row.id, sess.session_id, sent.message_id
 
 
-@pytest.mark.parametrize('chat', [-1, 1])
-def test_new_days_are_text_with_buttons_and_no_report_jobs(env, chat, monkeypatch):
-    factory, bot, _ = env
-    def forbidden_render(*args):
-        raise AssertionError('Daily questions must not render calendars')
-    monkeypatch.setattr('app.services.report_image_cache.renderer.render_card', forbidden_render)
-    mids = []
-    for day in (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6)):
-        with factory.begin() as db:
-            sess = DaySession(chat_id=chat, session_date=day, status='active')
-            db.add(sess); db.flush()
-            asyncio.run(_post_q1(bot, db, chat, sess.session_id, day, False))
-            db.flush()
-            mids.append(db.get(SessionMessage, (sess.session_id, 'Q1')).message_id)
-            assert db.scalar(select(WeeklyReport.id)) is None
-    assert len(set(mids)) == 3
-    assert bot.send_message.await_count == 3
-    bot.send_photo.assert_not_awaited()
-    bot.get_chat.assert_not_awaited()
-    for call, day in zip(bot.send_message.await_args_list, (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6))):
-        assert call.kwargs['reply_markup']
-        assert day.strftime('%d.%m.%y') in call.kwargs['text']
-        assert call.kwargs['parse_mode'] == 'HTML'
+def post(factory, bot, chat=-1, day=DAY):
     with factory.begin() as db:
-        # New messages use the ordinary editing and Mini App delivery paths.
-        payloads = current_messages(db, chat, 1)
-        assert queue_photo_questions(db, payloads) == payloads
-        asyncio.run(_lock_q1(bot, db, chat, sess.session_id))
-    assert 'Сессия закрыта' in bot.edit_message_text.await_args.kwargs['text']
-    bot.edit_message_caption.assert_not_awaited()
+        sess = DaySession(chat_id=chat, session_date=day, status='active')
+        db.add(sess); db.flush()
+        asyncio.run(_post_q1(bot, db, chat, sess.session_id, day, False))
+        db.flush()
+        row = db.scalar(select(WeeklyReport).where(WeeklyReport.q1_session_id == sess.session_id))
+        assert db.get(SessionMessage, (sess.session_id, 'Q1')).message_id == row.photo_message_id
+        return row.id, sess.session_id, row.photo_message_id
+
+
+@pytest.mark.parametrize('chat', [-1, 1])
+def test_new_days_have_low_cards_and_working_buttons(env, chat):
+    from io import BytesIO
+    from PIL import Image
+    factory, bot, worker = env
+    ids = [post(factory, bot, chat, day) for day in (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6))]
+    assert len({mid for _, _, mid in ids}) == 3
+    assert [worker.get(rid).period_start for rid, _, _ in ids] == [
+        date(2026,10,19), date(2026,10,19), date(2026,10,26)]
+    assert bot.send_photo.await_count == 3
+    bot.send_message.assert_not_awaited()
+    bot.get_chat.assert_not_awaited()
+    for call in bot.send_photo.await_args_list:
+        assert Image.open(BytesIO(call.kwargs['photo'].data)).size == (840, 328)
+        assert any(b.callback_data == 'q1:plus' for row in call.kwargs['reply_markup'].inline_keyboard for b in row)
+        assert units(call.kwargs['caption']) <= 1024
 
 
 def test_same_photo_refreshes_marks_and_closed_buttons(env):
     factory, bot, worker = env
-    rid, sid, mid = post_legacy_photo(factory, bot)
+    rid, sid, mid = post(factory, bot)
     with factory.begin() as db:
         db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1))
         db.get(WeeklyReport, rid).revision += 1
@@ -132,7 +129,7 @@ def test_same_photo_refreshes_marks_and_closed_buttons(env):
 
 def test_private_questions_survive_card_refresh_then_return_to_overview(env):
     factory, bot, worker = env
-    rid, sid, mid = post_legacy_photo(factory, bot, 1)
+    rid, sid, mid = post(factory, bot, 1)
     with factory.begin() as db:
         asyncio.run(edit_question(bot, db, chat_id=1, message_id=mid, text='Консистенция?',
                                   reply_markup=q2_keyboard(private_flow=True, event_n=1)))
@@ -183,7 +180,7 @@ def test_seven_daily_messages_share_one_render_per_visual_change(env, monkeypatc
     monkeypatch.setattr(cache.renderer, 'render_card', render)
     factory, bot, worker = env
     monday = DAY - timedelta(days=DAY.weekday())
-    posts = [post_legacy_photo(factory, bot, day=monday+timedelta(days=n)) for n in range(7)]
+    posts = [post(factory, bot, day=monday+timedelta(days=n)) for n in range(7)]
     assert render.call_count == 1
     with factory.begin() as db:
         db.add(PoopEvent(session_id=posts[0][1], user_id=1, origin_chat_id=-1, event_n=1))
@@ -204,7 +201,7 @@ def test_private_caption_change_skips_render_after_cache_loss(env, monkeypatch):
     from unittest.mock import Mock
     from app.services import report_image_cache as cache
     factory, bot, worker = env
-    rid, _, mid = post_legacy_photo(factory, bot, 1)
+    rid, _, mid = post(factory, bot, 1)
     cache.clear_image_cache()
     render = Mock(side_effect=AssertionError('Caption-only refresh must not render'))
     monkeypatch.setattr(cache.renderer, 'render_card', render)
@@ -217,3 +214,18 @@ def test_private_caption_change_skips_render_after_cache_loss(env, monkeypatch):
     bot.edit_message_media.assert_not_awaited()
     assert bot.edit_message_caption.await_args.kwargs['caption'] == 'Самочувствие?'
     assert worker.get(rid).revision == worker.get(rid).delivered_revision
+
+
+def test_old_photo_shrinks_on_next_refresh_without_reposting(env):
+    from io import BytesIO
+    from PIL import Image
+    factory, bot, worker = env
+    rid, sid, mid = post_legacy_photo(factory, bot)
+    with factory.begin() as db:
+        db.get(WeeklyReport, rid).revision += 1
+    asyncio.run(worker.deliver(rid))
+    payload = bot.edit_message_media.await_args.kwargs
+    assert payload['message_id'] == mid
+    assert Image.open(BytesIO(payload['media'].media.data)).size == (840, 328)
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+    assert bot.send_photo.await_count == 1

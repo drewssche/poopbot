@@ -104,11 +104,9 @@ def render_card(card: ReportCard) -> bytes:
         shift = 2 * 136
     else:
         shift = 0
-    shown = card.participants[:8]
-    rows = max(1, len(shown))
-    extra = len(card.participants) - len(shown)
-    footer_y = 780 + shift + rows * 61 + (40 if extra else 0)
-    image = Image.new('RGB', (840, footer_y + 76), 'white')
+    # Fixed height for each calendar layout, independent of the group size.
+    footer_y = 612 + shift
+    image = Image.new('RGB', (840, footer_y + 56), 'white')
     draw = ImageDraw.Draw(image)
     fonts = {}
 
@@ -143,18 +141,16 @@ def render_card(card: ReportCard) -> bytes:
     date_label = period_text(card.start, card.end)
     size = 29 if len(date_label) < 34 else 25
     text(48, 199, date_label, size, BROWN, 500, width=744)
-    text(48, 248, card.chat_title, 23, MUTED, width=744)
     poop = Image.open(ASSETS / 'poop-day.png').convert('RGBA').resize((78, 75), Image.Resampling.LANCZOS)
     def cell(cx, top, value, count):
         if count:
             image.paste(poop, (round(cx - 39), top + 2), poop)
             text(cx, top + 29, str(value), 30, 'white', 500, anchor='mt')
-            if count > 1:
-                # Always circular: shrink digits, never stretch the badge.
-                draw.ellipse((cx + 10, top, cx + 41, top + 31), fill='#ffdb00')
-                label = str(count) if count < 1000 else '999+'
-                text(cx + 25.5, top + (6 if len(label) < 3 else 9), label,
-                     21 if len(label) == 1 else 17 if len(label) == 2 else 12, BROWN, 650, anchor='mt')
+            # Always circular: shrink digits, never stretch the badge.
+            draw.ellipse((cx + 10, top, cx + 41, top + 31), fill='#ffdb00')
+            label = str(count) if count < 1000 else '999+'
+            text(cx + 25.5, top + (6 if len(label) < 3 else 9), label,
+                 21 if len(label) == 1 else 17 if len(label) == 2 else 12, BROWN, 650, anchor='mt')
         else:
             draw.ellipse((cx - 34, top + 10, cx + 34, top + 78), fill=PALE)
             text(cx, top + 29, str(value), 30, BEIGE, 500, anchor='mt')
@@ -162,50 +158,29 @@ def render_card(card: ReportCard) -> bytes:
     if card.period == 'year':
         for n, count in enumerate(card.months):
             cx = 48 + (744 / 4) * (n % 4 + .5)
-            top = 347 + (n // 4) * 136
+            top = 312 + (n // 4) * 136
             text(cx, top - 42, ('ЯНВ', 'ФЕВ', 'МАР', 'АПР', 'МАЙ', 'ИЮН',
                  'ИЮЛ', 'АВГ', 'СЕН', 'ОКТ', 'НОЯ', 'ДЕК')[n], 23, BEIGE, 650, anchor='mt')
             cell(cx, top, n+1, count)
     else:
         for n, weekday in enumerate(('ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС')):
-            text(48+(744/7)*(n+.5), 305, weekday, 23, BEIGE, 650, anchor='mt')
+            text(48+(744/7)*(n+.5), 270, weekday, 23, BEIGE, 650, anchor='mt')
         offset = card.start.weekday() if card.period == 'month' else 0
         for n, count in enumerate(card.days):
             position = n + offset
             cx = 48 + (744 / 7) * (position % 7 + .5)
-            cell(cx, 347 + (position // 7) * 94, (card.start+timedelta(days=n)).day, count)
-    draw.ellipse((48, 459+shift, 63, 474+shift), fill=PALE, outline='#e8e0d8')
-    text(73, 455+shift, 'Нет отметок · в жёлтом кружке — отметки за месяц' if card.period == 'year' else
-         'Нет отметок · цифра в жёлтом кружке — количество', 20, MUTED)
+            cell(cx, 312 + (position // 7) * 94, (card.start+timedelta(days=n)).day, count)
     for x in (48, 430):
-        draw.rounded_rectangle((x, 506+shift, x + 362, 649+shift), radius=26, fill=PALE)
-    text(76, 528+shift, str(card.total), 56, BROWN, 650, width=306)
-    text(76, 603+shift, plural(card.total, 'отметка', 'отметки', 'отметок') + ' ' + spec.duration, 23)
+        draw.rounded_rectangle((x, 428+shift, x + 362, 571+shift), radius=26, fill=PALE)
+    text(76, 450+shift, str(card.total), 56, BROWN, 650, width=306)
+    text(76, 525+shift, plural(card.total, 'отметка', 'отметки', 'отметок') + ' ' + spec.duration, 23)
     if card.private:
-        text(458, 528+shift, str(card.active_days), 56, BROWN, 650)
-        text(458, 603+shift, plural(card.active_days, 'день', 'дня', 'дней') + ' с отметками', 23)
+        text(458, 450+shift, str(card.active_days), 56, BROWN, 650)
+        text(458, 525+shift, plural(card.active_days, 'день', 'дня', 'дней') + ' с отметками', 23)
     else:
         count = len(card.participants)
-        text(458, 528+shift, str(count), 56, BROWN, 650, width=306)
-        text(458, 603+shift, plural(count, 'участник отметился', 'участника отметились', 'участников отметились'), 23)
-    text(48, 675+shift, f'{card.active_days} из {card.period_days} дней с отметками', 23, MUTED)
-    text(48, 733+shift, 'Твои отметки' if card.private else 'Участники', 29, weight=650)
-    if not shown:
-        text(48, 798+shift, spec.empty + ' пока нет отметок', 23, MUTED)
-    for n, participant in enumerate(shown):
-        y = 784 + shift + n * 61
-        draw.ellipse((48, y, 92, y+44), fill=PALE)
-        text(70, y+11, clean(participant.name)[:1] or '?', 21, BROWN, 500, anchor='mt')
-        text(108, y+9, clean(participant.name) or 'Участник', 25, width=425)
-        count_label = str(participant.count)
-        unit = plural(participant.count, 'отметка', 'отметки', 'отметок')
-        unit_w = draw.textlength(unit, font=font(20))
-        text(792, y+12, unit, 20, MUTED, anchor='rt')
-        text(780-unit_w, y+9, count_label, 25, BROWN, 600, anchor='rt')
-        if n < len(shown)-1:
-            draw.line((48, y+52, 792, y+52), fill='#eee8e3')
-    if extra:
-        text(48, 790+shift+rows*61, f'И ещё {extra} {plural(extra, "участник", "участника", "участников")} · подробнее в /stats', 20, MUTED)
+        text(458, 450+shift, str(count), 56, BROWN, 650, width=306)
+        text(458, 525+shift, plural(count, 'участник отметился', 'участника отметились', 'участников отметились'), 23)
     draw.line((48, footer_y, 792, footer_y), fill='#eee8e3')
     text(48, footer_y+22, 'Личная история' if card.private else 'Отметки этого чата', 18, MUTED)
     text(792, footer_y+22, '@poopcheck_bot', 18, MUTED, anchor='rt')

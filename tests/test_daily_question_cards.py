@@ -28,6 +28,7 @@ def env(tmp_path, monkeypatch):
     bot = SimpleNamespace(**{name: AsyncMock() for name in (
         'send_photo', 'send_message', 'edit_message_media', 'edit_message_caption', 'edit_message_text')})
     bot.send_photo.side_effect = [SimpleNamespace(message_id=n) for n in range(100, 120)]
+    bot.send_message.side_effect = [SimpleNamespace(message_id=n) for n in range(200, 220)]
     bot.get_chat = AsyncMock(return_value=SimpleNamespace(title='Тестовый чат'))
     with factory.begin() as db:
         db.add_all([Chat(chat_id=-1), Chat(chat_id=1), User(user_id=1, first_name='Аня')])
@@ -40,35 +41,76 @@ def env(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def post(factory, bot, chat=-1, day=DAY):
+def post_legacy_photo(factory, bot, chat=-1, day=DAY):
+    """Seed the photo format sent before the switch back to text questions."""
+    from hashlib import sha256
+    import json
+    from app.services.report_image_cache import shared_image, visual_fingerprint
+    from app.services.stats_common import period_to_range
+    from app.services.weekly_report_card import project_card
+    from app.services.mini_app_message import session_question
     with factory.begin() as db:
         sess = DaySession(chat_id=chat, session_date=day, status='active')
         db.add(sess); db.flush()
-        asyncio.run(_post_q1(bot, db, chat, sess.session_id, day, False))
+        period = period_to_range(day, 'week')
+        card = project_card(db, chat, period.start, period.end, 'Тестовый чат', 'Текущая неделя')
+        fingerprint = visual_fingerprint(card)
+        picture = shared_image(chat, card, fingerprint)
+        db.add(SessionMessage(session_id=sess.session_id, kind='Q1', message_id=99+sess.session_id))
         db.flush()
-        row = db.scalar(select(WeeklyReport).where(WeeklyReport.q1_session_id == sess.session_id))
-        assert db.get(SessionMessage, (sess.session_id, 'Q1')).message_id == row.photo_message_id
-        return row.id, sess.session_id, row.photo_message_id
+        payload = session_question(db, db.get(Chat, chat), sess, chat, date(2026,10,21))
+        caption = question_caption(payload['text'])
+        markup = payload['reply_markup']
+        sent = asyncio.run(bot.send_photo(chat_id=chat, photo=picture, caption=caption, reply_markup=markup))
+        row = WeeklyReport(delivery_key=f'q1:{sess.session_id}', source_chat_id=chat,
+            destination_chat_id=chat, q1_session_id=sess.session_id, report_period='week',
+            previous_period_start=period.start, period_start=period.start, period_end=period.end,
+            anchor_date=day, chat_title=card.chat_title, label=card.label,
+            photo_message_id=sent.message_id, card_hash=sha256(picture).hexdigest(),
+            visual_hash=fingerprint,
+            caption_hash=sha256(json.dumps([caption, markup], ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+            revision=1, delivered_revision=1)
+        db.add(row)
+        assert db.get(SessionMessage, (sess.session_id, 'Q1')).message_id == sent.message_id
+        db.flush()
+        return row.id, sess.session_id, sent.message_id
 
 
 @pytest.mark.parametrize('chat', [-1, 1])
-def test_new_days_get_separate_photos_and_roll_over_week(env, chat):
-    factory, bot, worker = env
-    ids = [post(factory, bot, chat, day) for day in (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6))]
-    assert len({mid for _, _, mid in ids}) == 3
-    assert [worker.get(rid).period_start for rid, _, _ in ids] == [
-        date(2026,10,19), date(2026,10,19), date(2026,10,26)]
-    assert bot.send_photo.await_count == 3
-    bot.send_message.assert_not_awaited()
-    for call in bot.send_photo.await_args_list:
+def test_new_days_are_text_with_buttons_and_no_report_jobs(env, chat, monkeypatch):
+    factory, bot, _ = env
+    def forbidden_render(*args):
+        raise AssertionError('Daily questions must not render calendars')
+    monkeypatch.setattr('app.services.report_image_cache.renderer.render_card', forbidden_render)
+    mids = []
+    for day in (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6)):
+        with factory.begin() as db:
+            sess = DaySession(chat_id=chat, session_date=day, status='active')
+            db.add(sess); db.flush()
+            asyncio.run(_post_q1(bot, db, chat, sess.session_id, day, False))
+            db.flush()
+            mids.append(db.get(SessionMessage, (sess.session_id, 'Q1')).message_id)
+            assert db.scalar(select(WeeklyReport.id)) is None
+    assert len(set(mids)) == 3
+    assert bot.send_message.await_count == 3
+    bot.send_photo.assert_not_awaited()
+    bot.get_chat.assert_not_awaited()
+    for call, day in zip(bot.send_message.await_args_list, (DAY, DAY+timedelta(days=1), DAY+timedelta(days=6))):
         assert call.kwargs['reply_markup']
-        assert '21.10.26' in call.kwargs['caption'] or '20.10.26' in call.kwargs['caption'] or '26.10.26' in call.kwargs['caption']
-        assert units(call.kwargs['caption']) <= 1024
+        assert day.strftime('%d.%m.%y') in call.kwargs['text']
+        assert call.kwargs['parse_mode'] == 'HTML'
+    with factory.begin() as db:
+        # New messages use the ordinary editing and Mini App delivery paths.
+        payloads = current_messages(db, chat, 1)
+        assert queue_photo_questions(db, payloads) == payloads
+        asyncio.run(_lock_q1(bot, db, chat, sess.session_id))
+    assert 'Сессия закрыта' in bot.edit_message_text.await_args.kwargs['text']
+    bot.edit_message_caption.assert_not_awaited()
 
 
 def test_same_photo_refreshes_marks_and_closed_buttons(env):
     factory, bot, worker = env
-    rid, sid, mid = post(factory, bot)
+    rid, sid, mid = post_legacy_photo(factory, bot)
     with factory.begin() as db:
         db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1))
         db.get(WeeklyReport, rid).revision += 1
@@ -90,7 +132,7 @@ def test_same_photo_refreshes_marks_and_closed_buttons(env):
 
 def test_private_questions_survive_card_refresh_then_return_to_overview(env):
     factory, bot, worker = env
-    rid, sid, mid = post(factory, bot, 1)
+    rid, sid, mid = post_legacy_photo(factory, bot, 1)
     with factory.begin() as db:
         asyncio.run(edit_question(bot, db, chat_id=1, message_id=mid, text='Консистенция?',
                                   reply_markup=q2_keyboard(private_flow=True, event_n=1)))
@@ -141,7 +183,7 @@ def test_seven_daily_messages_share_one_render_per_visual_change(env, monkeypatc
     monkeypatch.setattr(cache.renderer, 'render_card', render)
     factory, bot, worker = env
     monday = DAY - timedelta(days=DAY.weekday())
-    posts = [post(factory, bot, day=monday+timedelta(days=n)) for n in range(7)]
+    posts = [post_legacy_photo(factory, bot, day=monday+timedelta(days=n)) for n in range(7)]
     assert render.call_count == 1
     with factory.begin() as db:
         db.add(PoopEvent(session_id=posts[0][1], user_id=1, origin_chat_id=-1, event_n=1))
@@ -162,7 +204,7 @@ def test_private_caption_change_skips_render_after_cache_loss(env, monkeypatch):
     from unittest.mock import Mock
     from app.services import report_image_cache as cache
     factory, bot, worker = env
-    rid, _, mid = post(factory, bot, 1)
+    rid, _, mid = post_legacy_photo(factory, bot, 1)
     cache.clear_image_cache()
     render = Mock(side_effect=AssertionError('Caption-only refresh must not render'))
     monkeypatch.setattr(cache.renderer, 'render_card', render)

@@ -72,7 +72,7 @@ def test_render_edge_cases_deterministic(counts, names):
     picture = render_card(card)
     assert picture == render_card(card)
     image = Image.open(BytesIO(picture))
-    assert image.width == 840 and 850 < image.height < 1500
+    assert image.size == (840, 668)
     assert image.getpixel((0, 0)) == (255, 255, 255)
 
 
@@ -329,7 +329,7 @@ def test_long_period_rendering_empty_and_dense_counts(env, period, anchor):
     for card in (empty, dense):
         data = render_card(card)
         image = Image.open(BytesIO(data))
-        assert image.width == 840 and 1000 < image.height < 1900
+        assert image.size == (840, 1138 if period == 'month' else 940)
         assert len(data) < 1024*1024
 
 
@@ -343,3 +343,17 @@ def test_period_keys_do_not_collide_on_same_year_month_week_boundary(env):
         assert len({r.delivery_key for r in rows}) == 3
         for row in rows:
             assert enqueue_report(db, -1, date(2023, 12, 31), period=row.report_period, scheduled=True).id == row.id
+
+
+def test_compact_card_omits_names_and_title_and_marks_one():
+    from dataclasses import replace
+    card = WeeklyCard(START, END, 'Чат', (0,1,2,0,0,0,0), (Participant('Аня', 3),))
+    picture = render_card(card)
+    # Names/title are in the message; changing them cannot change the image.
+    assert render_card(replace(card, chat_title='Другой чат',
+        participants=(Participant('Другое имя', 3),))) == picture
+    image = Image.open(BytesIO(picture))
+    for index, has_badge in [(0, False), (1, True), (2, True)]:
+        cx = 48 + (744 / 7) * (index + .5)
+        # Top inside edge of the badge, away from its digit.
+        assert (image.getpixel((round(cx+25), 314)) == (255,219,0)) == has_badge

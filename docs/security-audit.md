@@ -30,9 +30,16 @@ shared group settings, another user's delete confirmation and recap scope gates.
 Expected stale requests or ordinary authorization failures are not automatically
 classified as attacks.
 
-No raw commands, callback payloads, arbitrary URLs, query strings, bodies,
-Authorization headers, Telegram initData, usernames or mark contents are logged.
+These audit records contain no raw commands, callback payloads, arbitrary URLs,
+query strings, bodies, Authorization headers, Telegram initData, usernames or
+mark contents.
 Existing permission checks and API responses are unchanged.
+
+The fallback handlers for unknown commands and stale/unknown buttons also log
+only the event type and numeric chat/user IDs in ordinary application logs.
+Command names, arguments and callback payloads are omitted entirely. User-facing
+replies are unchanged. This applies to new records; it does not scrub older logs
+or backups created before the change.
 
 Records go to container logs and dedicated host files, retained across container
 replacement. Each file rotates at 2 MiB with five backups (about 24 MiB combined).

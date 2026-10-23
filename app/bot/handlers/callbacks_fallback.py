@@ -13,10 +13,9 @@ logger = logging.getLogger(__name__)
 async def unknown_callback(cb: CallbackQuery) -> None:
     if cb.from_user is not None and cb.message is not None:
         logger.warning(
-            "Unhandled callback chat_id=%s user_id=%s data=%r",
+            "Unhandled callback chat_id=%s user_id=%s",
             cb.message.chat.id,
             cb.from_user.id,
-            cb.data,
         )
     await cb.answer("Кнопка устарела. Обнови /start или /stats", show_alert=False)
 
@@ -26,9 +25,8 @@ async def unknown_command(message: Message) -> None:
     if message.chat is None or message.from_user is None:
         return
     logger.warning(
-        "Unhandled command chat_id=%s user_id=%s text=%r",
+        "Unhandled command chat_id=%s user_id=%s",
         message.chat.id,
         message.from_user.id,
-        message.text,
     )
     await message.answer("Не понял команду. Открой /help")

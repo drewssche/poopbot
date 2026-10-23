@@ -132,6 +132,8 @@ async def _send_debug_action(cb: CallbackQuery, action: str, mode: str) -> bool:
 
     settings = load_settings()
     if cb.from_user is None or not _is_owner(settings, cb.from_user.id):
+        from app.core.security_audit import telegram_denied
+        telegram_denied(cb, 'debug_action')
         return False
     if cb.message is None:
         return False
@@ -253,6 +255,8 @@ async def debug_cmd(message: Message) -> None:
 
     settings = load_settings()
     if not _is_owner(settings, message.from_user.id):
+        from app.core.security_audit import telegram_denied
+        telegram_denied(message, 'debug')
         return
 
     init_db(settings.database_url)
@@ -280,6 +284,8 @@ async def debug_callbacks(cb: CallbackQuery) -> None:
 
     settings = load_settings()
     if cb.from_user is None or not _is_owner(settings, cb.from_user.id):
+        from app.core.security_audit import telegram_denied
+        telegram_denied(cb, 'debug_callback')
         return
     init_db(settings.database_url)
 

@@ -7,6 +7,7 @@ import logging
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery
+from app.core.security_audit import telegram_denied
 
 from app.bot.callback_answers import answer_callback
 from app.bot.handlers.help_actions import (
@@ -60,11 +61,13 @@ async def _can_change_shared_settings(cb: CallbackQuery) -> bool:
     try:
         admins = await cb.bot.get_chat_administrators(chat_id=cb.message.chat.id)
     except TelegramAPIError:
+        telegram_denied(cb, 'shared_settings', 'admin_check_unavailable')
         logger.exception("Cannot verify chat admin chat_id=%s user_id=%s", cb.message.chat.id, cb.from_user.id)
         await answer_callback(cb, "Не удалось проверить права. Попробуй ещё раз.", show_alert=True)
         return False
     if any(admin.user.id == cb.from_user.id for admin in admins):
         return True
+    telegram_denied(cb, 'shared_settings', 'chat_admin_required')
     await answer_callback(cb, "Общие настройки группы может менять только её администратор.", show_alert=True)
     return False
 
@@ -255,6 +258,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
             elif data.startswith("help:delete_confirm_db:") or data.startswith("help:delete_confirm_chat:"):
                 expected_owner = _parse_owner(data)
                 if actor_id != expected_owner:
+                    telegram_denied(cb, 'delete_confirmation', 'confirmation_owner_required')
                     await cb.answer("Это не твое подтверждение", show_alert=False)
                     return
 

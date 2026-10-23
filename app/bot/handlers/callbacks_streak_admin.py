@@ -61,6 +61,8 @@ async def streak_admin_callbacks(cb: CallbackQuery) -> None:
         return
     settings = load_settings()
     if not _is_owner(settings, cb.from_user.id) or cb.message.chat.type != "private":
+        from app.core.security_audit import telegram_denied
+        telegram_denied(cb, 'streakadmin', 'owner_private_required')
         await cb.answer("Недостаточно прав", show_alert=False)
         return
     init_db(settings.database_url)

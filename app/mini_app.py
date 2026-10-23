@@ -14,6 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.services.mini_app_links import scope_chat
+from app.core.security_audit import denied
 from app.services.mini_app_service import MarkRejected, prepare_scope, read_view, record_mark, recover_request
 
 logger = logging.getLogger(__name__)
@@ -134,16 +135,28 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
         except Exception as exc:
             logger.error('Mini App request failed: %s', type(exc).__name__)
             response = web.json_response({'error': 'Temporarily unavailable'}, status=503)
+        if response.status >= 400:
+            # Only fixed route/reason names and the VERIFIED Telegram identity.
+            # Nginx replaces the request ID and records the peer IP separately.
+            action = request.path if request.path in {'/view', '/events', '/recover', '/health'} else 'unknown_route'
+            denied('mini_app', action, request.get('audit_reason', 'request_rejected'),
+                   actor_id=request.get('audit_actor'), status=response.status,
+                   request_id=request.headers.get('X-PoopCheck-Request-ID'))
         response.headers.update({'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
         return response
 
     async def handle(request):
+        request['audit_reason'] = 'origin_rejected'
         if request.headers.get('Origin') != config.origin:
             raise web.HTTPForbidden()
+        request['audit_reason'] = 'authentication_missing'
         auth = request.headers.get('Authorization', '')
         if not auth.startswith('tma '):
             raise web.HTTPUnauthorized()
+        request['audit_reason'] = 'authentication_invalid'
         identity = authenticate(auth[4:], config)
+        request['audit_actor'] = identity['user']['id']
+        request['audit_reason'] = 'invalid_request'
         if request.query_string or request.content_type != 'application/json':
             raise web.HTTPBadRequest()
         try:
@@ -160,7 +173,9 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
             raise web.HTTPBadRequest()
         if not writing and not recovering and body.get('month') is not None and not isinstance(body['month'], str):
             raise web.HTTPBadRequest()
+        request['audit_reason'] = 'scope_rejected'
         chat = resolve_chat(config, identity, scope)
+        request['audit_reason'] = 'request_rejected'
         user = identity['user']
         current = time.monotonic()
         for key in list(recent):
@@ -169,6 +184,7 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
                 del recent[key]
         bucket = recent.setdefault(user['id'], [])
         if len(tasks) >= capacity or len(bucket) >= 60 or sum(map(len, recent.values())) >= 600:
+            request['audit_reason'] = 'rate_limited'
             raise web.HTTPTooManyRequests()
         bucket.append(current)
         async def operation():
@@ -177,9 +193,11 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
             try:
                 await asyncio.wait_for(slots.acquire(), timeout=queue_timeout)
             except TimeoutError:
+                request['audit_reason'] = 'capacity_limited'
                 raise web.HTTPTooManyRequests() from None
             try:
                 if chat < 0 and (authorize is None or not await authorize(chat, user['id'], writing=writing or recovering)):
+                    request['audit_reason'] = 'membership_required'
                     raise web.HTTPForbidden()
                 if writing:
                     if writer is None:
@@ -200,6 +218,7 @@ def create_app(config: Config, reader, writer=None, authorize=None, notifier=Non
                     result = await asyncio.to_thread(reader, chat, user, body.get('month'))
                 return result
             except PermissionError:
+                request['audit_reason'] = 'permission_denied'
                 raise web.HTTPForbidden() from None
             except MarkRejected as exc:
                 raise web.HTTPConflict(reason=str(exc)) from None
@@ -300,6 +319,8 @@ def main():
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)
     logging.basicConfig(level=logging.INFO)
+    from app.core.security_audit import configure_security_audit
+    configure_security_audit()
     web.run_app(app, host='0.0.0.0', port=8080, access_log=None, print=None)
 
 

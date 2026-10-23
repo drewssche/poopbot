@@ -57,6 +57,10 @@ services:
         max-file: "3"
 
     env_file: .env
+    environment:
+      SECURITY_AUDIT_LOG: /var/log/poopbot-security/bot.jsonl
+    volumes:
+      - /var/log/poopbot-security/bot:/var/log/poopbot-security
 
     depends_on:
       db:
@@ -80,6 +84,10 @@ services:
       dockerfile: Dockerfile.mini-app
     restart: unless-stopped
     env_file: .env
+    environment:
+      SECURITY_AUDIT_LOG: /var/log/poopbot-security/mini-app.jsonl
+    volumes:
+      - /var/log/poopbot-security/mini-app:/var/log/poopbot-security
     command: ["python", "-m", "app.mini_app"]
     ports:
       - "127.0.0.1:8087:8080"

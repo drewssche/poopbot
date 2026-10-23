@@ -2,6 +2,8 @@ import logging
 
 
 def setup_logging(level: str = "INFO") -> None:
+    from app.core.security_audit import configure_security_audit
+    configure_security_audit()
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",

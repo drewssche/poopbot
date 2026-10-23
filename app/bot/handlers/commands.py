@@ -342,6 +342,8 @@ async def streak_admin_cmd(message: Message) -> None:
 
     settings = load_settings()
     if not _is_owner(settings, message.from_user.id):
+        from app.core.security_audit import telegram_denied
+        telegram_denied(message, 'streak')
         return
 
     init_db(settings.database_url)

@@ -50,7 +50,7 @@ SHARED_ACTIONS = [
 
 
 @pytest.mark.parametrize('action,field,new_value', SHARED_ACTIONS)
-def test_member_cannot_change_any_shared_setting_even_from_admin_menu(scenario, action, field, new_value):
+def test_member_cannot_change_any_shared_setting_even_from_admin_menu(scenario, action, field, new_value, caplog):
     s = scenario
     s.cb.data = f'help:{action}:2'
     with s.factory() as db:
@@ -61,6 +61,7 @@ def test_member_cannot_change_any_shared_setting_even_from_admin_menu(scenario, 
     s.cb.answer.assert_awaited_once_with('Общие настройки группы может менять только её администратор.', show_alert=True)
     handler.render_notifications_panel.assert_not_awaited()
     handler.render_global_visibility_panel.assert_not_awaited()
+    assert 'chat_admin_required' in caplog.text and '"actor_id":1' in caplog.text
 
 
 @pytest.mark.parametrize('action,field,new_value', SHARED_ACTIONS)
@@ -126,7 +127,7 @@ def test_member_can_read_settings_without_admin_check(scenario, action):
     s.cb.bot.get_chat_administrators.assert_not_awaited()
 
 
-def test_member_cannot_confirm_another_users_deletion(scenario):
+def test_member_cannot_confirm_another_users_deletion(scenario, caplog):
     s = scenario
     s.cb.data = 'help:delete_confirm_db:2'
     asyncio.run(handler.help_callbacks(s.cb))
@@ -134,3 +135,4 @@ def test_member_cannot_confirm_another_users_deletion(scenario):
         assert db.get(User, 1) is not None
         assert db.get(User, 2) is not None
     s.cb.answer.assert_awaited_once_with('Это не твое подтверждение', show_alert=False)
+    assert 'confirmation_owner_required' in caplog.text

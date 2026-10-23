@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.core.security_audit import telegram_denied
+
 from html import escape
 
 import logging
@@ -168,6 +170,7 @@ async def _check_recap_window(cb: CallbackQuery) -> tuple[bool, int, object] | t
         today = now_in_tz(tz).date()
 
     if not is_recap_available(today, cb.from_user.id, settings.bot_owner_id):
+        telegram_denied(cb, "recap", "outside_recap_window")
         await cb.answer("Рекап доступен с 30 декабря по 3 января", show_alert=True)
         return False, None, settings
 
@@ -338,12 +341,14 @@ async def recap_pick_chat(cb: CallbackQuery) -> None:
 
     owner = _is_owner(settings, cb.from_user.id)
     if not owner or cb.message.chat.type != "private":
+        telegram_denied(cb, "recap_picker", "owner_private_required")
         await cb.answer("Неактуально", show_alert=False)
         return
 
     with db_session(_session_factory) as db:
         allowed_chat_ids = list_user_member_chat_ids(db, cb.from_user.id)
     if not (mode == "personal" and source_chat_id == 0) and source_chat_id not in allowed_chat_ids:
+        telegram_denied(cb, "recap_picker", "chat_scope_rejected")
         await cb.answer("Неактуально", show_alert=False)
         return
 
@@ -397,10 +402,12 @@ async def recap_chat_next(cb: CallbackQuery) -> None:
         with db_session(_session_factory) as db:
             allowed = list_user_member_chat_ids(db, cb.from_user.id)
         if source_chat_id != 0 and source_chat_id not in allowed:
+            telegram_denied(cb, "recap_card", "chat_scope_rejected")
             await cb.answer("Неактуально", show_alert=False)
             return
     else:
         if cb.message.chat.id != source_chat_id:
+            telegram_denied(cb, "recap_card", "chat_scope_rejected")
             await cb.answer("Неактуально", show_alert=False)
             return
 
@@ -454,6 +461,7 @@ async def recap_next(cb: CallbackQuery) -> None:
         with db_session(_session_factory) as db:
             allowed = list_user_member_chat_ids(db, cb.from_user.id)
         if source_chat_id != 0 and source_chat_id not in allowed:
+            telegram_denied(cb, "recap_card", "chat_scope_rejected")
             await cb.answer("Неактуально", show_alert=False)
             return
     elif cb.message.chat.type == "private":
@@ -463,6 +471,7 @@ async def recap_next(cb: CallbackQuery) -> None:
             with db_session(_session_factory) as db:
                 allowed = list_user_recap_chat_ids(db, cb.from_user.id, year)
             if source_chat_id != 0 and source_chat_id not in allowed:
+                telegram_denied(cb, "recap_card", "chat_scope_rejected")
                 await cb.answer("Неактуально", show_alert=False)
                 return
 

@@ -229,3 +229,57 @@ def test_old_photo_shrinks_on_next_refresh_without_reposting(env):
     assert Image.open(BytesIO(payload['media'].media.data)).size == (840, 328)
     assert worker.get(rid).delivered_revision == worker.get(rid).revision
     assert bot.send_photo.await_count == 1
+
+
+def test_mark_during_render_does_not_publish_an_obsolete_empty_question(env, monkeypatch):
+    factory, bot, worker = env
+    rid, sid, mid = post(factory, bot)
+    with factory.begin() as db:
+        db.get(WeeklyReport, rid).revision += 1
+    snapshot = worker.snapshot
+
+    def delayed_snapshot(report_id):
+        old = snapshot(report_id)
+        # Another user's callback commits while the old view is being rendered.
+        with factory.begin() as db:
+            db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1,
+                             source='restored'))
+            db.get(WeeklyReport, rid).revision += 1
+        return old
+
+    monkeypatch.setattr(worker, 'snapshot', delayed_snapshot)
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_media.assert_not_awaited()
+    bot.edit_message_caption.assert_not_awaited()
+    assert worker.get(rid).delivered_revision == 1
+    assert worker.get(rid).attempts == 0
+    assert worker.pending()[0] == [rid]
+    assert worker.wake.is_set()
+
+    monkeypatch.setattr(worker, 'snapshot', snapshot)
+    asyncio.run(worker.deliver(rid))
+    payload = bot.edit_message_media.await_args.kwargs
+    assert payload['message_id'] == mid
+    assert '💩(1)' in payload['media'].caption
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+
+
+def test_question_disabled_during_render_is_not_edited(env, monkeypatch):
+    factory, bot, worker = env
+    rid, sid, _ = post(factory, bot)
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1))
+        db.get(WeeklyReport, rid).revision += 1
+    snapshot = worker.snapshot
+
+    def disabled_snapshot(report_id):
+        old = snapshot(report_id)
+        with factory.begin() as db:
+            db.get(WeeklyReport, rid).disabled = True
+        return old
+
+    monkeypatch.setattr(worker, 'snapshot', disabled_snapshot)
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_media.assert_not_awaited()
+    bot.edit_message_caption.assert_not_awaited()
+    assert worker.get(rid).delivered_revision == 1

@@ -209,6 +209,13 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
             committed = True
             _log_q1_result(cb, "saved" if changed else "unchanged", session_id)
 
+            if changed and cb.data != "q1:restore_streak":
+                # A saved count is useful even while the photo publisher catches
+                # up. Capture this action's result, not a later concurrent count.
+                count = int(state.poops_n) if state else 0
+                popup = (f"Сохранено. Твоих отметок за день: {count}.\n{popup}" if cb.data != "q1:minus"
+                         else f"Отметка удалена. Твоих отметок за день: {count}.")
+
             # Telegram acknowledgement must never roll back a saved action or
             # prevent refreshing Q1/private Q2 when the callback has expired.
             try:

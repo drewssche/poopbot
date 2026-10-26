@@ -155,6 +155,17 @@ class ReportWorker:
                 keyboard = InlineKeyboardMarkup(**row._q1_markup) if row._q1_markup else None
                 caption_hash = digest(json.dumps([caption, row._q1_markup], ensure_ascii=False, sort_keys=True))
                 parse_mode = 'HTML'
+            # Rendering runs off-loop and can outlive another committed +/−.
+            # Never knowingly send that older caption/media. Keep the revision
+            # pending so the next pass projects fresh data, without retry errors.
+            current = await database_work(self.get, report_id)
+            if current is None or current.disabled or current.delivered_revision >= revision:
+                return
+            if current.revision != revision:
+                log.info('Calendar report superseded id=%s revision=%s current_revision=%s',
+                         report_id, revision, current.revision)
+                self.wake.set()
+                return
             if not row.photo_message_id:
                 sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
                     photo=BufferedInputFile(picture, f'{row.report_period}-report.png'), caption=caption,

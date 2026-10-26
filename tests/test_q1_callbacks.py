@@ -195,3 +195,36 @@ def test_photo_question_saves_mark_and_queues_its_existing_message(scenario):
     asyncio.run(worker.deliver(rid))
     assert s.cb.bot.edit_message_media.await_args.kwargs['message_id'] == 10
     assert worker.get(rid).revision == worker.get(rid).delivered_revision
+
+
+def test_group_plus_plus_minus_keeps_saved_counts_after_photo_refresh(scenario, monkeypatch):
+    from app.services.weekly_reports import enqueue_report, ReportWorker
+    from app.services.q1_card_state import plain_text
+    s = scenario
+    monkeypatch.setattr(handler, 'check_rate_limit', lambda *a, **kw: True)
+    s.cb.bot.edit_message_media = AsyncMock()
+    s.cb.bot.edit_message_caption = AsyncMock()
+    with s.factory.begin() as db:
+        row = enqueue_report(db, -100, s.today, chat_title='Тест')
+        row.q1_session_id = 1
+        row.photo_message_id = 10
+        row.card_hash = 'previous-image'
+        row.delivered_revision = 1
+        rid = row.id
+    worker = ReportWorker(s.cb.bot, s.factory, 'unused')
+    for action, expected in [('q1:plus', 1), ('q1:plus', 2), ('q1:minus', 1), ('q1:minus', 0)]:
+        s.cb.data = action
+        asyncio.run(handler.q1_callbacks(s.cb))
+        assert_mark(s.factory, 1, expected)
+        assert f'Твоих отметок за день: {expected}.' in s.cb.answer.await_args.args[0]
+        asyncio.run(worker.deliver(rid))
+        caption = plain_text(s.cb.bot.edit_message_media.await_args.kwargs['media'].caption)
+        participant = next(line for line in caption.splitlines() if line.startswith('@test —'))
+        if expected:
+            assert f' {expected} |' in participant or f'💩({expected})' in participant
+            assert '— —' not in participant
+        else:
+            assert '— —' in participant
+        assert worker.pending()[0] == []
+        assert_mark(s.factory, 1, expected)
+    s.cb.bot.edit_message_text.assert_not_awaited()

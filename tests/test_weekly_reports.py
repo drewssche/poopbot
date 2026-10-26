@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.methods import EditMessageMedia, SendPhoto
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.methods import EditMessageMedia, GetChat, SendPhoto
 from PIL import Image
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -211,6 +211,59 @@ def test_rate_limit_and_retry_exhaustion_preserve_job(env):
     asyncio.run(worker.deliver(rid))
     assert worker.pending() == ([], None)
     assert not worker.get(rid).disabled and worker.get(rid).delivered_revision == 0
+
+
+@pytest.mark.parametrize('destination', [1, -1])
+def test_forbidden_recipient_stops_job_and_only_alerts_for_groups(env, caplog, destination):
+    factory, bot, worker = env
+    worker.owner_id = 99
+    with factory.begin() as db:
+        rid = enqueue_weekly_report(db, -1, END, destination=destination,
+                                    chat_title='Тест').id
+    bot.send_photo.side_effect = TelegramForbiddenError(
+        method=SendPhoto(chat_id=destination, photo='x'), message='PRIVATE-API-DETAIL')
+    asyncio.run(worker.deliver(rid))
+    row = worker.get(rid)
+    assert row.disabled and row.attempts == 1 and row.delivered_revision == 0
+    assert row.last_error == 'TelegramForbiddenError'
+    assert worker.pending() == ([], None)
+    asyncio.run(worker.deliver(rid))
+    bot.send_photo.assert_awaited_once()
+    if destination > 0:
+        bot.send_message.assert_not_awaited()
+    else:
+        bot.send_message.assert_awaited_once()
+        assert bot.send_message.await_args.kwargs['chat_id'] == 99
+    assert 'TelegramForbiddenError' in caplog.text
+    assert 'PRIVATE-API-DETAIL' not in caplog.text
+
+
+def test_group_lookup_failure_still_alerts_for_private_preview(env):
+    factory, bot, worker = env
+    worker.owner_id = 99
+    with factory.begin() as db:
+        rid = enqueue_weekly_report(db, -1, END, destination=1).id
+    bot.get_chat.side_effect = TelegramForbiddenError(
+        method=GetChat(chat_id=-1), message='Forbidden')
+    asyncio.run(worker.deliver(rid))
+    assert worker.get(rid).disabled
+    bot.send_photo.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+
+
+def test_private_report_technical_failure_still_alerts_after_retries(env):
+    factory, bot, worker = env
+    worker.owner_id = 99
+    with factory.begin() as db:
+        row = enqueue_weekly_report(db, 1, END, chat_title='Личные отметки')
+        row.attempts = MAX_ATTEMPTS - 1
+        rid = row.id
+    bot.send_photo.side_effect = OSError('network')
+    asyncio.run(worker.deliver(rid))
+    row = worker.get(rid)
+    assert not row.disabled and row.attempts == MAX_ATTEMPTS
+    assert worker.pending() == ([], None)
+    bot.send_message.assert_awaited_once()
 
 
 def test_caption_fits_telegram_and_includes_quality_trend_and_unknowns(env):

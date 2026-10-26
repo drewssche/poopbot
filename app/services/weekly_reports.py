@@ -225,6 +225,11 @@ class ReportWorker:
             row.retry_at = utcnow() + timedelta(seconds=delay)
             row.disabled = permanent
             row.last_error = type(exc).__name__
+            # A private recipient declining bot messages needs no owner action.
+            # Keep alerts for failures accessing the source group of a preview.
+            if (isinstance(exc, TelegramForbiddenError) and row.destination_chat_id > 0
+                    and getattr(exc.method, 'chat_id', None) == row.destination_chat_id):
+                return False
             return permanent or row.attempts == MAX_ATTEMPTS
 
     async def drain(self):

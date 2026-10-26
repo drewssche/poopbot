@@ -1,0 +1,47 @@
+{
+  "dove": {
+    "source": "https://www.phylopic.org/images/310b4994-af54-4d7b-93ac-27bbf80f7706",
+    "vector_url": "https://images.phylopic.org/images/310b4994-af54-4d7b-93ac-27bbf80f7706/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Amy Beauvois",
+    "contributor": "Amy Beauvois",
+    "taxon": "Columba livia",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "cat": {
+    "source": "https://www.phylopic.org/images/a3fb4098-a1e6-4f1c-9054-782ac8ab0eac",
+    "vector_url": "https://images.phylopic.org/images/a3fb4098-a1e6-4f1c-9054-782ac8ab0eac/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/mark/1.0/",
+    "attribution": null,
+    "contributor": "SJS",
+    "taxon": "Felis lybica catus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "horse": {
+    "source": "https://www.phylopic.org/images/b302ceef-072c-471c-bc7d-164c428dd57a",
+    "vector_url": "https://images.phylopic.org/images/b302ceef-072c-471c-bc7d-164c428dd57a/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": null,
+    "contributor": "Mozillian",
+    "taxon": "Equus ferus caballus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "hippo": {
+    "source": "https://www.phylopic.org/images/e130f877-a96c-48d8-9f26-bb131021397f",
+    "vector_url": "https://images.phylopic.org/images/e130f877-a96c-48d8-9f26-bb131021397f/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "An Ignorant Atheist",
+    "contributor": "Jody Taylor",
+    "taxon": "Hippopotamus amphibius",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "dog": {
+    "source": "https://www.phylopic.org/images/6c9cb19d-1d8a-4215-88ba-d49cd4917a5e",
+    "vector_url": "https://images.phylopic.org/images/6c9cb19d-1d8a-4215-88ba-d49cd4917a5e/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Tracy A. Heath",
+    "contributor": "Tracy Heath",
+    "taxon": "Canis familiaris familiaris",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  }
+}

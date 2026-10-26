@@ -126,7 +126,7 @@ def draw_estimates(c, y, total, title):
     drop = water_icon()
     c.im.paste(drop, (462, y+63), drop)
     c.text(162, y+62, format_mass(mass).replace('.', ','), 42, BROWN, 650, width=224)
-    c.text(162, y+120, 'общая масса', 22, width=224)
+    c.text(162, y+120, 'Общая каловая масса', 20, width=224)
     c.text(544, y+62, f'{water:.0f} л', 42, WATER, 650, width=224)
     c.text(544, y+120, 'воды на смыв', 22, width=224)
     comparison = mass_comparison(mass / 1000)
@@ -140,7 +140,7 @@ def draw_estimates(c, y, total, title):
         c.text(210, top+18, label, 34, BROWN, 650, width=558)
         reference = format_mass(animal.kg * 1000).replace('.', ',')
         c.text(210, top+70, f'По массе · {animal.name.lower()} ≈ {reference}', 20, MUTED, width=558)
-        c.text(210, top+97, 'Силуэты: Font Awesome · CC BY 4.0', 11, MUTED)
+        c.text(210, top+97, 'Силуэты: PhyloPic · Public domain', 11, MUTED)
 
 
 def render_weekly(card):

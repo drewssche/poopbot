@@ -19,12 +19,21 @@
 | Лошадь | 450 кг | [University of Michigan, BioKIDS](https://biokids.umich.edu/critters/Equus_caballus/), 227–900 кг в зависимости от породы |
 | Бегемот | 1500 кг | [San Diego Zoo Wildlife Alliance, справочник](https://ielc.libguides.com/sdzg/factsheets/hippopotamus/summary), средние 1385/1546 кг по полу |
 
-Силуэты `dove`, `cat`, `dog`, `horse`, `hippo`: **Font Awesome Free 6.7.2**,
-Fonticons, Inc., [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-[Оригиналы](https://github.com/FortAwesome/Font-Awesome/tree/6.7.2/svgs/solid)
-сохранены в `app/assets/reports/animal-sources/` вместе с лицензией. Изменения:
-цвет `#934c21`, преобразование в PNG и масштабирование. Иконки условные;
-например, силуэт `dog` используется для ориентира «лабрадор».
+Силуэты заменены на более реалистичные изображения **PhyloPic** в общественном
+достоянии (CC0 1.0 / Public Domain Mark 1.0). Коричневый цвет и размеры блока сохранены.
+
+| Файл | Автор / загрузивший | Оригинал | Лицензия |
+|---|---|---|---|
+| dove | Amy Beauvois | [Голубь](https://www.phylopic.org/images/310b4994-af54-4d7b-93ac-27bbf80f7706) | CC0 1.0 |
+| cat | SJS | [Кошка](https://www.phylopic.org/images/a3fb4098-a1e6-4f1c-9054-782ac8ab0eac) | PDM 1.0 |
+| dog | Tracy A. Heath | [Собака](https://www.phylopic.org/images/6c9cb19d-1d8a-4215-88ba-d49cd4917a5e) | CC0 1.0 |
+| horse | Mozillian | [Лошадь](https://www.phylopic.org/images/b302ceef-072c-471c-bc7d-164c428dd57a) | CC0 1.0 |
+| hippo | An Ignorant Atheist | [Бегемот](https://www.phylopic.org/images/e130f877-a96c-48d8-9f26-bb131021397f) | CC0 1.0 |
+
+Оригинальные SVG, сведения об авторах и ссылки на лицензии сохранены в
+`app/assets/reports/animal-sources/`. Изменения: цвет `#934c21`, преобразование в PNG
+и масштабирование. Силуэт собаки иллюстрирует ретривера; весовой ориентир остаётся
+«лабрадор». Подпись массы — «Общая каловая масса» (20 px, целиком в прежнем блоке).
 
 PNG подготовлены заранее. На VPS нет новых зависимостей или сетевых обращений
 для рендера. Код сравнения и PNG включены в отпечаток рендера для обновления

@@ -145,9 +145,11 @@ def render_card(card: ReportCard) -> bytes:
     else:
         shift = 0
     # Fixed height for each calendar layout, independent of the group size.
-    footer_y = 612 + shift
-    image = Image.new('RGB', (840, footer_y + 56), 'white')
-    draw = ImageDraw.Draw(image)
+    from app.services.report_layouts import Canvas, draw_estimates, estimates_height
+    estimates_y = 612 + shift
+    footer_y = estimates_y + (estimates_height(card.total) if card.period in ('month', 'year') else 0)
+    canvas = Canvas(footer_y + 56)
+    image, draw = canvas.im, canvas.d
     fonts = {}
 
     def font(size, weight=400):
@@ -221,6 +223,9 @@ def render_card(card: ReportCard) -> bytes:
         count = len(card.participants)
         text(458, 450+shift, str(count), 56, BROWN, 650, width=306)
         text(458, 525+shift, plural(count, 'участник отметился', 'участника отметились', 'участников отметились'), 23)
+    if card.period in ('month', 'year'):
+        title = 'За месяц · примерно' if card.period == 'month' else 'За год · примерно'
+        draw_estimates(canvas, estimates_y, card.total, title)
     draw.line((48, footer_y, 792, footer_y), fill='#eee8e3')
     text(48, footer_y+22, 'Личная история' if card.private else 'Отметки этого чата', 18, MUTED)
     text(792, footer_y+22, '@poopcheck_bot', 18, MUTED, anchor='rt')

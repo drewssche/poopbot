@@ -22,6 +22,7 @@ def renderer_identity():
     source = Path(renderer.__file__)
     digest = sha256(source.read_bytes())
     digest.update(source.with_name('report_layouts.py').read_bytes())
+    digest.update(source.with_name('report_animals.py').read_bytes())
     for path in sorted(renderer.ASSETS.iterdir()):
         if path.suffix in {'.png', '.ttf'}:
             digest.update(path.name.encode())

@@ -5,6 +5,9 @@ import unicodedata
 from PIL import Image, ImageDraw, ImageFont
 from app.services.weekly_report_card import ASSETS, INK, BROWN, MUTED, BEIGE, PALE, period_text, plural
 from app.services.stats_common import estimate_waste_metrics, format_mass
+from app.services.report_animals import mass_comparison
+
+WATER = '#3DA5FF'
 
 
 class Canvas:
@@ -105,8 +108,39 @@ def water_icon():
             t = step / 40
             u = 1 - t
             points.append(tuple(scale * (u**3*a[i] + 3*u*u*t*b[i] + 3*u*t*t*e[i] + t**3*f[i]) for i in (0, 1)))
-    ImageDraw.Draw(image).polygon(points, fill=BROWN)
+    ImageDraw.Draw(image).polygon(points, fill=WATER)
     return image.resize((54, 66), Image.Resampling.LANCZOS)
+
+
+def estimates_height(total):
+    return 180 + (132 if total > 0 else 0)
+
+
+def draw_estimates(c, y, total, title):
+    mass, water, _ = estimate_waste_metrics(total)
+    c.text(48, y, title, 25, weight=500)
+    for x in (48, 430):
+        c.d.rounded_rectangle((x, y+42, x+362, y+158), radius=24, fill=PALE)
+    poop = c.poop.resize((62, 60), Image.Resampling.LANCZOS)
+    c.im.paste(poop, (76, y+68), poop)
+    drop = water_icon()
+    c.im.paste(drop, (462, y+63), drop)
+    c.text(162, y+62, format_mass(mass).replace('.', ','), 42, BROWN, 650, width=224)
+    c.text(162, y+120, 'общая масса', 22, width=224)
+    c.text(544, y+62, f'{water:.0f} л', 42, WATER, 650, width=224)
+    c.text(544, y+120, 'воды на смыв', 22, width=224)
+    comparison = mass_comparison(mass / 1000)
+    if comparison is not None:
+        animal, label = comparison
+        top = y + 180
+        c.d.rounded_rectangle((48, top, 792, top+112), radius=24, fill=PALE)
+        silhouette = Image.open(ASSETS / f'animal-{animal.icon}.png').convert('RGBA')
+        silhouette.thumbnail((116, 80), Image.Resampling.LANCZOS)
+        c.im.paste(silhouette, (68+(116-silhouette.width)//2, top+(112-silhouette.height)//2), silhouette)
+        c.text(210, top+18, label, 34, BROWN, 650, width=558)
+        reference = format_mass(animal.kg * 1000).replace('.', ',')
+        c.text(210, top+70, f'По массе · {animal.name.lower()} ≈ {reference}', 20, MUTED, width=558)
+        c.text(210, top+97, 'Силуэты: Font Awesome · CC BY 4.0', 11, MUTED)
 
 
 def render_weekly(card):
@@ -120,7 +154,7 @@ def render_weekly(card):
     second_y = first_y + distribution_height(d.bristol) + 18
     bottom = max(752, second_y + distribution_height(d.feeling))
     extra = bottom - 752
-    c = Canvas(992 + extra)
+    c = Canvas(812 + extra + estimates_height(total))
     c.logo(48, 24, 210, 53)
     if card.label:
         c.d.rounded_rectangle((500, 30, 792, 75), radius=23, fill=PALE)
@@ -188,21 +222,11 @@ def render_weekly(card):
         c.text(48, 755, f'Топ-3 из {members} · все в /stats', 17, MUTED, width=362)
     distribution(c, first_y, 'Консистенция', d.bristol, ('Жёстко', 'Норма', 'Мягко', 'Водичка', 'Не указано'))
     distribution(c, second_y, 'Самочувствие', d.feeling, ('Прекрасно', 'Сойдёт', 'Ужасно', 'Не указано'))
-    mass, water, _ = estimate_waste_metrics(total)
     # Canvas height and the footer depend only on answer blocks, not group size.
     extra = bottom - 752
-    c.text(48, 780+extra, 'За неделю · примерно', 25, weight=500)
-    for x in (48, 430):
-        c.d.rounded_rectangle((x, 822+extra, x+362, 938+extra), radius=24, fill=PALE)
-    poop = c.poop.resize((62, 60), Image.Resampling.LANCZOS)
-    c.im.paste(poop, (76, 848+extra), poop)
-    drop = water_icon()
-    c.im.paste(drop, (462, 843+extra), drop)
-    c.text(162, 842+extra, format_mass(mass).replace('.', ','), 42, BROWN, 650, width=224)
-    c.text(162, 900+extra, 'общая масса', 22, width=224)
-    c.text(544, 842+extra, f'{water:.0f} л', 42, BROWN, 650, width=224)
-    c.text(544, 900+extra, 'воды на смыв', 22, width=224)
-    c.d.line((48, 960+extra, 792, 960+extra), fill='#eee8e3')
-    c.text(48, 974+extra, 'Личная история' if card.private else 'Отметки этого чата', 16, MUTED)
-    c.text(792, 974+extra, '@poopcheck_bot', 16, MUTED, anchor='rt')
+    draw_estimates(c, 780+extra, total, 'За неделю · примерно')
+    footer = 780 + extra + estimates_height(total)
+    c.d.line((48, footer, 792, footer), fill='#eee8e3')
+    c.text(48, footer+14, 'Личная история' if card.private else 'Отметки этого чата', 16, MUTED)
+    c.text(792, footer+14, '@poopcheck_bot', 16, MUTED, anchor='rt')
     return c.png()

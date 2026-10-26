@@ -309,7 +309,7 @@ img {
 .month .day:not(.has-events) .date-number {
   color: var(--muted);
 }
-.month .day.selected .date-number {
+.month .day.selected:not(.has-events) .date-number {
   top: 50%;
   left: 50%;
   right: auto;
@@ -320,13 +320,6 @@ img {
   place-items: center;
   background: var(--pale);
   border-radius: 50%;
-}
-.month .day.selected.has-events .date-number {
-  background: var(--brown);
-  color: #fff;
-}
-.month .day.selected .poop-mark {
-  visibility: hidden;
 }
 .badge {
   position: absolute;
@@ -343,10 +336,6 @@ img {
   line-height: 15px;
   font-weight: 600;
   z-index: 2;
-}
-.month .day.selected .badge {
-  right: calc(50% - var(--month-selection-size) / 2);
-  top: 0;
 }
 .question {
   padding: 40px 44px 110px;

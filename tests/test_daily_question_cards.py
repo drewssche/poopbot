@@ -283,3 +283,28 @@ def test_question_disabled_during_render_is_not_edited(env, monkeypatch):
     bot.edit_message_media.assert_not_awaited()
     bot.edit_message_caption.assert_not_awaited()
     assert worker.get(rid).delivered_revision == 1
+
+
+def test_closing_deleted_private_question_keeps_marks_without_owner_alert(env):
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import EditMessageCaption
+    factory, bot, worker = env
+    worker.owner_id = 99
+    rid, sid, mid = post(factory, bot, 1)
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=1, event_n=1))
+        db.get(WeeklyReport, rid).revision += 1
+    asyncio.run(worker.deliver(rid))
+    with factory.begin() as db:
+        db.get(DaySession, sid).status = 'closed'
+        asyncio.run(_lock_q1(bot, db, 1, sid))
+    bot.edit_message_caption.side_effect = TelegramBadRequest(
+        method=EditMessageCaption(chat_id=1, message_id=mid),
+        message='Bad Request: message to edit not found')
+    asyncio.run(worker.deliver(rid))
+    assert worker.get(rid).disabled
+    assert worker.pending() == ([], None)
+    bot.send_message.assert_not_awaited()
+    bot.send_photo.assert_awaited_once()
+    with factory() as db:
+        assert db.scalar(select(PoopEvent.id).where(PoopEvent.session_id == sid)) is not None

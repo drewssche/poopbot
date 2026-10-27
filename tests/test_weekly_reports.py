@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.methods import EditMessageMedia, GetChat, SendPhoto
+from aiogram.methods import EditMessageCaption, EditMessageMedia, GetChat, SendPhoto
 from PIL import Image
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -264,6 +264,57 @@ def test_private_report_technical_failure_still_alerts_after_retries(env):
     assert not row.disabled and row.attempts == MAX_ATTEMPTS
     assert worker.pending() == ([], None)
     bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.parametrize('destination', [1, -1])
+@pytest.mark.parametrize('edit_caption', [True, False])
+def test_deleted_private_photo_stops_without_alert_or_repost(env, caplog, destination, edit_caption):
+    factory, bot, worker = env
+    worker.owner_id = 99
+    with factory.begin() as db:
+        rid = enqueue_weekly_report(db, -1, END, destination=destination, chat_title='Тест').id
+    asyncio.run(worker.deliver(rid))
+    with factory.begin() as db:
+        row = db.get(WeeklyReport, rid)
+        row.revision += 1
+        if edit_caption:
+            row.caption_hash = 'outdated-caption'
+        else:
+            mark(db)
+    method = (EditMessageCaption(chat_id=destination, message_id=10) if edit_caption else
+              EditMessageMedia(chat_id=destination, message_id=10, media={'type':'photo', 'media':'x'}))
+    edit = bot.edit_message_caption if edit_caption else bot.edit_message_media
+    edit.side_effect = TelegramBadRequest(method=method,
+        message='Bad Request: message to edit not found PRIVATE-DETAIL')
+    asyncio.run(worker.deliver(rid))
+    row = worker.get(rid)
+    assert row.disabled and row.attempts == 1 and row.delivered_revision == 1
+    assert row.last_error == 'TelegramBadRequest'
+    assert worker.pending() == ([], None)
+    asyncio.run(worker.deliver(rid))
+    edit.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
+    if destination > 0:
+        bot.send_message.assert_not_awaited()
+    else:
+        bot.send_message.assert_awaited_once()
+    assert 'reason=message_missing' in caplog.text
+    assert 'PRIVATE-DETAIL' not in caplog.text
+
+
+@pytest.mark.parametrize('case', ['wrong_message', 'wrong_chat', 'uneditable', 'invalid_request'])
+def test_private_photo_suppression_does_not_hide_other_failures(env, case):
+    factory, bot, worker = env
+    with factory.begin() as db:
+        row = enqueue_weekly_report(db, 1, END, chat_title='Личные отметки')
+        row.photo_message_id = 10
+        row.attempts = MAX_ATTEMPTS - 1
+        rid = row.id
+    method = EditMessageCaption(chat_id=-1 if case == 'wrong_chat' else 1,
+                                message_id=11 if case == 'wrong_message' else 10)
+    message = {'uneditable': "Bad Request: message can't be edited",
+               'invalid_request': "Bad Request: can't parse entities"}.get(case, 'Bad Request: message to edit not found')
+    assert worker.failed(rid, 1, TelegramBadRequest(method=method, message=message))
 
 
 def test_caption_fits_telegram_and_includes_quality_trend_and_unknowns(env):

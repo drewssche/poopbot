@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import psycopg
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.methods import EditMessageCaption, EditMessageMedia
 from aiogram.types import BufferedInputFile, InputMediaPhoto, InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.engine import make_url
@@ -60,6 +61,25 @@ def enqueue_weekly_report(db, chat_id, anchor, **kwargs):
 
 def digest(value):
     return sha256(value.encode() if isinstance(value, str) else value).hexdigest()
+
+
+def delivery_failure_reason(exc):
+    """Fixed categories only: never copy Telegram payloads into logs."""
+    if isinstance(exc, TelegramForbiddenError):
+        return 'access_denied'
+    if isinstance(exc, TelegramRetryAfter):
+        return 'rate_limited'
+    if isinstance(exc, TelegramBadRequest):
+        message = exc.message.lower()
+        for fragment, reason in (
+            ('message to edit not found', 'message_missing'),
+            ("message can't be edited", 'message_uneditable'),
+            ('chat not found', 'chat_missing'),
+        ):
+            if fragment in message:
+                return reason
+        return 'invalid_request'
+    return 'other'
 
 
 class ReportWorker:
@@ -201,7 +221,8 @@ class ReportWorker:
             log.info('Calendar report delivered id=%s revision=%s', report_id, revision)
         except Exception as exc:
             # Never log full API exceptions: they can include private report content.
-            log.warning('Calendar report failed id=%s error=%s', report_id, type(exc).__name__)
+            log.warning('Calendar report failed id=%s error=%s reason=%s',
+                        report_id, type(exc).__name__, delivery_failure_reason(exc))
             notify = await database_work(self.failed, report_id, revision, exc)
             if notify and self.owner_id:
                 try:
@@ -224,9 +245,9 @@ class ReportWorker:
                                        snapshot.period_end, snapshot.photo_message_id)
 
     def failed(self, report_id, revision, exc):
-        permanent = isinstance(exc, TelegramForbiddenError) or (
-            isinstance(exc, TelegramBadRequest) and any(part in str(exc).lower() for part in
-                ('message to edit not found', "message can't be edited", 'chat not found')))
+        reason = delivery_failure_reason(exc)
+        permanent = isinstance(exc, TelegramForbiddenError) or reason in {
+            'message_missing', 'message_uneditable', 'chat_missing'}
         with self.factory.begin() as db:
             row = db.get(WeeklyReport, report_id, with_for_update=True)
             if row is None or row.revision != revision:
@@ -236,11 +257,18 @@ class ReportWorker:
             row.retry_at = utcnow() + timedelta(seconds=delay)
             row.disabled = permanent
             row.last_error = type(exc).__name__
-            # A private recipient declining bot messages needs no owner action.
+            # A private recipient declining/deleting messages needs no owner action.
             # Keep alerts for failures accessing the source group of a preview.
-            if (isinstance(exc, TelegramForbiddenError) and row.destination_chat_id > 0
-                    and getattr(exc.method, 'chat_id', None) == row.destination_chat_id):
-                return False
+            method = getattr(exc, 'method', None)
+            if (row.destination_chat_id > 0
+                    and getattr(method, 'chat_id', None) == row.destination_chat_id):
+                if isinstance(exc, TelegramForbiddenError):
+                    return False
+                if (reason == 'message_missing'
+                        and isinstance(method, (EditMessageCaption, EditMessageMedia))
+                        and row.photo_message_id is not None
+                        and method.message_id == row.photo_message_id):
+                    return False
             return permanent or row.attempts == MAX_ATTEMPTS
 
     async def drain(self):

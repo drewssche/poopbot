@@ -127,6 +127,113 @@ def test_same_photo_refreshes_marks_and_closed_buttons(env):
     bot.edit_message_text.assert_not_awaited()
 
 
+def test_daily_counter_is_sent_before_calendar_render_and_upload(env, monkeypatch):
+    from app.services import weekly_reports
+    factory, bot, worker = env
+    rid, sid, mid = post(factory, bot)
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1, source='restored'))
+        db.get(WeeklyReport, rid).revision += 1
+    order = []
+    render = weekly_reports.shared_image
+
+    async def caption(**kwargs):
+        assert kwargs['message_id'] == mid
+        assert '💩(1)' in kwargs['caption']
+        order.append('caption')
+
+    def image(*args):
+        assert order == ['caption']
+        assert worker.get(rid).delivered_revision == 1
+        order.append('render')
+        return render(*args)
+
+    async def media(**kwargs):
+        assert kwargs['message_id'] == mid
+        assert kwargs['media'].caption == bot.edit_message_caption.await_args.kwargs['caption']
+        order.append('media')
+
+    bot.edit_message_caption.side_effect = caption
+    bot.edit_message_media.side_effect = media
+    monkeypatch.setattr(weekly_reports, 'shared_image', image)
+    asyncio.run(worker.deliver(rid))
+    assert order == ['caption', 'render', 'media']
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+
+
+@pytest.mark.parametrize('failure_stage', ['render', 'upload'])
+def test_calendar_failure_keeps_published_counter_and_retries_only_image(env, monkeypatch, failure_stage):
+    from app.services import weekly_reports
+    factory, bot, worker = env
+    rid, sid, _ = post(factory, bot)
+    old = worker.get(rid)
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1, source='restored'))
+        db.get(WeeklyReport, rid).revision += 1
+    render = weekly_reports.shared_image
+
+    def broken_render(*args):
+        raise RuntimeError('test renderer unavailable')
+
+    if failure_stage == 'render':
+        monkeypatch.setattr(weekly_reports, 'shared_image', broken_render)
+    else:
+        bot.edit_message_media.side_effect = TimeoutError('test upload timeout')
+    asyncio.run(worker.deliver(rid))
+    row = worker.get(rid)
+    assert row.caption_hash != old.caption_hash
+    assert row.visual_hash == old.visual_hash and row.card_hash == old.card_hash
+    assert row.delivered_revision == old.delivered_revision < row.revision
+    assert row.attempts == 1 and not row.disabled
+    assert '💩(1)' in bot.edit_message_caption.await_args.kwargs['caption']
+    monkeypatch.setattr(weekly_reports, 'shared_image', render)
+    bot.edit_message_media.side_effect = None
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_caption.assert_awaited_once()
+    bot.send_photo.assert_awaited_once()
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+    assert worker.get(rid).attempts == 0
+
+
+@pytest.mark.parametrize('change_stage', ['caption', 'render'])
+def test_new_mark_between_caption_and_image_skips_stale_media(env, monkeypatch, change_stage):
+    from app.services import weekly_reports
+    factory, bot, worker = env
+    rid, sid, _ = post(factory, bot)
+    with factory.begin() as db:
+        db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=1, source='restored'))
+        db.get(WeeklyReport, rid).revision += 1
+    render = weekly_reports.shared_image
+
+    def add_second_mark():
+        with factory.begin() as db:
+            db.add(PoopEvent(session_id=sid, user_id=1, origin_chat_id=-1, event_n=2, source='restored'))
+            db.get(WeeklyReport, rid).revision += 1
+
+    async def caption(**kwargs):
+        add_second_mark()
+
+    def delayed_render(*args):
+        add_second_mark()
+        return render(*args)
+
+    if change_stage == 'caption':
+        bot.edit_message_caption.side_effect = caption
+    else:
+        monkeypatch.setattr(weekly_reports, 'shared_image', delayed_render)
+    asyncio.run(worker.deliver(rid))
+    bot.edit_message_media.assert_not_awaited()
+    assert worker.pending()[0] == [rid]
+    assert worker.wake.is_set()
+    assert worker.get(rid).delivered_revision == 1
+    bot.edit_message_caption.side_effect = None
+    monkeypatch.setattr(weekly_reports, 'shared_image', render)
+    asyncio.run(worker.deliver(rid))
+    assert '💩(2)' in bot.edit_message_caption.await_args.kwargs['caption']
+    assert '💩(2)' in bot.edit_message_media.await_args.kwargs['media'].caption
+    assert worker.get(rid).delivered_revision == worker.get(rid).revision
+
+
 def test_private_questions_survive_card_refresh_then_return_to_overview(env):
     factory, bot, worker = env
     rid, sid, mid = post(factory, bot, 1)

@@ -138,7 +138,11 @@ class ReportWorker:
         # The durable fingerprint avoids rendering unchanged visuals even after
         # a restart or cache eviction. Never skip media for a new publication.
         unchanged = row.photo_message_id and row.card_hash and row.visual_hash == row._visual_hash
-        picture = None if unchanged else shared_image(row.source_chat_id, card, row._visual_hash)
+        # Existing daily questions publish their counter before rendering/uploading
+        # the calendar. Keep both projections from this same database snapshot.
+        deferred = row.q1_session_id is not None and row.photo_message_id and not unchanged
+        row._pending_card = card if deferred else None
+        picture = None if unchanged or deferred else shared_image(row.source_chat_id, card, row._visual_hash)
         return row, picture, caption
 
     async def _edit(self, method, **kwargs):
@@ -147,6 +151,17 @@ class ReportWorker:
         except TelegramBadRequest as exc:
             if 'message is not modified' not in str(exc).lower():
                 raise
+
+    async def _is_current(self, row):
+        current = await database_work(self.get, row.id)
+        if current is None or current.disabled or current.delivered_revision >= row.revision:
+            return False
+        if current.revision != row.revision:
+            log.info('Calendar report superseded id=%s revision=%s current_revision=%s',
+                     row.id, row.revision, current.revision)
+            self.wake.set()
+            return False
+        return True
 
     async def deliver(self, report_id):
         row = await database_work(self.get, report_id)
@@ -166,7 +181,6 @@ class ReportWorker:
                 return
             row, picture, caption = snapshot
             revision = row.revision
-            picture_hash = digest(picture) if picture is not None else row.card_hash
             caption_hash = digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
             keyboard = debug_explain_kb(row.report_period) if row.delivery_key.startswith('debug:') else None
@@ -178,14 +192,23 @@ class ReportWorker:
             # Rendering runs off-loop and can outlive another committed +/−.
             # Never knowingly send that older caption/media. Keep the revision
             # pending so the next pass projects fresh data, without retry errors.
-            current = await database_work(self.get, report_id)
-            if current is None or current.disabled or current.delivered_revision >= revision:
+            if not await self._is_current(row):
                 return
-            if current.revision != revision:
-                log.info('Calendar report superseded id=%s revision=%s current_revision=%s',
-                         report_id, revision, current.revision)
-                self.wake.set()
-                return
+            if row.q1_session_id is not None and row.photo_message_id and row.caption_hash != caption_hash:
+                await self._edit(self.bot.edit_message_caption, chat_id=row.destination_chat_id,
+                    message_id=row.photo_message_id, caption=caption, parse_mode=parse_mode, reply_markup=keyboard)
+                # Record only what Telegram accepted. A failed image update must
+                # remain pending and must not hide the successfully saved counter.
+                await database_work(self.save_values, report_id, {'caption_hash': caption_hash})
+                row.caption_hash = caption_hash
+            pending_card = getattr(row, '_pending_card', None)
+            if pending_card is not None:
+                picture = await database_work(shared_image, row.source_chat_id, pending_card, row._visual_hash)
+                # A new +/− or private-flow step may arrive during either request
+                # or rendering. Do not overwrite it with this older media caption.
+                if not await self._is_current(row):
+                    return
+            picture_hash = digest(picture) if picture is not None else row.card_hash
             if not row.photo_message_id:
                 sent = await self.bot.send_photo(chat_id=row.destination_chat_id,
                     photo=BufferedInputFile(picture, f'{row.report_period}-report.png'), caption=caption,

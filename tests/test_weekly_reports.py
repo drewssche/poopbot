@@ -433,7 +433,9 @@ def test_long_period_rendering_empty_and_dense_counts(env, period, anchor):
     for card in (empty, dense):
         data = render_card(card)
         image = Image.open(BytesIO(data))
-        assert image.size == (840, (1138 if period == 'month' else 940) + 180 + (132 if card.total else 0))
+        from app.services.report_layouts import participants_height
+        people = participants_height(card)
+        assert image.size == (840, (1138 if period == 'month' else 940) + 180 + (132 if card.total else 0) + people + (20 if people else 0))
         assert len(data) < 1024*1024
 
 

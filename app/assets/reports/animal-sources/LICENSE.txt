@@ -1,6 +1,6 @@
 Animal silhouettes from PhyloPic
 
-All five assets are public domain (CC0 1.0 or Public Domain Mark 1.0).
+All thirty assets are public domain (CC0 1.0 or Public Domain Mark 1.0).
 See sources.json for per-image author, source and license links.
 
 CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/

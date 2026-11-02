@@ -35,16 +35,17 @@ def visual_fingerprint(card):
     # Per-message text/buttons remain outside the image fingerprint.
     fields = asdict(card)
     fields.pop('chat_title')  # Only present in the message caption.
-    if card.layout in ('daily', 'summary'):
+    if card.layout == 'daily' or (card.layout == 'summary' and (card.period == 'week' or card.private)):
         fields['participants'] = len(card.participants)
     if card.layout == 'daily':
         fields.pop('label')
         fields.pop('details')
         if card.private:
             fields['participants'] = 0
-    elif card.layout == 'weekly':
+    elif card.layout == 'weekly' or (card.layout == 'summary' and card.period in ('month', 'year') and not card.private):
+        from app.services.report_layouts import MAX_REPORT_PARTICIPANTS
         fields['participant_count'] = len(card.participants)
-        fields['participants'] = fields['participants'][:3]
+        fields['participants'] = fields['participants'][:3 if card.private else MAX_REPORT_PARTICIPANTS]
     value = json.dumps([renderer_identity(), fields], ensure_ascii=False,
                        sort_keys=True, separators=(',', ':'), default=str)
     return sha256(value.encode()).hexdigest()

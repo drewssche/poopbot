@@ -1,6 +1,7 @@
 """Approved low daily calendar and visual weekly report, rendered without a browser."""
 from datetime import timedelta
 from io import BytesIO
+from functools import lru_cache
 import unicodedata
 from PIL import Image, ImageDraw, ImageFont
 from app.services.weekly_report_card import ASSETS, INK, BROWN, MUTED, BEIGE, PALE, period_text, plural
@@ -8,6 +9,50 @@ from app.services.stats_common import estimate_waste_metrics, format_mass
 from app.services.report_animals import mass_comparison
 
 WATER = '#3DA5FF'
+# Stay within Telegram's photo dimensions even for unusually large groups.
+MAX_REPORT_PARTICIPANTS = 200
+PARTICIPANT_ROW_HEIGHT = 68
+
+
+@lru_cache(maxsize=90)
+def animal_icon(icon, width, height):
+    image = Image.open(ASSETS / f'animal-{icon}.png').convert('RGBA')
+    image.thumbnail((width, height), Image.Resampling.LANCZOS)
+    return image
+
+
+def participants_height(card):
+    if card.private or not card.participants:
+        return 0
+    shown = min(len(card.participants), MAX_REPORT_PARTICIPANTS)
+    return 44 + ((shown + 1) // 2) * PARTICIPANT_ROW_HEIGHT + (26 if shown < len(card.participants) else 0)
+
+
+def draw_participants(c, y, card):
+    """Two compact rows of text per person; no individual large animal cards."""
+    if not participants_height(card):
+        return
+    c.text(48, y, 'Участники · примерная масса', 25, weight=650)
+    shown = card.participants[:MAX_REPORT_PARTICIPANTS]
+    for n, participant in enumerate(shown):
+        x, top = 48 + (n % 2) * 382, y + 44 + (n // 2) * PARTICIPANT_ROW_HEIGHT
+        c.text(x, top, participant.name, 22, width=230)
+        c.text(x + 362, top, f'{participant.count} отм.', 19, BROWN, 600, width=120, anchor='rt')
+        mass, _, _ = estimate_waste_metrics(participant.count)
+        comparison = mass_comparison(mass / 1000)
+        if comparison:
+            animal, label = comparison
+            silhouette = animal_icon(animal.icon, 44, 30)
+            c.im.paste(silhouette, (x + (44-silhouette.width)//2, top+27+(30-silhouette.height)//2), silhouette)
+            value = f'{format_mass(mass).replace(".", ",")} · {label}'
+            size = 18
+            while size > 14 and c.d.textlength(value, font=c.font(size)) > 306:
+                size -= 1
+            c.text(x+56, top+32, value, size, MUTED, width=306)
+        c.d.line((x, top+62, x+362, top+62), fill='#eee8e3')
+    if len(card.participants) > len(shown):
+        c.text(48, y+44+((len(shown)+1)//2)*PARTICIPANT_ROW_HEIGHT,
+               f'Показаны {len(shown)} из {len(card.participants)} · полный список: /stats', 18, MUTED, width=744)
 
 
 class Canvas:
@@ -72,25 +117,25 @@ def distribution_height(counts):
     return 78 if not sum(counts[:-1]) else 70 + 38 * sum(n > 0 for n in counts)
 
 
-def distribution(c, y, title, counts, labels):
+def distribution(c, y, title, counts, labels, x=442):
     height = distribution_height(counts)
-    c.d.rounded_rectangle((442, y, 792, y + height), radius=20, fill=PALE)
-    c.text(464, y + 12, title, 23, weight=650)
+    c.d.rounded_rectangle((x, y, x+350, y + height), radius=20, fill=PALE)
+    c.text(x+22, y + 12, title, 23, weight=650)
     total, known = sum(counts), sum(counts[:-1])
     if not known:
         value = 'Пока нет отметок' if not total else f'Нет ответов · {total} {plural(total, "отметка", "отметки", "отметок")}'
-        c.text(464, y + 45, value, 19, MUTED, width=306)
+        c.text(x+22, y + 45, value, 19, MUTED, width=306)
         return
-    c.text(464, y + 43, f'Ответов: {known} из {total}', 17, MUTED)
+    c.text(x+22, y + 43, f'Ответов: {known} из {total}', 17, MUTED)
     row_y = y + 72
     for index, (label, count) in enumerate(zip(labels, counts)):
         if not count:
             continue
         color = BEIGE if index == len(counts) - 1 else BROWN
-        c.text(464, row_y, label, 18, MUTED, width=245)
-        c.text(770, row_y, count, 19, color, 600, anchor='rt', width=55)
-        c.d.rounded_rectangle((464, row_y + 24, 770, row_y + 30), radius=3, fill='white')
-        c.d.rounded_rectangle((464, row_y + 24, 464 + max(6, 306 * count / total), row_y + 30), radius=3, fill=color)
+        c.text(x+22, row_y, label, 18, MUTED, width=245)
+        c.text(x+328, row_y, count, 19, color, 600, anchor='rt', width=55)
+        c.d.rounded_rectangle((x+22, row_y + 24, x+328, row_y + 30), radius=3, fill='white')
+        c.d.rounded_rectangle((x+22, row_y + 24, x+22 + max(6, 306 * count / total), row_y + 30), radius=3, fill=color)
         row_y += 38
 
 
@@ -134,8 +179,7 @@ def draw_estimates(c, y, total, title):
         animal, label = comparison
         top = y + 180
         c.d.rounded_rectangle((48, top, 792, top+112), radius=24, fill=PALE)
-        silhouette = Image.open(ASSETS / f'animal-{animal.icon}.png').convert('RGBA')
-        silhouette.thumbnail((116, 80), Image.Resampling.LANCZOS)
+        silhouette = animal_icon(animal.icon, 116, 80)
         c.im.paste(silhouette, (68+(116-silhouette.width)//2, top+(112-silhouette.height)//2), silhouette)
         c.text(210, top+18, label, 34, BROWN, 650, width=558)
         reference = format_mass(animal.kg * 1000).replace('.', ',')
@@ -153,6 +197,10 @@ def render_weekly(card):
     first_y = 578
     second_y = first_y + distribution_height(d.bristol) + 18
     bottom = max(752, second_y + distribution_height(d.feeling))
+    if not card.private:
+        first_y = 578 + participants_height(card) + (12 if card.participants else 0)
+        second_y = first_y
+        bottom = max(752, first_y + max(distribution_height(d.bristol), distribution_height(d.feeling)))
     extra = bottom - 752
     c = Canvas(812 + extra + estimates_height(total))
     c.logo(48, 24, 210, 53)
@@ -207,22 +255,25 @@ def render_weekly(card):
     else:
         c.text(584, 472, '—', 38, BROWN, 650)
         c.text(584, 525, 'вне рейтинга чатов', 18, width=180)
-    c.text(48, 578, 'Личная история' if card.private else 'Участники недели', 25, weight=650)
-    shown = card.participants[:3]
-    if not shown:
-        c.text(48, 626, 'Пока нет отметок', 22, MUTED, width=362)
-    peak = max((p.count for p in shown), default=1)
-    for n, participant in enumerate(shown):
-        y = 621 + n * 45
-        c.text(48, y, participant.name, 22, width=235)
-        c.text(410, y, participant.count, 23, BROWN, 600, anchor='rt', width=100)
-        c.d.rounded_rectangle((48, y+29, 410, y+37), radius=4, fill=PALE)
-        c.d.rounded_rectangle((48, y+29, 48+max(8, 362*participant.count/max(peak, 1)), y+37), radius=4, fill=BROWN)
-    if len(card.participants) > 3:
-        c.text(48, 755, f'Топ-3 из {members} · все в /stats', 17, MUTED, width=362)
-    distribution(c, first_y, 'Консистенция', d.bristol, ('Жёстко', 'Норма', 'Мягко', 'Водичка', 'Не указано'))
+    if card.private:
+        c.text(48, 578, 'Личная история' if card.private else 'Участники недели', 25, weight=650)
+        shown = card.participants[:3]
+        if not shown:
+            c.text(48, 626, 'Пока нет отметок', 22, MUTED, width=362)
+        peak = max((p.count for p in shown), default=1)
+        for n, participant in enumerate(shown):
+            y = 621 + n * 45
+            c.text(48, y, participant.name, 22, width=235)
+            c.text(410, y, participant.count, 23, BROWN, 600, anchor='rt', width=100)
+            c.d.rounded_rectangle((48, y+29, 410, y+37), radius=4, fill=PALE)
+            c.d.rounded_rectangle((48, y+29, 48+max(8, 362*participant.count/max(peak, 1)), y+37), radius=4, fill=BROWN)
+        if len(card.participants) > 3:
+            c.text(48, 755, f'Топ-3 из {members} · все в /stats', 17, MUTED, width=362)
+    else:
+        draw_participants(c, 578, card)
+    distribution(c, first_y, 'Консистенция', d.bristol, ('Жёстко', 'Норма', 'Мягко', 'Водичка', 'Не указано'), x=442 if card.private else 48)
     distribution(c, second_y, 'Самочувствие', d.feeling, ('Прекрасно', 'Сойдёт', 'Ужасно', 'Не указано'))
-    # Canvas height and the footer depend only on answer blocks, not group size.
+    # Group rows grow by one compact row per two participants; private layout is unchanged.
     extra = bottom - 752
     draw_estimates(c, 780+extra, total, 'За неделю · примерно')
     footer = 780 + extra + estimates_height(total)

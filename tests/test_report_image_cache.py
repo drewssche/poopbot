@@ -61,3 +61,13 @@ def test_caption_only_title_and_invisible_daily_names_do_not_invalidate():
     assert cache.visual_fingerprint(replace(value, chat_title='Другой чат', label='Превью',
         participants=(Participant('Борис',1),))) == key
     assert cache.visual_fingerprint(replace(value, layout='summary')) != key
+
+
+@pytest.mark.parametrize('period,layout', [('week', 'weekly'), ('month', 'summary'), ('year', 'summary')])
+def test_redistribution_between_members_outside_top_three_invalidates_group_image(period, layout):
+    value = replace(card(), period=period, layout=layout,
+                    participants=tuple(Participant(f'Участник {i}', 10) for i in range(5)))
+    changed = replace(value, participants=value.participants[:3] +
+                      (Participant('Участник 3', 11), Participant('Участник 4', 9)))
+    assert value.days == changed.days  # Group total/calendar did not change.
+    assert cache.visual_fingerprint(value) != cache.visual_fingerprint(changed)

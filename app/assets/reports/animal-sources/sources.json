@@ -43,5 +43,230 @@
     "contributor": "Tracy Heath",
     "taxon": "Canis familiaris familiaris",
     "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "mouse": {
+    "source": "https://www.phylopic.org/images/92989e35-4e68-4a2d-b3a2-191ba9da671a",
+    "vector_url": "https://images.phylopic.org/images/92989e35-4e68-4a2d-b3a2-191ba9da671a/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Daniel Jaron",
+    "contributor": "Kamil S. Jaron",
+    "taxon": "Mus musculus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "gerbil": {
+    "source": "https://www.phylopic.org/images/5407c57c-9193-4bb5-81c0-fdcd436fc7ce",
+    "vector_url": "https://images.phylopic.org/images/5407c57c-9193-4bb5-81c0-fdcd436fc7ce/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Daniel Stadtmauer",
+    "contributor": "Daniel Stadtmauer",
+    "taxon": "Meriones unguiculatus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "squirrel": {
+    "source": "https://www.phylopic.org/images/23c700c9-e695-404a-8d0c-146e1fc4bada",
+    "vector_url": "https://images.phylopic.org/images/23c700c9-e695-404a-8d0c-146e1fc4bada/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Ferran Sayol",
+    "contributor": "Ferran Sayol",
+    "taxon": "Sciurus vulgaris",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "guinea-pig": {
+    "source": "https://www.phylopic.org/images/c154232a-10f7-404e-a917-01ec87513c65",
+    "vector_url": "https://images.phylopic.org/images/c154232a-10f7-404e-a917-01ec87513c65/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": null,
+    "contributor": "Mozillian",
+    "taxon": "Cavia porcellus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "hedgehog": {
+    "source": "https://www.phylopic.org/images/6ecff71e-fcfc-4cb9-b773-9e6e21607587",
+    "vector_url": "https://images.phylopic.org/images/6ecff71e-fcfc-4cb9-b773-9e6e21607587/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Steven Traver",
+    "contributor": "Steven Traver",
+    "taxon": "Erinaceus europaeus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "duck": {
+    "source": "https://www.phylopic.org/images/f562234a-9b05-439c-aad5-0ea83ed4c553",
+    "vector_url": "https://images.phylopic.org/images/f562234a-9b05-439c-aad5-0ea83ed4c553/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Caleb M. Gordon",
+    "contributor": "Caleb M. Gordon",
+    "taxon": "Anas platyrhynchos",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "rabbit": {
+    "source": "https://www.phylopic.org/images/ad7d2a9d-ef0d-46f2-895d-7c67bb8e6355",
+    "vector_url": "https://images.phylopic.org/images/ad7d2a9d-ef0d-46f2-895d-7c67bb8e6355/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Ferran Sayol",
+    "contributor": "Ferran Sayol",
+    "taxon": "Oryctolagus cuniculus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "chicken": {
+    "source": "https://www.phylopic.org/images/2de1c95c-7e1f-429b-9c08-17f0a27d176f",
+    "vector_url": "https://images.phylopic.org/images/2de1c95c-7e1f-429b-9c08-17f0a27d176f/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Steven Traver",
+    "contributor": "Steven Traver",
+    "taxon": "Gallus gallus domesticus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "goose": {
+    "source": "https://www.phylopic.org/images/9e544c62-ff98-4bc1-81f3-7f144ec33c0a",
+    "vector_url": "https://images.phylopic.org/images/9e544c62-ff98-4bc1-81f3-7f144ec33c0a/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Laura Barbero-Palacios",
+    "contributor": "Laura Barbero-Palacios",
+    "taxon": "Anser brachyrhynchus × indicus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "fox": {
+    "source": "https://www.phylopic.org/images/ca0d9304-02d5-4294-8600-78308c39f1ab",
+    "vector_url": "https://images.phylopic.org/images/ca0d9304-02d5-4294-8600-78308c39f1ab/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Margot Michaud",
+    "contributor": "Margot Michaud",
+    "taxon": "Vulpes rueppellii",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "raccoon": {
+    "source": "https://www.phylopic.org/images/52193065-f85e-4e4d-a677-11d08aed8c2e",
+    "vector_url": "https://images.phylopic.org/images/52193065-f85e-4e4d-a677-11d08aed8c2e/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Steven Traver",
+    "contributor": "Steven Traver",
+    "taxon": "Procyon lotor",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "badger": {
+    "source": "https://www.phylopic.org/images/39f78b1e-d567-4ca4-957a-be385498e0c5",
+    "vector_url": "https://images.phylopic.org/images/39f78b1e-d567-4ca4-957a-be385498e0c5/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Margot Michaud",
+    "contributor": "Margot Michaud",
+    "taxon": "Meles meles",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "beaver": {
+    "source": "https://www.phylopic.org/images/0b9b783b-b537-4fa6-b387-a9ca2d3f7a12",
+    "vector_url": "https://images.phylopic.org/images/0b9b783b-b537-4fa6-b387-a9ca2d3f7a12/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Steven Traver",
+    "contributor": "Steven Traver",
+    "taxon": "Castor fiber",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "capybara": {
+    "source": "https://www.phylopic.org/images/9c234021-ce53-45d9-8fdd-b0ca3115a451",
+    "vector_url": "https://images.phylopic.org/images/9c234021-ce53-45d9-8fdd-b0ca3115a451/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Skye M",
+    "contributor": "Skye McDavid",
+    "taxon": "Hydrochoerus hydrochaeris",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "sheep": {
+    "source": "https://www.phylopic.org/images/d9c0cddb-6f19-4570-94f4-60316d3f3051",
+    "vector_url": "https://images.phylopic.org/images/d9c0cddb-6f19-4570-94f4-60316d3f3051/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": null,
+    "contributor": "Mozillian",
+    "taxon": "Ovis aries",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "panda": {
+    "source": "https://www.phylopic.org/images/887ea34b-b62a-4126-9e98-434d6000dd0c",
+    "vector_url": "https://images.phylopic.org/images/887ea34b-b62a-4126-9e98-434d6000dd0c/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Margot Michaud",
+    "contributor": "Margot Michaud",
+    "taxon": "Ailuropoda melanoleuca",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "gorilla": {
+    "source": "https://www.phylopic.org/images/dd10acd5-fef8-41b4-b7af-fd8f651cc8b3",
+    "vector_url": "https://images.phylopic.org/images/dd10acd5-fef8-41b4-b7af-fd8f651cc8b3/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Andy Wilson",
+    "contributor": "Andy Wilson",
+    "taxon": "Gorilla gorilla",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "lion": {
+    "source": "https://www.phylopic.org/images/76a5e7ce-53fa-46ae-af9e-fabd8b863dcf",
+    "vector_url": "https://images.phylopic.org/images/76a5e7ce-53fa-46ae-af9e-fabd8b863dcf/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Margot Michaud",
+    "contributor": "Margot Michaud",
+    "taxon": "Panthera leo",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "pig": {
+    "source": "https://www.phylopic.org/images/5cf39625-0de7-4ffe-a28f-9c88670af448",
+    "vector_url": "https://images.phylopic.org/images/5cf39625-0de7-4ffe-a28f-9c88670af448/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Kai Caspar",
+    "contributor": "Kai Caspar",
+    "taxon": "Sus scrofa",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "bear": {
+    "source": "https://www.phylopic.org/images/1cddcd20-9c80-4c98-9a3a-881e724ee4e7",
+    "vector_url": "https://images.phylopic.org/images/1cddcd20-9c80-4c98-9a3a-881e724ee4e7/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Kai Caspar",
+    "contributor": "Kai Caspar",
+    "taxon": "Ursus arctos beringianus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "camel": {
+    "source": "https://www.phylopic.org/images/b41ebd3e-e4a0-43f3-b9f1-74e8943c4149",
+    "vector_url": "https://images.phylopic.org/images/b41ebd3e-e4a0-43f3-b9f1-74e8943c4149/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "An Ignorant Atheist",
+    "contributor": "Jody Taylor",
+    "taxon": "Camelus bactrianus",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "bison": {
+    "source": "https://www.phylopic.org/images/dbf2f035-6c04-4c4f-a9aa-f01a1e35ea9c",
+    "vector_url": "https://images.phylopic.org/images/dbf2f035-6c04-4c4f-a9aa-f01a1e35ea9c/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Caleb M. Gordon",
+    "contributor": "Caleb M. Gordon",
+    "taxon": "Bos bison",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "giraffe": {
+    "source": "https://www.phylopic.org/images/7a0981e5-7614-4922-8e92-42098499cc8b",
+    "vector_url": "https://images.phylopic.org/images/7a0981e5-7614-4922-8e92-42098499cc8b/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Matthew Speight",
+    "contributor": "Matthew Speight",
+    "taxon": "Giraffa tippelskirchi",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "rhino": {
+    "source": "https://www.phylopic.org/images/55b24c01-3552-4c09-a485-087e4d2c4889",
+    "vector_url": "https://images.phylopic.org/images/55b24c01-3552-4c09-a485-087e4d2c4889/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Christophe Mallet",
+    "contributor": "Christophe Mallet",
+    "taxon": "Ceratotherium simum",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
+  },
+  "elephant": {
+    "source": "https://www.phylopic.org/images/910d853a-1a15-4953-a1d3-b81208994d35",
+    "vector_url": "https://images.phylopic.org/images/910d853a-1a15-4953-a1d3-b81208994d35/vector.svg",
+    "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "attribution": "Chuanixn Yu",
+    "contributor": "Chuanxin Yu",
+    "taxon": "Loxodonta africana",
+    "changes": "Recolored #934c21 and rendered as PNG; original SVG retained."
   }
 }

@@ -144,9 +144,10 @@ def render_card(card: ReportCard) -> bytes:
         shift = 2 * 136
     else:
         shift = 0
-    # Fixed height for each calendar layout, independent of the group size.
-    from app.services.report_layouts import Canvas, draw_estimates, estimates_height
-    estimates_y = 612 + shift
+    from app.services.report_layouts import Canvas, draw_estimates, estimates_height, draw_participants, participants_height
+    people_y = 612 + shift
+    people_height = participants_height(card) if card.period in ('month', 'year') else 0
+    estimates_y = people_y + people_height + (20 if people_height else 0)
     footer_y = estimates_y + (estimates_height(card.total) if card.period in ('month', 'year') else 0)
     canvas = Canvas(footer_y + 56)
     image, draw = canvas.im, canvas.d
@@ -224,6 +225,7 @@ def render_card(card: ReportCard) -> bytes:
         text(458, 450+shift, str(count), 56, BROWN, 650, width=306)
         text(458, 525+shift, plural(count, 'участник отметился', 'участника отметились', 'участников отметились'), 23)
     if card.period in ('month', 'year'):
+        draw_participants(canvas, people_y, card)
         title = 'За месяц · примерно' if card.period == 'month' else 'За год · примерно'
         draw_estimates(canvas, estimates_y, card.total, title)
     draw.line((48, footer_y, 792, footer_y), fill='#eee8e3')

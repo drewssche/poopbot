@@ -50,6 +50,26 @@ def test_all_silhouettes_are_local_nonempty_transparent_assets():
         assert icon.mode == 'RGBA' and icon.getbbox()
 
 
+@pytest.mark.parametrize('total', [0, 21, 12345, 9999999])
+def test_estimate_text_fits_inside_visible_icon_height(total):
+    from PIL import ImageChops
+    from app.services.weekly_report_card import PALE
+
+    canvas = Canvas(340)
+    draw_estimates(canvas, 0, total, 'Примерно')
+
+    def ink_bounds(box):
+        area = canvas.im.crop(box)
+        contrast = ImageChops.difference(area, Image.new('RGB', area.size, PALE))
+        # Ignore only the faint outer antialiasing when comparing visible edges.
+        return contrast.convert('L').point(lambda p: 255 if p > 50 else 0).getbbox()
+
+    for x in (48, 430):
+        icon = ink_bounds((x+14, 56, x+98, 144))
+        text = ink_bounds((x+110, 56, x+350, 144))
+        assert icon and text and icon[1] <= text[1] < text[3] <= icon[3]
+
+
 def test_expanded_catalog_has_thirty_distinct_sourced_animals():
     import json
     from hashlib import sha256

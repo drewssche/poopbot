@@ -144,7 +144,7 @@ def render_card(card: ReportCard) -> bytes:
         shift = 2 * 136
     else:
         shift = 0
-    from app.services.report_layouts import Canvas, draw_estimates, estimates_height, draw_participants, participants_height
+    from app.services.report_layouts import Canvas, draw_estimates, estimates_height, draw_participants, participants_height, metric_row
     people_y = 612 + shift
     people_height = participants_height(card) if card.period in ('month', 'year') else 0
     estimates_y = people_y + people_height + (20 if people_height else 0)
@@ -215,15 +215,15 @@ def render_card(card: ReportCard) -> bytes:
             cell(cx, 312 + (position // 7) * 94, (card.start+timedelta(days=n)).day, count)
     for x in (48, 430):
         draw.rounded_rectangle((x, 428+shift, x + 362, 571+shift), radius=26, fill=PALE)
-    text(76, 450+shift, str(card.total), 56, BROWN, 650, width=306)
-    text(76, 525+shift, plural(card.total, 'отметка', 'отметки', 'отметок') + ' ' + spec.duration, 23)
+    total_label = plural(card.total, 'отметка', 'отметки', 'отметок') + ' ' + spec.duration
     if card.private:
-        text(458, 450+shift, str(card.active_days), 56, BROWN, 650)
-        text(458, 525+shift, plural(card.active_days, 'день', 'дня', 'дней') + ' с отметками', 23)
+        count = card.active_days
+        count_label = plural(count, 'день', 'дня', 'дней') + ' с отметками'
     else:
         count = len(card.participants)
-        text(458, 450+shift, str(count), 56, BROWN, 650, width=306)
-        text(458, 525+shift, plural(count, 'участник отметился', 'участника отметились', 'участников отметились'), 23)
+        count_label = plural(count, 'участник отметился', 'участника отметились', 'участников отметились')
+    metric_row(canvas, [(76, card.total, total_label, BROWN), (458, count, count_label, BROWN)],
+               top=428+shift, height=143, width=306, value_size=56, label_size=23)
     if card.period in ('month', 'year'):
         draw_participants(canvas, people_y, card)
         title = 'За месяц · примерно' if card.period == 'month' else 'За год · примерно'

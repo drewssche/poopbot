@@ -9,6 +9,7 @@ from app.services.stats_common import estimate_waste_metrics, format_mass
 from app.services.report_animals import mass_comparison
 
 WATER = '#3DA5FF'
+TEXT_GAP = 8
 # Stay within Telegram's photo dimensions even for unusually large groups.
 MAX_REPORT_PARTICIPANTS = 200
 PARTICIPANT_ROW_HEIGHT = 68
@@ -113,20 +114,53 @@ def render_daily(card):
     return c.png()
 
 
+def metric_row(c, columns, *, top, height, width, value_size, label_size):
+    """Use shared baselines and center the two ink bands inside their tile."""
+    values = [str(value) for _, value, _, _ in columns]
+    labels = [label for _, _, label, _ in columns]
+
+    def ink_band(font, strings):
+        boxes = [font.getbbox(string, anchor='ls') for string in strings]
+        return min(box[1] for box in boxes), max(box[3] for box in boxes)
+
+    while label_size > 1 and any(c.font(label_size).getlength(s) > width for s in labels):
+        label_size -= 1
+    label_top, label_bottom = ink_band(c.font(label_size), labels)
+    while True:
+        font = c.font(value_size, 650)
+        value_top, value_bottom = ink_band(font, values)
+        stack_height = value_bottom - value_top + TEXT_GAP + label_bottom - label_top
+        if value_size <= 1 or (stack_height <= height and all(font.getlength(s) <= width for s in values)):
+            break
+        value_size -= 1
+    baseline = top + (height - stack_height)//2 - value_top
+    label_baseline = baseline + value_bottom + TEXT_GAP - label_top
+    for x, value, label, color in columns:
+        c.text(x, baseline, value, value_size, color, 650, anchor='ls')
+        c.text(x, label_baseline, label, label_size, anchor='ls')
+    return baseline
+
+
 def distribution_height(counts):
-    return 78 if not sum(counts[:-1]) else 70 + 38 * sum(n > 0 for n in counts)
+    return 78 if not sum(counts[:-1]) else 78 + 38 * sum(n > 0 for n in counts)
 
 
 def distribution(c, y, title, counts, labels, x=442):
     height = distribution_height(counts)
     c.d.rounded_rectangle((x, y, x+350, y + height), radius=20, fill=PALE)
-    c.text(x+22, y + 12, title, 23, weight=650)
     total, known = sum(counts), sum(counts[:-1])
     if not known:
         value = 'Пока нет отметок' if not total else f'Нет ответов · {total} {plural(total, "отметка", "отметки", "отметок")}'
-        c.text(x+22, y + 45, value, 19, MUTED, width=306)
+        title_height = c.font(23, 650).getbbox(title, anchor='lt')[3]
+        value_height = c.font(19).getbbox(value, anchor='lt')[3]
+        title_y = y + (height - title_height - TEXT_GAP - value_height)//2
+        c.text(x+22, title_y, title, 23, weight=650)
+        c.text(x+22, title_y + title_height + TEXT_GAP, value, 19, MUTED, width=306)
         return
-    c.text(x+22, y + 43, f'Ответов: {known} из {total}', 17, MUTED)
+    title_y = y + 15
+    c.text(x+22, title_y, title, 23, weight=650)
+    c.text(x+22, title_y + c.font(23, 650).getbbox(title, anchor='lt')[3] + TEXT_GAP,
+           f'Ответов: {known} из {total}', 17, MUTED)
     row_y = y + 72
     for index, (label, count) in enumerate(zip(labels, counts)):
         if not count:
@@ -167,13 +201,15 @@ def draw_estimates(c, y, total, title):
     for x in (48, 430):
         c.d.rounded_rectangle((x, y+42, x+362, y+158), radius=24, fill=PALE)
     poop = c.poop.resize((62, 60), Image.Resampling.LANCZOS)
-    c.im.paste(poop, (76, y+68), poop)
-    drop = water_icon()
-    c.im.paste(drop, (462, y+63), drop)
-    c.text(162, y+62, format_mass(mass).replace('.', ','), 42, BROWN, 650, width=224)
-    c.text(162, y+120, 'Общая каловая масса', 20, width=224)
-    c.text(544, y+62, f'{water:.0f} л', 42, WATER, 650, width=224)
-    c.text(544, y+120, 'воды на смыв', 22, width=224)
+    center_y = y + 100
+    # Center the visible silhouettes, excluding transparent PNG margins.
+    for icon, center_x in ((poop, 107), (water_icon(), 489)):
+        icon = icon.crop(icon.getbbox())
+        icon = icon.resize((round(icon.width * 64 / icon.height), 64), Image.Resampling.LANCZOS)
+        c.im.paste(icon, (center_x - icon.width//2, center_y - 32), icon)
+    metric_row(c, [(162, format_mass(mass).replace('.', ','), 'Общая каловая масса', BROWN),
+                   (544, f'{water:.0f} л', 'воды на смыв', WATER)],
+               top=center_y-29, height=58, width=224, value_size=42, label_size=20)
     comparison = mass_comparison(mass / 1000)
     if comparison is not None:
         animal, label = comparison
@@ -181,10 +217,15 @@ def draw_estimates(c, y, total, title):
         c.d.rounded_rectangle((48, top, 792, top+112), radius=24, fill=PALE)
         silhouette = animal_icon(animal.icon, 116, 80)
         c.im.paste(silhouette, (68+(116-silhouette.width)//2, top+(112-silhouette.height)//2), silhouette)
-        c.text(210, top+18, label, 34, BROWN, 650, width=558)
         reference = format_mass(animal.kg * 1000).replace('.', ',')
-        c.text(210, top+70, f'По массе · {animal.name.lower()} ≈ {reference}', 20, MUTED, width=558)
-        c.text(210, top+97, 'Силуэты: PhyloPic · Public domain', 11, MUTED)
+        lines = [(label, 34, BROWN, 650),
+                 (f'По массе · {animal.name.lower()} ≈ {reference}', 20, MUTED, 400),
+                 ('Силуэты: PhyloPic · Public domain', 11, MUTED, 400)]
+        heights = [c.font(size, weight).getbbox(line, anchor='lt')[3] for line, size, _, weight in lines]
+        text_y = top + (112 - sum(heights) - 2 * TEXT_GAP)//2
+        for (line, size, color, weight), height in zip(lines, heights):
+            c.text(210, text_y, line, size, color, weight, width=558)
+            text_y += height + TEXT_GAP
 
 
 def render_weekly(card):
@@ -219,14 +260,18 @@ def render_weekly(card):
         c.text(792, 132, '– ' + last, 23, BROWN, 500, anchor='rt')
     c.calendar(card, 166, 200)
     c.d.rounded_rectangle((48, 302, 792, 438), radius=26, fill=PALE)
-    c.text(76, 320, total, 64, BROWN, 650, width=230)
-    c.text(168 if total < 100 else 76, 337 if total < 100 else 385,
-           plural(total, 'отметка', 'отметки', 'отметок'), 24)
-    # Large totals need their own line; keep comparison visible without collision.
-    if total < 100:
-        c.text(76, 401, f'{total-previous:+d} к прошлой неделе', 20, BROWN, 500, width=268)
-    else:
-        c.text(310, 408, f'{total-previous:+d}', 18, BROWN, 500, width=100, anchor='rt')
+    unit = plural(total, 'отметка', 'отметки', 'отметок')
+    value_size = 64
+    available = 268 - c.font(24).getlength(unit) - 12
+    while c.font(value_size, 650).getlength(str(total)) > available:
+        value_size -= 1
+    value_height = c.font(value_size, 650).getbbox(str(total), anchor='lt')[3]
+    c.text(76, 320, total, value_size, BROWN, 650)
+    unit_x = max(168, 76 + c.font(value_size, 650).getlength(str(total)) + 12)
+    unit_height = c.font(24).getbbox(unit, anchor='lt')[3]
+    c.text(unit_x, 320 + (value_height-unit_height)//2, unit, 24)
+    c.text(76, 320 + value_height + TEXT_GAP, f'{total-previous:+d} к прошлой неделе',
+           20, BROWN, 500, width=268)
     peak = max(total, previous, 1)
     for label, value, y, color in [('Прошлая неделя', previous, 322, BEIGE), ('Эта неделя', total, 382, BROWN)]:
         c.text(370, y, label, 21, MUTED)
@@ -236,33 +281,28 @@ def render_weekly(card):
             c.d.rounded_rectangle((370, y+30, 370+max(10, 394*value/peak), y+40), radius=5, fill=color)
     for x in (48, 302, 556):
         c.d.rounded_rectangle((x, 458, x+236, 552), radius=23, fill=PALE)
-    c.text(76, 472, f'{total / 7:.1f}'.replace('.', ',') if card.private else members, 38, BROWN, 650, width=180)
-    c.text(76, 525, 'в среднем за день' if card.private else plural(members, 'участник', 'участника', 'участников'), 19, width=180)
-    c.text(330, 472, f'{card.active_days}/7', 38, BROWN, 650)
-    c.text(330, 525, 'дней с отметками', 19)
     if card.private:
-        c.text(584, 472, f'{d.previous_active_days}/7', 38, BROWN, 650)
-        c.text(584, 525, 'дней неделей ранее', 18, width=180)
-    elif d.rank is not None:
-        c.text(584, 472, f'{d.rank}/{d.rank_total}', 38, BROWN, 650, width=180)
-        if d.previous_rank is not None:
-            change = d.previous_rank - d.rank
-            trend = 'без изменений' if not change else f'{change:+d} '+plural(abs(change), 'позиция', 'позиции', 'позиций')
-            # Do not place a trend over a long rank number.
-            if len(f'{d.rank}/{d.rank_total}') <= 3:
-                c.text(764, 487, trend, 16, BROWN, anchor='rt', width=109)
-        c.text(584, 525, 'место среди чатов', 19, width=180)
+        first = (f'{total / 7:.1f}'.replace('.', ','), 'в среднем за день')
+        last = (f'{d.previous_active_days}/7', 'дней неделей ранее')
     else:
-        c.text(584, 472, '—', 38, BROWN, 650)
-        c.text(584, 525, 'вне рейтинга чатов', 18, width=180)
+        first = (members, plural(members, 'участник', 'участника', 'участников'))
+        last = ('—', 'вне рейтинга чатов') if d.rank is None else (f'{d.rank}/{d.rank_total}', 'место среди чатов')
+    baseline = metric_row(c, [(76, *first, BROWN), (330, f'{card.active_days}/7', 'дней с отметками', BROWN),
+                              (584, *last, BROWN)],
+                          top=458, height=94, width=180, value_size=38, label_size=19)
+    if not card.private and d.rank is not None and d.previous_rank is not None and len(last[0]) <= 3:
+        change = d.previous_rank - d.rank
+        trend = 'без изменений' if not change else f'{change:+d} '+plural(abs(change), 'позиция', 'позиции', 'позиций')
+        space = 180 - c.font(38, 650).getlength(last[0]) - 6
+        c.text(764, baseline, trend, 16, BROWN, anchor='rs', width=space)
     if card.private:
         c.text(48, 578, 'Личная история' if card.private else 'Участники недели', 25, weight=650)
         shown = card.participants[:3]
         if not shown:
-            c.text(48, 626, 'Пока нет отметок', 22, MUTED, width=362)
+            c.text(48, 610, 'Пока нет отметок', 22, MUTED, width=362)
         peak = max((p.count for p in shown), default=1)
         for n, participant in enumerate(shown):
-            y = 621 + n * 45
+            y = 610 + n * 45
             c.text(48, y, participant.name, 22, width=235)
             c.text(410, y, participant.count, 23, BROWN, 600, anchor='rt', width=100)
             c.d.rounded_rectangle((48, y+29, 410, y+37), radius=4, fill=PALE)

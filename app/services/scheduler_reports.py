@@ -230,5 +230,5 @@ async def send_holiday_notice_if_needed(bot: Bot, db, chat_id: int, session_id: 
     if get_command_message_id(db, chat_id, 0, "holiday_notice", local_date) is not None:
         return
 
-    sent = await safe_send_message(bot, chat_id=chat_id, text=holiday_text)
+    sent = await safe_send_message(bot, chat_id=chat_id, text=holiday_text, widget_notice=True)
     set_command_message_id(db, chat_id, 0, "holiday_notice", local_date, sent.message_id)

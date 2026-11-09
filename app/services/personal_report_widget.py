@@ -87,7 +87,7 @@ def state(db, chat_id, card):
 
 def template(row):
     source = (ASSETS / "personal-report.html").read_text()
-    logo = base64.b64encode((ASSETS / "logo-110.png").read_bytes()).decode()
+    logo = base64.b64encode((ASSETS / "daily-brand.png").read_bytes()).decode()
     spec = report_period(row.report_period)
     html = (
         source.replace("__LOGO__", logo)

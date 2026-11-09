@@ -15,6 +15,8 @@ from app.bot.keyboards.stats import stats_root_kb
 from app.bot.handlers.streak_admin_content import streak_admin_text
 from app.db.runtime import get_session_factory
 from app.db.session import db_session
+from app.services.group_daily_widget import enabled as widgets_enabled
+from app.bot.handlers.help_content import private_help_text
 from app.services.command_message_service import (
     get_any_command_message_id,
     get_command_message_id,
@@ -228,9 +230,13 @@ async def help_cmd(message: Message) -> None:
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         window = get_session_window(chat.timezone)
+        upsert_user(db, user.id, user.username, user.first_name, user.last_name)
+        db.flush()
         session_date = window.session_date
-        existing_mid = get_any_command_message_id(db, chat_id, "help", session_date)
-        root_text = _help_root_text(chat.timezone)
+        widget = message.chat.type == "private" and widgets_enabled(db, chat_id)
+        command = "help_widget" if widget else "help"
+        existing_mid = get_any_command_message_id(db, chat_id, command, session_date)
+        root_text = private_help_text(chat.timezone) if widget else _help_root_text(chat.timezone)
 
     if existing_mid:
         try:
@@ -264,7 +270,7 @@ async def help_cmd(message: Message) -> None:
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         window = get_session_window(chat.timezone)
-        set_command_message_id(db, chat_id, user.id, "help", window.session_date, sent.message_id)
+        set_command_message_id(db, chat_id, user.id, command, window.session_date, sent.message_id)
 
 
 @router.message(Command("stats"))
@@ -285,7 +291,9 @@ async def stats_cmd(message: Message) -> None:
         upsert_user(db, user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name)
 
         today = now_in_tz(chat.timezone).date()
-        existing_mid = get_command_message_id(db, chat_id, user.id, "stats", today)
+        widget = message.chat.type == "private" and widgets_enabled(db, chat_id)
+        command = "stats_widget" if widget else "stats"
+        existing_mid = get_command_message_id(db, chat_id, user.id, command, today)
         is_private_chat = message.chat.type == "private"
         show_recap = is_recap_available(today, user.id, settings.bot_owner_id)
         is_owner_private = settings.bot_owner_id is not None and user.id == settings.bot_owner_id and is_private_chat
@@ -330,7 +338,7 @@ async def stats_cmd(message: Message) -> None:
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         today = now_in_tz(chat.timezone).date()
-        set_command_message_id(db, chat_id, user.id, "stats", today, sent.message_id)
+        set_command_message_id(db, chat_id, user.id, command, today, sent.message_id)
 
 
 @router.message(Command("streak"))
@@ -360,7 +368,9 @@ async def streak_admin_cmd(message: Message) -> None:
         today = now_in_tz(chat.timezone).date()
         target_date = today
         period = ensure_restore_period(db, today=today)
-        existing_mid = get_command_message_id(db, chat_id, user.id, "streak_admin", today)
+        widget = message.chat.type == "private" and widgets_enabled(db, chat_id)
+        command = "streak_admin_widget" if widget else "streak_admin"
+        existing_mid = get_command_message_id(db, chat_id, user.id, command, today)
         restore_enabled = get_bool_setting(db, RESTORE_CLAIM_ENABLED_KEY, default=False)
 
     text = streak_admin_text(target_date, restore_enabled=restore_enabled, period=period)
@@ -390,7 +400,7 @@ async def streak_admin_cmd(message: Message) -> None:
     with db_session(_session_factory) as db:
         chat = upsert_chat(db, chat_id=chat_id)
         today = now_in_tz(chat.timezone).date()
-        set_command_message_id(db, chat_id, user.id, "streak_admin", today, sent.message_id)
+        set_command_message_id(db, chat_id, user.id, command, today, sent.message_id)
 
 
 # Игнорируем все неизвестные команды и сообщения

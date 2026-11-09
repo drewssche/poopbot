@@ -222,3 +222,11 @@ class WeeklyReport(Base):
     disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     last_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class PrivateMenu(Base):
+    __tablename__ = "private_menus"
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    revision: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)

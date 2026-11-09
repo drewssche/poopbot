@@ -17,6 +17,7 @@ from app.bot.handlers.help_actions import (
 )
 from app.bot.handlers.help_content import (
     ABOUT_TEXT,
+    private_help_text,
     root_text,
     settings_text,
 )
@@ -264,7 +265,7 @@ async def help_callbacks(cb: CallbackQuery) -> None:
 
                 is_db_delete = data.startswith("help:delete_confirm_db:")
                 if is_db_delete:
-                    delete_user_everywhere(db, chat_id, actor_id)
+                    delete_user_everywhere(db, chat_id, actor_id, keep_menu=cb.message.message_id if is_private_chat else None)
                 else:
                     delete_user_from_chat(db, chat_id, actor_id)
 
@@ -286,7 +287,9 @@ async def help_callbacks(cb: CallbackQuery) -> None:
                 await cb.message.edit_text(done_text, reply_markup=help_root_kb(owner_id))
 
             elif data.startswith("help:back:"):
-                await cb.message.edit_text(root_text(chat.timezone), reply_markup=help_root_kb(owner_id))
+                from app.services.group_daily_widget import enabled
+                text = private_help_text(chat.timezone) if is_private_chat and enabled(db, chat_id) else root_text(chat.timezone)
+                await cb.message.edit_text(text, reply_markup=help_root_kb(owner_id))
                 await cb.answer()
 
             else:

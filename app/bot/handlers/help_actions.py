@@ -90,7 +90,8 @@ async def refresh_q1_after_settings_change(
         )
         has_any_members = True if is_private_chat else ("Участники:" in text)
         try:
-            await cb.bot.edit_message_text(
+            from app.services.q1_card_service import edit_question
+            await edit_question(cb.bot, db,
                 chat_id=chat_id,
                 message_id=q1_id,
                 text=text,

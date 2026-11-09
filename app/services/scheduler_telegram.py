@@ -24,7 +24,16 @@ async def safe_sleep_on_retry(exc: Exception) -> bool:
     return True
 
 
-async def safe_send_message(bot: Bot, **kwargs):
+async def safe_send_message(bot: Bot, *, widget_notice=False, **kwargs):
+    from app.services.menu_widget import scheduled_widget_notice
+    token = scheduled_widget_notice.set(widget_notice)
+    try:
+        return await _send_with_retry(bot, kwargs)
+    finally:
+        scheduled_widget_notice.reset(token)
+
+
+async def _send_with_retry(bot: Bot, kwargs):
     for _ in range(3):
         try:
             return await asyncio.wait_for(

@@ -4,7 +4,7 @@ from datetime import time
 from sqlalchemy.orm import Session
 from sqlalchemy import delete, select
 
-from app.db.models import Chat, ChatMember, CommandMessage, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
+from app.db.models import Chat, ChatMember, CommandMessage, PrivateMenu, PoopEvent, Session as DaySession, SessionUserState, User, UserStreak
 
 
 def set_chat_post_time(db: Session, chat_id: int, hour: int) -> None:
@@ -71,7 +71,11 @@ def get_help_message(db: Session, chat_id: int) -> tuple[int | None, int | None]
     return chat.help_message_id, chat.help_owner_id
 
 
-def delete_user_everywhere(db: Session, chat_id: int, user_id: int) -> None:
+def delete_user_everywhere(db: Session, chat_id: int, user_id: int, *, keep_menu: int | None = None) -> None:
+    menus = delete(PrivateMenu).where(PrivateMenu.chat_id == user_id)
+    if keep_menu is not None:
+        menus = menus.where(PrivateMenu.message_id != keep_menu)
+    db.execute(menus)
     db.execute(delete(ChatMember).where(ChatMember.chat_id == chat_id, ChatMember.user_id == user_id))
     db.execute(delete(UserStreak).where(UserStreak.chat_id == chat_id, UserStreak.user_id == user_id))
     db.execute(delete(SessionUserState).where(SessionUserState.user_id == user_id))

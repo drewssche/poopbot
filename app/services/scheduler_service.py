@@ -439,6 +439,7 @@ async def _send_late_reminder(bot: Bot, db, chat_id: int, session_id: int) -> No
         text=text,
         parse_mode="HTML",
         reply_to_message_id=q1_id,
+        widget_notice=True,
     )
     set_command_message_id(db, chat_id, 0, LATE_REMINDER_COMMAND, sess.session_date, sent.message_id)
     logger.info("Sent late reminder chat_id=%s session_id=%s", chat_id, session_id)

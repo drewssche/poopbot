@@ -182,6 +182,7 @@ def test_notification_failure_never_leaks_token(ops, monkeypatch):
 
 def test_restore_manifest_from_before_mini_app_migration(ops, monkeypatch):
     path, metrics = archive(ops)
+    metrics.pop('private_menus')
     metrics.pop('mini_app_requests')
     metrics.pop('weekly_reports')
     manifest = json.loads(path.with_suffix('.json').read_text())
@@ -194,6 +195,6 @@ def test_restore_manifest_from_before_mini_app_migration(ops, monkeypatch):
 
 
 def test_manifest_before_weekly_reports_remains_supported():
-    previous = [t for t in backups.TABLES if t != 'weekly_reports']
+    previous = [t for t in backups.TABLES if t not in {'weekly_reports', 'private_menus'}]
     sql = backups.metrics_sql(previous)
     assert 'mini_app_requests' in sql and 'weekly_reports' not in sql

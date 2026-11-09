@@ -1,0 +1,42 @@
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#181d27;font:16px system-ui,sans-serif}
+header{display:flex;justify-content:center;padding:10px}header img{width:174px;height:40px}
+section{padding:8px 7% 16px;border-radius:0 0 16px 16px;box-shadow:0 6px 13px #e6e2e2}
+h2{font-size:21px;font-weight:500;margin:0 0 8px}#body{white-space:pre-line;overflow-wrap:anywhere;font-size:15px}
+footer{padding:14px 8% 20px}button{width:100%;min-height:36px;border:0;border-radius:24px;background:#f4f0ec;color:#181d27;font:inherit;margin:3px 0}
+nav{display:flex;align-items:center;justify-content:space-between;gap:6px;color:#645b5b}nav button{width:42px;color:#934c21}#notice{font-size:14px;color:#645b5b}
+</style>
+<header><img alt="PoopCheck" src="data:image/png;base64,__LOGO__"></header>
+<section><h2 id="title"></h2><div id="body"></div></section>
+<footer><div id="buttons"></div><nav id="nav"><button id="prev" aria-label="Назад">‹</button><span id="page"></span><button id="next" aria-label="Дальше">›</button></nav><div id="notice"></div></footer>
+<script>
+const w=TelegramWidget,$=id=>document.getElementById(id);
+let current=null,busy=false;
+function draw(s){
+ current=s;$('title').textContent=s.t;$('body').textContent=s.b;$('buttons').textContent='';
+ s.a.forEach(([label,link],i)=>{
+  const button=document.createElement('button');button.textContent=label;
+  button.onclick=()=>link?(link.startsWith('https://t.me/')?w.openTelegramLink(link):w.openLink(link)):request(s.p,i);
+  $('buttons').appendChild(button)
+ });
+ $('nav').style.display=s.n>1?'flex':'none';$('page').textContent=(s.p+1)+' / '+s.n;
+ $('prev').disabled=s.p===0;$('next').disabled=s.p===s.n-1
+}
+async function request(page,index){
+ if(busy||!current||w.isForward)return;
+ busy=true;$('notice').textContent='Загрузка…';
+ try{
+  const data='m:'+current.v+':'+page+(index===undefined?'':':'+index);
+  const answer=JSON.parse((await w.request(data)).result);
+  if(answer.v)draw(answer);
+  $('notice').textContent=answer.msg||''
+ }catch(e){$('notice').textContent='Связь прервалась. Открой команду снова, чтобы проверить результат.'}
+ finally{busy=false}
+}
+function sync(){
+ if(w.chatData&&!w.isForward){draw(JSON.parse(w.chatData));return}
+ $('title').textContent='Открой меню в личке с ботом';$('nav').style.display='none'
+}
+$('prev').onclick=()=>request(current.p-1);$('next').onclick=()=>request(current.p+1);
+sync();w.onEvent('chatDataChanged',sync);w.ready()
+</script>

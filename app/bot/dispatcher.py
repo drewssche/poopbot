@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.event.bases import UNHANDLED
 
+from app.services.daily_widget_demo import DemoQueries
 from app.core.config import Settings
 from app.db.runtime import configure_database, close_database
 from app.bot.monitoring import PollingActivityMiddleware, telegram_guard_loop
@@ -185,6 +186,8 @@ async def _run_bot(settings, bot, session_factory):
 
     dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_received, _touch_handled))
 
+    dp.update.outer_middleware(DemoQueries(settings.bot_owner_id, session_factory))
+
     if settings.startup_recover_missing_q1:
         await recover_missing_q1_on_startup(
             bot,
@@ -232,7 +235,8 @@ async def _run_bot(settings, bot, session_factory):
         ReportWorker(bot, session_factory, settings.database_url, settings.bot_owner_id).run()
     )
     logging.getLogger(__name__).info("Bot started")
-    polling_task = asyncio.create_task(dp.start_polling(bot, close_bot_session=False))
+    polling_task = asyncio.create_task(dp.start_polling(bot, close_bot_session=False,
+        allowed_updates=[*dp.resolve_used_update_types(), "widget_query"]))
     tasks = [polling_task, connectivity_guard_task, hb_task, heartbeat_file_task, weekly_reports_task]
     if handled_rate_task is not None:
         tasks.append(handled_rate_task)

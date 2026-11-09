@@ -194,6 +194,7 @@ class WeeklyReport(Base):
     """Shared report outbox; the table name is kept for existing backups and IDs."""
     __tablename__ = "weekly_reports"
     __table_args__ = (CheckConstraint("report_period IN ('week', 'month', 'year')", name='ck_report_period'),)
+    widget_report: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     report_period: Mapped[str] = mapped_column(String(8), default='week', server_default='week')
     previous_period_start: Mapped[date] = mapped_column(Date)
     q1_session_id: Mapped[int | None] = mapped_column(

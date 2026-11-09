@@ -9,6 +9,7 @@ from uuid import uuid4
 import psycopg
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.methods import EditMessageCaption, EditMessageMedia
+from app.services.daily_widget_demo import EditWidget
 from aiogram.types import BufferedInputFile, InputMediaPhoto, InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.engine import make_url
@@ -41,7 +42,9 @@ def enqueue_report(db, chat_id, anchor, *, period='week', destination=None, labe
     existing = db.scalar(select(WeeklyReport).where(WeeklyReport.delivery_key == key))
     if existing:
         return existing
-    row = WeeklyReport(delivery_key=key, source_chat_id=chat_id,
+    from app.services.group_daily_widget import enabled
+    personal_widget = chat_id > 0 and destination in (None, chat_id) and enabled(db, chat_id)
+    row = WeeklyReport(widget_report=personal_widget, delivery_key=key, source_chat_id=chat_id,
                        destination_chat_id=destination if destination is not None else chat_id,
                        report_period=period, previous_period_start=previous.start,
                        period_start=current.start, period_end=current.end, anchor_date=anchor,
@@ -121,6 +124,9 @@ class ReportWorker:
                                 row.chat_title or 'Личные отметки', row.label, period=row.report_period,
                                 layout='daily' if row.q1_session_id is not None else
                                        'weekly' if row.report_period == 'week' else 'summary')
+            if row.widget_report:
+                from app.services.personal_report_widget import state
+                return row, None, state(db, row.source_chat_id, card)
             if row.q1_session_id is not None:
                 from app.services.mini_app_message import session_question
                 from app.services.q1_card_state import question_caption
@@ -185,16 +191,9 @@ class ReportWorker:
                 return
             row, picture, caption = snapshot
             revision = row.revision
-            if row.delivery_key.startswith('widget:q1:'):
-                from app.services.daily_widget_demo import EditWidget
+            if row.widget_report or row.delivery_key.startswith('widget:q1:'):
                 if await self._is_current(row):
-                    try:
-                        await self.bot(EditWidget(chat_id=row.destination_chat_id, message_id=row.photo_message_id,
-                                                  chat_data=caption), request_timeout=15)
-                    except TelegramBadRequest as exc:
-                        if 'not modified' not in exc.message.lower().replace('_', ' '):
-                            raise
-                    await database_work(self.finish, row)
+                    await self.deliver_widget(row, caption)
                 return
             caption_hash = digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
@@ -270,6 +269,23 @@ class ReportWorker:
                 except Exception:
                     log.warning('Could not notify owner about weekly report id=%s', report_id)
 
+    async def deliver_widget(self, row, payload):
+        from app.services.daily_widget_demo import SendWidget, EditWidget
+        from app.services.personal_report_widget import template
+        if row.photo_message_id:
+            try:
+                await self.bot(EditWidget(chat_id=row.destination_chat_id, message_id=row.photo_message_id,
+                                          chat_data=payload), request_timeout=15)
+            except TelegramBadRequest as exc:
+                if 'not modified' not in exc.message.lower().replace('_', ' '):
+                    raise
+        else:
+            sent = await self.bot(SendWidget(chat_id=row.destination_chat_id, html=template(row),
+                                             chat_data=payload, allow_queries=False), request_timeout=20)
+            row.photo_message_id = sent.message_id
+            await database_work(self.save_values, row.id, {'photo_message_id': sent.message_id})
+        await database_work(self.finish, row)
+
     def save_values(self, report_id, values):
         self.save(report_id, **values)
 
@@ -303,7 +319,7 @@ class ReportWorker:
                 if isinstance(exc, TelegramForbiddenError):
                     return False
                 if (reason == 'message_missing'
-                        and isinstance(method, (EditMessageCaption, EditMessageMedia))
+                        and isinstance(method, (EditMessageCaption, EditMessageMedia, EditWidget))
                         and row.photo_message_id is not None
                         and method.message_id == row.photo_message_id):
                     return False

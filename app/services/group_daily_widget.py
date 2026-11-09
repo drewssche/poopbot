@@ -1,4 +1,4 @@
-"""Rollout of native Q1 messages to one opted-in group. All counts use the event ledger."""
+"""Native daily questions for personal chats and the group pilot. All counts use the event ledger."""
 
 import base64
 import hashlib
@@ -41,10 +41,14 @@ from app.services.time_service import get_session_window
 
 PILOT = -1001739559442
 FLAG = "group_daily_widget_pilot"
+PRIVATE_FLAG = "private_native_widgets"
 PREFIX = "widget:q1:"
 
 
 def enabled(db, chat_id):
+    if chat_id > 0:
+        from app.services.app_setting_service import get_bool_setting
+        return get_bool_setting(db, PRIVATE_FLAG)
     if chat_id != PILOT:
         return False
     setting = db.get(AppSetting, FLAG)
@@ -55,7 +59,7 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def render(day):
+def render(day, private=False):
     start = day - timedelta(days=day.weekday())
     # Keep the original silhouette and trim subpixel precision for Telegram's size limit.
     icon = (ROOT / "web/demo/assets/poop-day.svg").read_text().strip()
@@ -79,6 +83,10 @@ def render(day):
         .read_text()
         .replace("__LOGO__", "data:image/png;base64," + logo)
         .replace("__WEEK__", cells)
+        .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
+        .replace("__HINT__", "Твои отметки" if private else "Отметки этого чата")
+        .replace("__DETAILS__", '<details><summary>За день</summary><div id="history" style="white-space:pre-line"></div><button id="restore" style="width:auto;display:none">Вернуть стрик</button></details>' if private else "")
+        .replace("__PRIVATE__", "true" if private else "false")
         .replace("__DATE__", f"{day.day} {MONTHS[day.month - 1]}")
         .replace("__INDEX__", str(day.weekday()))
     )
@@ -96,6 +104,7 @@ def snapshot(db, sess, revision):
             .where(
                 DaySession.chat_id == sess.chat_id,
                 PoopEvent.origin_chat_id == sess.chat_id,
+                *([PoopEvent.user_id == sess.chat_id] if sess.chat_id > 0 else []),
                 DaySession.session_date.between(day, day + timedelta(days=6)),
             )
             .group_by(DaySession.session_date)
@@ -106,12 +115,19 @@ def snapshot(db, sess, revision):
         time.min,
         tzinfo=ZoneInfo(db.get(Chat, sess.chat_id).timezone),
     )
-    return dict(
+    data = dict(
         r=revision,
         c=int(sess.status == "closed"),
         x=int(expiry.timestamp()),
         d=[counts.get(day + timedelta(days=i), 0) for i in range(7)],
     )
+    if sess.chat_id > 0:
+        from app.services.q1_service import render_q1_private, should_show_restore_streak_button
+        summary = render_q1_private(db, sess.chat_id, sess.session_id, sess.chat_id, sess.session_date, closed=bool(data["c"]))
+        data["h"] = "\n".join(summary.splitlines()[4:])
+        data["restore"] = not data["c"] and should_show_restore_streak_button(db, chat_id=sess.chat_id,
+            session_date=sess.session_date, viewer_user_id=sess.chat_id, is_private_chat=True)
+    return data
 
 
 async def send(bot, db, sess):
@@ -138,7 +154,7 @@ async def send(bot, db, sess):
         period_start=start,
         period_end=start + timedelta(days=6),
         anchor_date=day,
-        chat_title="Отметки этого чата",
+        chat_title="Личные отметки" if sess.chat_id > 0 else "Отметки этого чата",
         revision=1,
         delivered_revision=0,
     )
@@ -147,7 +163,7 @@ async def send(bot, db, sess):
     sent = await bot(
         SendWidget(
             chat_id=sess.chat_id,
-            html=render(day),
+            html=render(day, private=sess.chat_id > 0),
             chat_data=encode(snapshot(db, sess, 1)),
         )
     )
@@ -162,16 +178,16 @@ def mutate(db, q):
     actor = q.get("from") or {}
     uid = actor.get("id")
     reject = lambda msg: {"t": msg}
-    if (
-        chat.get("id") != PILOT
-        or chat.get("type") not in ("group", "supergroup")
-        or not uid
-        or actor.get("is_bot")
-        or not enabled(db, PILOT)
-    ):
+    chat_id = chat.get("id")
+    if type(chat_id) is not int or not uid or actor.get("is_bot"):
+        return reject("Недоступно для этого чата")
+    if chat_id > 0:
+        if chat.get("type") != "private" or chat_id != uid:
+            return reject("Недоступно для этого чата")
+    elif chat.get("type") not in ("group", "supergroup") or not enabled(db, chat_id):
         return reject("Недоступно для этого чата")
     match = re.fullmatch(
-        r"q:([+f-]|e([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])):([a-f0-9]{16})",
+        r"q:([+fs-]|e([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])):([a-f0-9]{16})",
         str(q.get("data", "")),
     )
     if not match:
@@ -185,7 +201,7 @@ def mutate(db, q):
             & (SessionMessage.message_id == WeeklyReport.photo_message_id),
         )
         .where(
-            WeeklyReport.source_chat_id == PILOT,
+            WeeklyReport.source_chat_id == chat_id,
             WeeklyReport.photo_message_id == q.get("message_id"),
             WeeklyReport.delivery_key.startswith(PREFIX),
             WeeklyReport.disabled.is_(False),
@@ -195,7 +211,7 @@ def mutate(db, q):
         return reject("Этот вопрос уже неактуален")
     op, eid, version, kind, feeling, nonce = match.groups()
     if op == "f":
-        lock_restore_chat(db, PILOT)
+        lock_restore_chat(db, chat_id)
     # Two simultaneous first taps must converge on the same user lock as the Mini App.
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
@@ -211,11 +227,11 @@ def mutate(db, q):
     )
     db.flush()
     sess = db.get(DaySession, row.q1_session_id, with_for_update=True)
-    window = get_session_window(db.get(Chat, PILOT).timezone)
+    window = get_session_window(db.get(Chat, chat_id).timezone)
     rid = str(
         uuid5(
             NAMESPACE_URL,
-            f"poopcheck:widget:{PILOT}:{row.photo_message_id}:{uid}:{nonce}",
+            f"poopcheck:widget:{chat_id}:{row.photo_message_id}:{uid}:{nonce}",
         )
     )
     digest = hashlib.sha256(op.encode()).hexdigest()
@@ -246,20 +262,26 @@ def mutate(db, q):
     if op == "f" and sess.status != "closed":
         return result("Сессия ещё не закрыта")
     if op in "+-" and not check_rate_limit(
-        db, chat_id=PILOT, user_id=uid, scope="Q1", cooldown_seconds=2
+        db, chat_id=chat_id, user_id=uid, scope="Q1", cooldown_seconds=2
     ):
         return result("Слишком быстро. Попробуй через пару секунд")
-    ensure_chat_member(db, PILOT, uid)
+    ensure_chat_member(db, chat_id, uid)
     if op == "f":
         _, msg = mark_forgotten_day(
             db, sess=sess, user_id=uid, today=window.session_date
         )
+    elif op == "s":
+        from app.services.q1_service import restore_streak_for_user, should_show_restore_streak_button
+        if chat_id <= 0 or not should_show_restore_streak_button(db, chat_id=chat_id, session_date=sess.session_date,
+                                                                 viewer_user_id=uid, is_private_chat=True):
+            return result("Восстановление недоступно")
+        _, msg = restore_streak_for_user(db, chat_id, uid, sess.session_date)
     elif eid:
         event = db.scalar(
             select(PoopEvent).where(
                 PoopEvent.id == int(eid),
                 PoopEvent.user_id == uid,
-                PoopEvent.origin_chat_id == PILOT,
+                PoopEvent.origin_chat_id == chat_id,
                 PoopEvent.session_id == sess.session_id,
             )
         )
@@ -268,7 +290,7 @@ def mutate(db, q):
         try:
             change_mark(
                 db,
-                PILOT,
+                chat_id,
                 uid,
                 dict(
                     action="edit",
@@ -285,12 +307,12 @@ def mutate(db, q):
         msg = "Уточнения сохранены"
     else:
         changed, msg = (
-            apply_plus(db, sess.session_id, uid, PILOT)
+            apply_plus(db, sess.session_id, uid, chat_id)
             if op == "+"
             else apply_minus(db, sess.session_id, uid)
         )
         db.flush()
-        events = list_origin_events(db, sess.session_id, uid, PILOT)
+        events = list_origin_events(db, sess.session_id, uid, chat_id)
         if changed:
             msg = f"Твоих отметок: {len(events)}"
             if op == "+" and events:
@@ -301,7 +323,7 @@ def mutate(db, q):
             request_id=rid,
             payload_hash=digest,
             event_id=event.id if event else None,
-            chat_id=PILOT,
+            chat_id=chat_id,
             notify_date=sess.session_date,
             notify_pending=False,
         )

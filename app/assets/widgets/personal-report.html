@@ -1,0 +1,64 @@
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#181d27;font-family:system-ui,sans-serif}
+main{padding:12px}header,.switch,.pair,.animal{display:flex;align-items:center;gap:6px}
+header{justify-content:space-between}header img{width:110px;height:26px}small,.date{font-size:12px;color:#645b5b}
+h2{font-size:20px;margin:12px 0 2px}.switch{margin:10px 0}
+button{border:0;border-radius:15px;background:#f4f0ec;color:#645b5b;padding:6px 11px}
+button.selected{background:#934c21;color:white}.pair{align-items:stretch;margin:6px 0}
+.tile,.animal{padding:8px;background:#f4f0ec;border-radius:12px;font-size:12px}.tile{flex:1;min-width:0}
+b{display:block;font-size:20px;color:#934c21}.blue{color:#3da5ff}
+#calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center;margin:8px 0;font-size:10px}
+#calendar.year{grid-template-columns:repeat(6,1fr)}.day{border-radius:9px;padding:3px 0;background:#f4f0ec;color:#645b5b}
+.day strong{display:block;font-size:12px}.marked{background:#934c21;color:white}.animal img{width:34px;object-fit:contain}
+h3{margin:8px 0 3px;font-size:15px}.answer{display:flex;justify-content:space-between;padding:4px 9px;border-radius:8px;background:#f4f0ec;margin-bottom:2px;font-size:13px}
+</style>
+<main><header><img alt="PoopCheck" src="data:image/png;base64,__LOGO__"><small>__LABEL__</small></header>
+<h2>__TITLE__</h2><div class="date">__PERIOD__</div>
+<div class="switch"><button id="totals" class="selected">Итоги</button><button id="details">Уточнения</button></div>
+<section id="overview"><div class="pair"><div class="tile"><b id="total"></b>отметок</div><div class="tile"><b id="active"></b>дней с отметками</div></div>
+<small id="compare"></small><div id="calendar"></div>
+<small>Примерная оценка</small><div class="pair"><div class="tile"><b id="mass"></b>Общая масса кала</div><div class="tile"><b class="blue" id="water"></b>воды на смыв</div></div>
+<div id="animal" class="animal" style="display:none"><img id="silhouette"><span id="equivalent"></span></div></section>
+<section id="answers" style="display:none"><small id="average"></small><h3>Консистенция</h3><div id="kinds"></div><h3>Самочувствие</h3><div id="feelings"></div></section></main>
+<script>
+const widget=TelegramWidget, get=id=>document.getElementById(id);
+const weekdays=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const months=['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
+function node(parent,tag,text,cls){
+  const item=document.createElement(tag);
+  item.className=cls||'';item.textContent=String(text);parent.appendChild(item);return item;
+}
+function distribution(id,labels,values){
+  const box=get(id);box.textContent='';
+  labels.forEach((label,i)=>node(node(box,'div',label,'answer'),'strong',values[i]));
+}
+function draw(){
+  if(!widget.chatData){get('overview').textContent='Личный отчёт доступен в исходном чате';get('details').style.display='none';return}
+  const data=JSON.parse(widget.chatData);
+  get('total').textContent=data.total;get('active').textContent=data.active+'/'+data.length;
+  const delta=data.total-data.previous;
+  get('compare').textContent='__COMPARE__ · '+(delta>0?'+':'')+delta+' (было '+data.previous+')';
+  get('average').textContent=(data.total/data.length).toFixed(1).replace('.',',')+' за день · в прошлом периоде дней с отметками: '+data.prevActive;
+  get('mass').textContent=data.mass;get('water').textContent=data.water+' л';
+  if(data.animal){get('silhouette').src='data:image/png;base64,'+data.icon;get('equivalent').textContent=data.animal}
+  get('animal').style.display=data.animal?'flex':'none';
+  const grid=get('calendar');grid.textContent='';
+  const year='__KIND__'==='year';
+  if(year){grid.className='year'}else{
+    weekdays.forEach(day=>node(grid,'small',day));
+    for(let i=0;i<__OFFSET__;i++)node(grid,'span','');
+  }
+  data.counts.forEach((count,i)=>{
+    const day=year?months[i]:(__FIRST__-1+i)%__DAYSINMONTH__+1;
+    node(node(grid,'div',day,count?'day marked':'day'),'strong',count||'·');
+  });
+  distribution('kinds',['Жёстко','Норма','Мягко','Жидко','Без ответа'],data.kinds);
+  distribution('feelings',['Отлично','Нормально','Плохо','Без ответа'],data.feelings);
+}
+function select(details){
+  get('overview').style.display=details?'none':'block';get('answers').style.display=details?'block':'none';
+  get('totals').className=details?'':'selected';get('details').className=details?'selected':'';
+}
+get('totals').onclick=()=>select(false);get('details').onclick=()=>select(true);
+draw();widget.onEvent('chatDataChanged',draw);widget.ready();
+</script>

@@ -22,6 +22,9 @@ async def edit_question(bot, db, *, chat_id, message_id, text, reply_markup=None
 
 async def send_question(bot, db, *, chat_id, session_id, text, reply_markup=None):
     sess = db.get(DaySession, session_id)
+    from app.services import group_daily_widget
+    if group_daily_widget.enabled(db, chat_id):
+        return await group_daily_widget.send(bot, db, sess)
     period = period_to_range(sess.session_date, 'week')
     title = 'Личные отметки' if chat_id > 0 else 'Отметки этого чата'
     db.flush()

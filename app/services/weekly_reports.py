@@ -113,6 +113,10 @@ class ReportWorker:
             row = db.get(WeeklyReport, report_id)
             if row is None or row.disabled or row.revision <= row.delivered_revision:
                 return None
+            if row.delivery_key.startswith('widget:q1:'):
+                from app.services.group_daily_widget import encode, snapshot
+                sess = db.get(DaySession, row.q1_session_id)
+                return row, None, encode(snapshot(db, sess, row.revision))
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
                                 row.chat_title or 'Личные отметки', row.label, period=row.report_period,
                                 layout='daily' if row.q1_session_id is not None else
@@ -181,6 +185,17 @@ class ReportWorker:
                 return
             row, picture, caption = snapshot
             revision = row.revision
+            if row.delivery_key.startswith('widget:q1:'):
+                from app.services.daily_widget_demo import EditWidget
+                if await self._is_current(row):
+                    try:
+                        await self.bot(EditWidget(chat_id=row.destination_chat_id, message_id=row.photo_message_id,
+                                                  chat_data=caption), request_timeout=15)
+                    except TelegramBadRequest as exc:
+                        if 'not modified' not in exc.message.lower().replace('_', ' '):
+                            raise
+                    await database_work(self.finish, row)
+                return
             caption_hash = digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb
             keyboard = debug_explain_kb(row.report_period) if row.delivery_key.startswith('debug:') else None

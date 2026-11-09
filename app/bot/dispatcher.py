@@ -13,6 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.dispatcher.event.bases import UNHANDLED
 
 from app.services.daily_widget_demo import DemoQueries
+from app.services.group_daily_widget import GroupQueries
 from app.core.config import Settings
 from app.db.runtime import configure_database, close_database
 from app.bot.monitoring import PollingActivityMiddleware, telegram_guard_loop
@@ -186,6 +187,7 @@ async def _run_bot(settings, bot, session_factory):
 
     dp.update.outer_middleware(_UpdateActivityMiddleware(_touch_received, _touch_handled))
 
+    dp.update.outer_middleware(GroupQueries(session_factory))
     dp.update.outer_middleware(DemoQueries(settings.bot_owner_id, session_factory))
 
     if settings.startup_recover_missing_q1:

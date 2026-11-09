@@ -58,7 +58,7 @@ def render_demo(day):
                      f'<span{box_id} class="dot {"on" if n else "off"}">{icon}<b>{d.day}</b>'
                      f'<i{badge_id}>{n}</i></span></div>')
     logo = 'data:image/png;base64,' + base64.b64encode((ASSETS / 'logo-180.png').read_bytes()).decode()
-    html = ((ASSETS / 'daily-demo.html').read_text().replace('__LOGO__', logo)
+    html = ('<style>' + (ASSETS / 'daily.css').read_text() + '</style>' + (ASSETS / 'daily-demo.html').read_text().replace('__LOGO__', logo)
             .replace('__DATE__', f'{day.day} {MONTHS[day.month-1]}').replace('__WEEK__', ''.join(cells)))
     if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4050:
         raise ValueError('Daily widget exceeds Telegram size budget')

@@ -1,0 +1,33 @@
+<main><header><img src="__LOGO__" alt="PoopCheck"><span class="tag">Наш чат</span></header>
+<h2>Кто сегодня какал?</h2><small>__DATE__</small><div class="week">__WEEK__</div>
+<div class="controls"><button id="minus">−</button><span>За день: <b id="count">—</b></span><button id="plus">+</button></div>
+<div id="hint"></div><div id="panel"></div></main>
+<script>
+const w=TelegramWidget,$=id=>document.getElementById(id),hint=t=>$('hint').textContent=t,p=$('panel');
+let rev=-1,closed=0,busy=false,ev='',v='',pending=sessionStorage.getItem('pending')||'';
+function button(t,f){let b=document.createElement('button');b.textContent=t;b.onclick=f;p.appendChild(b)}
+function paint(s){if(!s||s.r<rev)return;rev=s.r;closed=s.c;
+s.d.forEach((n,i)=>{let b=$('d'+i);b.className='dot '+(n?'on':'off');b.querySelector('i').textContent=n});
+$('count').textContent=s.d[__INDEX__];
+if(closed){hint('Сессия закрыта');if(Date.now()/1000>=s.x)$('plus').style.display='none';$('minus').style.display='none';$('plus').textContent='Забыл отметиться';$('plus').style.width='auto';p.textContent='';}}
+function detail(){p.textContent='';button('Уточнить',()=>{p.textContent='';hint('Консистенция');
+['Жёстко','Норма','Мягко','Жидко'].forEach((t,k)=>button(t,()=>{p.textContent='';hint('Самочувствие');
+['Отлично','Нормально','Плохо'].forEach((f,j)=>button(f,()=>act('e'+ev+'.'+v+'.'+k+j))) }))})}
+async function act(op,retry){
+if(pending&&!retry){hint('Сначала проверь последнее нажатие');return}
+if(busy||w.isForward||rev<0)return;
+if(!pending){pending='q:'+op+':'+Array.from(crypto.getRandomValues(new Uint8Array(8)),x=>x.toString(16).padStart(2,'0')).join('');sessionStorage.setItem('pending',pending)}
+busy=true;hint('Сохраняем…');
+try{let a=JSON.parse((await w.request(pending)).result);
+pending='';sessionStorage.removeItem('pending');paint(a.s);p.textContent='';hint(a.t);
+if(a.e&&!closed){ev=a.e;v=a.v;detail()}}
+catch(e){hint('Ответ не получен');p.textContent='';button('Повторить',()=>act(op,true))}
+finally{busy=false}}
+function sync(){if(w.chatData)paint(JSON.parse(w.chatData))}
+sync();w.onEvent('chatDataChanged',sync);
+$('plus').onclick=()=>act(closed?'f':'+');$('minus').onclick=()=>act('-');
+hint(w.isForward?'Копия · только просмотр':closed?'Сессия закрыта':'Отметки этого чата');
+if(pending)button('Проверить последнее нажатие',()=>act('+',true));
+if(w.isForward){$('plus').style.display='none';$('minus').style.display='none'}
+w.ready()
+</script>

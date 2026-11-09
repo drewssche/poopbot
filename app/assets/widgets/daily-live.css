@@ -1,0 +1,24 @@
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:#181d27;font:16px system-ui,sans-serif}
+header{position:relative;display:flex;align-items:center;justify-content:center;padding:9px 0 12px}
+#menu{position:absolute;left:3%;width:32px;height:38px;padding:0;color:#181d27;background:white;font-size:21px}
+header img{width:174px;height:40px}
+.calendar{padding:0 6% 13px;border-radius:0 0 16px 16px;box-shadow:0 6px 13px #e6e2e2}
+h2,h3{margin:0;font-weight:500}
+h2{font-size:21px;margin-bottom:12px}
+.week,.controls,.cell,.day{display:flex;align-items:center;justify-content:center}
+.cell{flex:1;min-width:0;flex-direction:column;gap:4px;color:#c8b7a7;font-size:18px}
+.day{width:30px;height:30px;border-radius:50%}
+.marked{background:#c8b7a7;color:#fff}
+.today{color:#934c21}.today .day{background:#934c21;color:#fff}
+article{padding:19px 9% 12px}
+h3{display:flex;align-items:center;gap:6px;font-size:19px;margin-bottom:8px}
+button{font:inherit;border:0;color:#181d27;background:#f4f0ec;border-radius:26px}
+#panel button,#restore{display:block;width:100%;min-height:40px;padding:7px;margin-bottom:6px}
+.controls{justify-content:space-between;gap:6px;margin:9px 0}
+.controls button{width:42px;height:42px;font-size:24px}
+#plus{color:white;background:#934c21}
+#plus.closed{width:auto;padding:0 12px;font-size:15px}
+#hint,#history{font-size:14px;color:#645b5b;white-space:pre-line}
+#hint{margin:3px 0}#form h3{justify-content:center}#face{width:24px;height:23px}
+@media(max-width:270px){header img{width:148px;height:34px}article,.calendar{padding-left:10px;padding-right:10px}.day{width:25px;height:25px}}

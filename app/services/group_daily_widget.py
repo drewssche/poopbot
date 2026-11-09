@@ -26,12 +26,11 @@ from app.services.daily_widget_demo import (
     ASSETS,
     ROOT,
     DAYS,
-    MONTHS,
     AnswerWidget,
     SendWidget,
 )
 from app.services.mini_app_notifications import database_work
-from app.services.mini_app_service import change_mark, event_version, MarkRejected
+from app.services.mini_app_service import change_mark, event_version, record_mark, MarkRejected
 from app.services.poop_event_service import list_origin_events
 from app.services.q1_service import apply_minus, apply_plus
 from app.services.rate_limit_service import check_rate_limit
@@ -61,33 +60,28 @@ def encode(value):
 
 def render(day, private=False):
     start = day - timedelta(days=day.weekday())
-    # Keep the original silhouette and trim subpixel precision for Telegram's size limit.
-    icon = (ROOT / "web/demo/assets/poop-day.svg").read_text().strip()
-    icon = re.sub(r"\d+\.\d+", lambda m: str(round(float(m[0]))), icon)
+    months = "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь".split()
     cells = "".join(
         f'<div class="cell{" today" if i == day.weekday() else ""}">{name}'
-        f'<span class="dot off" id="d{i}">{icon}<b>{(start + timedelta(days=i)).day}</b>'
-        "<i></i></span></div>"
+        f'<span class="day" id="d{i}">{(start + timedelta(days=i)).day}</span></div>'
         for i, name in enumerate(DAYS)
     )
-    logo = base64.b64encode((ASSETS / "logo-110.png").read_bytes()).decode()
-    css = (
-        (ASSETS / "daily.css").read_text()
-        + "#panel{text-align:center}#panel button{width:auto;margin:3px;padding:4px 8px;background:#f4f0ec;font-size:13px}#plus{font-size:18px}"
-    )
+    logo = base64.b64encode((ASSETS / "daily-brand.png").read_bytes()).decode()
+    menu_icon = (ROOT / "web/demo/assets/menu.svg").read_text()
     html = (
         "<style>"
-        + css
+        + (ASSETS / "daily-live.css").read_text()
         + "</style>"
         + (ASSETS / "daily-live.html")
         .read_text()
         .replace("__LOGO__", "data:image/png;base64," + logo)
+        .replace("__FACE__", base64.b64encode((ASSETS / "daily-face.png").read_bytes()).decode())
+        .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
         .replace("__WEEK__", cells)
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
-        .replace("__HINT__", "Твои отметки" if private else "Отметки этого чата")
-        .replace("__DETAILS__", '<details><summary>За день</summary><div id="history" style="white-space:pre-line"></div><button id="restore" style="width:auto;display:none">Вернуть стрик</button></details>' if private else "")
+        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button></section>' if private else "")
         .replace("__PRIVATE__", "true" if private else "false")
-        .replace("__DATE__", f"{day.day} {MONTHS[day.month - 1]}")
+        .replace("__DATE__", f"{months[day.month - 1]} {day.year}")
         .replace("__INDEX__", str(day.weekday()))
     )
     if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4010:
@@ -187,7 +181,7 @@ def mutate(db, q):
     elif chat.get("type") not in ("group", "supergroup") or not enabled(db, chat_id):
         return reject("Недоступно для этого чата")
     match = re.fullmatch(
-        r"q:([+fs-]|e([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])):([a-f0-9]{16})",
+        r"q:([+fs-]|a[0-3][0-2]|e([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])):([a-f0-9]{16})",
         str(q.get("data", "")),
     )
     if not match:
@@ -261,12 +255,25 @@ def mutate(db, q):
         return result("Сессия закрыта")
     if op == "f" and sess.status != "closed":
         return result("Сессия ещё не закрыта")
-    if op in "+-" and not check_rate_limit(
+    if (op in "+-" or op.startswith("a")) and not check_rate_limit(
         db, chat_id=chat_id, user_id=uid, scope="Q1", cooldown_seconds=2
     ):
         return result("Слишком быстро. Попробуй через пару секунд")
     ensure_chat_member(db, chat_id, uid)
-    if op == "f":
+    if op.startswith("a"):
+        if chat_id <= 0:
+            return reject("Доступно только в личной сессии")
+        db.flush()
+        try:
+            record_mark(db, chat_id, uid, {
+                "requestId": str(uuid5(NAMESPACE_URL, "add:" + rid)),
+                "date": sess.session_date.isoformat(),
+                "kind": int(op[1]), "feeling": int(op[2]),
+            })
+        except MarkRejected as exc:
+            return result(str(exc))
+        msg = "Отметка сохранена"
+    elif op == "f":
         _, msg = mark_forgotten_day(
             db, sess=sess, user_id=uid, today=window.session_date
         )

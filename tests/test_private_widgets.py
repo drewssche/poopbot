@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -81,6 +81,31 @@ async def test_scheduled_private_question_is_scoped_to_owner(factory):
     assert "s" not in press(42, msg=14)
     assert press(42)["s"]["d"][0] == 1
     assert press(42)["s"]["d"][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_widget_choices_record_one_complete_personal_mark(factory, monkeypatch):
+    from app.services import mini_app_service
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 9, 12, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(mini_app_service, "datetime", Clock)
+    bot = AsyncMock(return_value=SimpleNamespace(message_id=13))
+    with factory.begin() as db:
+        sess = db.scalar(select(DaySession))
+        await _post_q1(bot, db, 42, sess.session_id, DAY, False)
+
+    query = {"from": {"id": 42}, "chat": {"type": "private", "id": 42},
+             "message_id": 13, "data": "q:a12:0123456789abcdef"}
+    for _ in range(2):
+        with factory.begin() as db:
+            assert mutate(db, query)["s"]["d"][0] == 1
+    with factory.begin() as db:
+        event, = db.scalars(select(PoopEvent).where(PoopEvent.user_id == 42)).all()
+        assert (event.bristol, event.feeling) == (4, "bad")
 
 
 @pytest.mark.parametrize("period", ["week", "month", "year"])

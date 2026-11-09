@@ -36,7 +36,7 @@ def test_estimates_convert_grams_and_use_blue_for_water(monkeypatch):
     monkeypatch.setattr(c, 'text', capture)
     draw_estimates(c, 0, 21, 'Примерно')
     values = [args[2] for args, _ in calls]
-    assert '3,15 кг' in values and '126 л' in values
+    assert '3,15 кг' in values and '126 л' in values and 'Общая масса кала' in values
     assert '≈ 0,9 гуся' in values
     assert 'По массе · гусь ≈ 3,50 кг' in values
     water = next(args for args, _ in calls if args[2] == '126 л')
@@ -50,8 +50,8 @@ def test_all_silhouettes_are_local_nonempty_transparent_assets():
         assert icon.mode == 'RGBA' and icon.getbbox()
 
 
-@pytest.mark.parametrize('total', [0, 21, 12345, 9999999])
-def test_estimate_text_fits_inside_visible_icon_height(total):
+@pytest.mark.parametrize('total', [0, 25, 12345, 9999999])
+def test_estimates_align_text_with_visible_icons(total):
     from PIL import ImageChops
     from app.services.weekly_report_card import PALE
 
@@ -64,10 +64,13 @@ def test_estimate_text_fits_inside_visible_icon_height(total):
         # Ignore only the faint outer antialiasing when comparing visible edges.
         return contrast.convert('L').point(lambda p: 255 if p > 50 else 0).getbbox()
 
+    gaps = []
     for x in (48, 430):
         icon = ink_bounds((x+14, 56, x+98, 144))
-        text = ink_bounds((x+110, 56, x+350, 144))
+        text = ink_bounds((x+98, 56, x+350, 144))
         assert icon and text and icon[1] <= text[1] < text[3] <= icon[3]
+        gaps.append((98 + text[0]) - (14 + icon[2]))
+    assert abs(gaps[0] - gaps[1]) <= 1  # Allow a pixel for the first glyph's side bearing.
 
 
 def test_expanded_catalog_has_thirty_distinct_sourced_animals():

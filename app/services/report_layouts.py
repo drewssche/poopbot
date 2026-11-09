@@ -203,13 +203,19 @@ def draw_estimates(c, y, total, title):
     poop = c.poop.resize((62, 60), Image.Resampling.LANCZOS)
     center_y = y + 100
     # Center the visible silhouettes, excluding transparent PNG margins.
-    for icon, center_x in ((poop, 107), (water_icon(), 489)):
+    columns = []
+    for icon, center_x, value, label, color in (
+        (poop, 107, format_mass(mass).replace('.', ','), 'Общая масса кала', BROWN),
+        (water_icon(), 489, f'{water:.0f} л', 'воды на смыв', WATER),
+    ):
         icon = icon.crop(icon.getbbox())
         icon = icon.resize((round(icon.width * 64 / icon.height), 64), Image.Resampling.LANCZOS)
-        c.im.paste(icon, (center_x - icon.width//2, center_y - 32), icon)
-    metric_row(c, [(162, format_mass(mass).replace('.', ','), 'Общая каловая масса', BROWN),
-                   (544, f'{water:.0f} л', 'воды на смыв', WATER)],
-               top=center_y-29, height=58, width=224, value_size=42, label_size=20)
+        icon_x = center_x - icon.width//2
+        c.im.paste(icon, (icon_x, center_y - 32), icon)
+        # Measure from the silhouette, ignoring the faint antialiased fringe.
+        right_edge = icon.getchannel('A').point(lambda alpha: 255 if alpha >= 128 else 0).getbbox()[2]
+        columns.append((icon_x + right_edge + 22, value, label, color))
+    metric_row(c, columns, top=center_y-29, height=58, width=224, value_size=42, label_size=20)
     comparison = mass_comparison(mass / 1000)
     if comparison is not None:
         animal, label = comparison

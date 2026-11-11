@@ -163,3 +163,51 @@ def icon_page(db, sess, route):
             page["nav"].insert(0, [label, key, "✓"])
         page.pop("marked", None)
     return page
+
+
+def personal_page(db, sess, route):
+    """Views for the daily widget with a persistent header and local back history."""
+    owner = sess.chat_id
+    if owner <= 0:
+        return {"t": "Доступно только в личной сессии"}
+    if route == "help":
+        from app.bot.handlers.help_content import private_help_text
+
+        return dict(title="Помощь", body=private_help_text(db.get(Chat, owner).timezone).partition("\n\n")[2], nav=[])
+    periods = {"week": "Неделя", "month": "Месяц", "year": "Год"}
+    if route in periods:
+        from app.services.stats_common import Range, format_period, period_to_range
+        from app.services.stats_metrics import compute_chat_period_metrics
+
+        anchor = sess.session_date
+        span = Range(period_to_range(anchor, route).start, anchor)
+        metrics = compute_chat_period_metrics(db, owner, span, user_id=owner)
+        body = (f"{format_period(span)}\n\nОтметок · {metrics.total_poops}\n"
+                f"Дней с отметками · {metrics.active_days_count} из {metrics.period_days}")
+        return dict(title=f"Статистика · {periods[route].lower()}", body=body,
+                    nav=[[label, key] for key, label in periods.items() if key != route])
+    page = icon_page(db, sess, route)
+    if "nav" not in page:
+        return page
+    if "month" in page:
+        counts = page.pop("counts")
+        until = page.pop("until")
+        page["cells"] = [counts.get(i, 0) if i <= until else -1 for i in range(1, page.pop("days") + 1)]
+    if route == "menu":
+        page["title"] = "Меню"
+        page["nav"] = [["Статистика", "week"], ["Помощь", "help"]] + [
+            [label, key] for label, key, *_ in page["nav"] if key != "home"
+        ]
+    else:
+        nav = []
+        for item in page["nav"]:
+            label, key = item[:2]
+            if label == "Месяц":
+                nav.append(["Календарь", key])
+            elif label not in ("Назад", "К опросу"):
+                nav.append(item)
+        page["nav"] = nav
+        if page["title"].endswith(" · Нет отметок"):
+            page["title"] = page["title"].split(" · ")[0]
+            page["body"] = "Нет отметок"
+    return page

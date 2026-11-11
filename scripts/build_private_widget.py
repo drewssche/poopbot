@@ -13,7 +13,7 @@ def compact(match):
     tag, source = match.groups()
     loader = "css" if tag == "style" else "js"
     result = subprocess.run(
-        ["npx", "--yes", "esbuild@0.28.2", "--minify", f"--loader={loader}", "--target=es2020"],
+        ["npx", "--yes", "esbuild@0.28.2", "--minify", "--charset=utf8", f"--loader={loader}", "--target=es2020"],
         input=source, capture_output=True, text=True, check=True,
     )
     return f"<{tag}>{result.stdout.strip()}</{tag}>"

@@ -24,12 +24,12 @@ function open(initial=state(0,0), store=new Map(), timers={setTimeout,clearTimeo
     request(key){return new Promise((resolve,reject)=>requests.push({key,resolve,reject}))}};
   vm.runInNewContext(source,{TelegramWidget:widget,crypto:webcrypto,...timers,
     localStorage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},
-    document:{getElementById:get,createElement:element}});
+    document:{getElementById:get,createElement:element,createTextNode:text=>({text})}});
   const nav=()=>get('nav').children.find(b=>b['aria-label']==='Сохранить');
   async function draft(){
     const opened=get('plus').onclick();
     const view=requests.pop();
-    assert.equal(view.key,'q:p:new');
+    assert.equal(view.key,'q:n:new');
     view.resolve({result:JSON.stringify({form:'choices',values:[-1,-1],op:'a',nav:[]})});
     await opened;
     return nav()
@@ -65,7 +65,7 @@ test('both rows belong to one draft, and a versioned edit uses the selected reco
   add.resolve({result:JSON.stringify({ok:true,t:'Отметка сохранена',s:{...state(1,1),entries:[['№1','i'+key]]}})});
   await adding;assert.match(w.get('d0').innerHTML,/<svg/);
   const opening=w.get('panel').children[0].onclick(), read=w.requests[1];
-  assert.equal(read.key,'q:p:u'+key);
+  assert.equal(read.key,'q:n:u'+key);
   read.resolve({result:JSON.stringify({form:'choices',values:[1,2],op:'E'+key+'.',nav:[]})});await opening;
   assert.equal(rows[0].children[1]['aria-pressed'],'true');
   rows[1].children[0].onclick();
@@ -82,4 +82,27 @@ test('a stalled save exposes retry without creating a new nonce',async()=>{
   req.reject(Error('TIMEOUT'));await first;
   second.resolve({result:JSON.stringify({...ack(req),s:state(1,1)})});await retry;
   assert.equal(w.store.size,0);
+});
+
+test('header returns from help and an empty day to the screen that opened them',async()=>{
+  const w=open();
+  async function tap(el, route, page){
+    const opened=el.onclick(), request=w.requests.pop();
+    assert.equal(request.key,'q:n:'+route);
+    request.resolve({result:JSON.stringify(page)});
+    await opened
+  }
+  const menu=w.get('menu'), menuPage={title:'Меню',nav:[['Помощь','help']]};
+  await tap(menu,'menu',menuPage);
+  await tap(w.get('nav').children[0],'help',{title:'Помощь',body:'Помощь по отметкам',nav:[]});
+  assert.equal(menu['aria-label'],'Назад');
+  await tap(menu,'menu',menuPage);
+  await menu.onclick();
+  assert.equal(menu['aria-label'],'Меню');
+  const month={title:'ноябрь',month:'202611',offset:0,cells:[0],nav:[]};
+  await tap(w.get('month'),'m',month);
+  await tap(w.get('panel').children.at(-1),'d20261101',{title:'01.11.2026',body:'Нет отметок',nav:[]});
+  assert.equal(w.get('title').text,'01.11.2026');
+  await tap(menu,'m',month);
+  assert.equal(w.get('panel').className,'grid');
 });

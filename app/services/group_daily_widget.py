@@ -73,7 +73,6 @@ def private_brand():
 
 def source_template(private):
     logo = private_brand()[0] if private else (ASSETS / "brand.svg").read_text().strip()
-    menu_icon = '<svg width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>'
     return (
         "<style>"
         + (ASSETS / ("daily-private.css" if private else "daily-live.css")).read_text()
@@ -86,7 +85,7 @@ def source_template(private):
         .replace("__MONTH__", '<button id="month">__DATE__ ⌄</button>' if private else "__DATE__")
         .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
-        .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
+        .replace("__MENU__", '<button id="menu" aria-label="Меню">☰</button>' if private else "")
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
     )
 
@@ -237,6 +236,8 @@ def mutate(db, q):
     if row is None:
         return reject("Этот вопрос уже неактуален")
     data = str(q.get("data", ""))
+    if data.startswith("q:n:") and chat_id > 0:
+        return history.personal_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:p:") and chat_id > 0:
         return history.icon_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:v:"):

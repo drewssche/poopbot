@@ -1,4 +1,5 @@
-let state, route='home', reading=0;
+let state, reading=0;
+const trail=['home'];
 const nav=$('nav'), art=JSON.parse(w.publicData||'[]');
 function icon(box,path,fill){
   return '<svg width="20" height="20" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
@@ -19,13 +20,18 @@ function link(parent,label,key,glyph=label){
   })
 }
 function mark(el,n){
-  el.className='day'+(n?' marked':'');
+  el.className='day';
   if(n)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+el.textContent+'</b>'+(n>1?'<i>'+n+'</i>':'')
 }
 function record([label,key]){
   const [number,time,...details]=label.split(' · ');
-  const caption=[number,time].filter(Boolean).join(' · ')+(details.length?'\n'+details.join(', '):'');
-  const el=control(panel,'Редактировать: '+label,caption,()=>visit('u'+key.slice(1)));
+  const el=control(panel,label,'',()=>visit('u'+key.slice(1)));
+  const caption=document.createElement('div');
+  const meta=document.createElement('small');
+  meta.textContent=[number,time].filter(Boolean).join(' · ');
+  caption.appendChild(meta);
+  caption.appendChild(document.createTextNode(details.join(' · ')));
+  el.appendChild(caption);
   el.className='entry';
   const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
 }
@@ -50,7 +56,10 @@ function editor(v){
 }
 function show(v){
   const home=!v||v.home;
-  if(home)route='home';
+  if(home)trail.length=1;
+  const menu=$('menu');
+  menu.textContent=home?'☰':'←';
+  menu.setAttribute('aria-label',home?'Меню':'Назад');
   $('calendar').style.display=home?'block':'none';
   $('controls').style.display=home?'flex':'none';
   setQuestion(home?(closed?'Сессия закрыта':''):v.title||'');
@@ -59,31 +68,36 @@ function show(v){
     if(state.d[__INDEX__]>3)link(nav,'Ещё отметки','d__STAMP__.1','…');
     return
   }
-  if(v.body)button(v.body,null);
+  if(v.body){panel.className='note';button(v.body,null)}
   else if(v.month){
     panel.className='grid';
     for(const name of 'пн вт ср чт пт сб вс'.split(' '))button(name,null);
     for(let i=0;i<v.offset;i++)button('',null);
-    for(let i=1;i<=v.days;i++){
-      if(i>v.until)button(String(i),null);
-      else mark(link(panel,String(i),'d'+v.month+String(i).padStart(2,'0')),v.counts[i]||0)
-    }
+    v.cells.forEach((n,index)=>{
+      const day=String(index+1);
+      if(n<0)button(day,null);
+      else mark(link(panel,day,'d'+v.month+day.padStart(2,'0')),n)
+    })
   }else if(v.form)editor(v);
   else (v.items||[]).forEach(record);
   v.nav.forEach(row=>link(nav,...row))
 }
-async function visit(key){
+async function visit(key,back=false){
   if(pending||!state)return;
   const seq=++reading;
-  message('');
-  if(key==='home'){show();return}
-  route=key;message('…');
-  const timer=setTimeout(()=>{if(seq===reading){reading++;show();message('Попробуй ещё раз')}},12000);
+  if(key==='home'){message('');show();return}
+  message('…');
+  function failed(){if(seq===reading){reading++;message('Попробуй ещё раз')}}
+  const timer=setTimeout(failed,12000);
   try{
-    const v=JSON.parse((await w.request('q:p:'+key)).result);
+    const v=JSON.parse((await w.request('q:n:'+key)).result);
     if(seq!==reading||pending)return;
-    message(v.t||'');show(v.t?null:v)
-  }catch(e){if(seq===reading){show();message('Попробуй ещё раз')}}
+    message(v.t||'');
+    if(v.t)return;
+    if(back)trail.pop();
+    else if(key!==trail.at(-1))trail.push(key);
+    show(v)
+  }catch(e){failed()}
   finally{clearTimeout(timer)}
 }
 function paint(s){
@@ -93,7 +107,7 @@ function paint(s){
     const el=$('d'+i);el.textContent=el.getAttribute('data-day');mark(el,n)
   });
   $('plus').style.display=closed&&Date.now()/1000>=s.x?'none':'flex';
-  if(!pending&&route==='home')show();
+  if(!pending&&trail.length===1)show();
   if(s.ack&&pending&&pending.split(':')[2]===s.ack.n)finish(pending,s.ack)
 }
 function done(a){reading++;show();message(a.ok||a.t.startsWith('Твоих отметок:')?'':a.t)}
@@ -103,5 +117,5 @@ function bind(){
   $('plus').onclick=()=>closed?act('f'):visit('new');
   for(let i=0;i<=__INDEX__;i++)$('w'+i).onclick=()=>visit('w'+i);
   $('month').onclick=()=>visit('m');
-  $('menu').onclick=()=>visit('menu')
+  $('menu').onclick=()=>trail.length===1?visit('menu'):visit(trail.at(-2),true)
 }

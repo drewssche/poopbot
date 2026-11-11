@@ -210,3 +210,34 @@ async def test_personal_history_scopes_calendar_edits_and_targeted_deletes(facto
         remaining = db.scalars(select(PoopEvent).where(PoopEvent.user_id==42).order_by(PoopEvent.event_n)).all()
         assert [e.event_n for e in remaining] == [1,2,3,4]
         assert all(e.id != int(key[1:].split('.')[0]) for e in remaining)
+
+
+@pytest.mark.asyncio
+async def test_navigation_inside_personal_question(factory):
+    from app.services.group_daily_widget import encode, private_brand
+
+    bot = AsyncMock(return_value=SimpleNamespace(message_id=13))
+    with factory.begin() as db:
+        sess = db.scalar(select(DaySession))
+        db.add(PoopEvent(session_id=sess.session_id, user_id=42, origin_chat_id=42, event_n=1))
+        await _post_q1(bot, db, 42, sess.session_id, DAY, False)
+
+    def page(key, actor=42):
+        with factory() as db:
+            result = mutate(db, {"from": {"id": actor}, "chat": {"id": 42, "type": "private"},
+                                 "message_id": 13, "data": "q:n:" + key})
+            assert len(encode(result).encode()) <= 1024
+            return result
+
+    assert len(private_brand()[1].encode()) <= 1024
+    assert ["Статистика", "week"] in page("menu")["nav"]
+    assert ["Помощь", "help"] in page("menu")["nav"]
+    assert "галочк" in page("help")["body"]
+    for period in ("week", "month", "year"):
+        assert "Отметок · 1\n" in page(period)["body"]
+        assert "t" in page(period, actor=43)
+    assert page("m")["cells"][8:10] == [1, -1]
+    empty = page("d20261101")
+    assert empty["body"] == "Нет отметок"
+    assert empty["nav"] == [["Календарь", "m202611"]]
+    assert page("new")["nav"] == []

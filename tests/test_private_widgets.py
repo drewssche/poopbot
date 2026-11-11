@@ -273,9 +273,10 @@ async def test_partial_journal_marks_roundtrip(factory, monkeypatch, selection, 
         event = db.get(PoopEvent, added["e"])
         assert (event.bristol, event.feeling) == details
         key = added["s"]["items"][0][1]
-        assert press("E"+key+"._2:0000000000000002")["ok"]
+        edited = press("E"+key+"._2:0000000000000002")
+        assert edited["ok"]
         assert (event.bristol, event.feeling) == (None,"bad")
-        from app.services.mini_app_service import event_version
-        confirmation = press(f"j:x{event.id}.{event_version(event)[:16]}")
+        db.expire_all()  # The next widget click loads the timestamp from the database.
+        confirmation = press("j:x"+edited["s"]["items"][0][1])
         assert "15:00" in confirmation["title"]
         assert confirmation["nav"][0][0] == "Удалить"

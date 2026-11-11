@@ -171,10 +171,16 @@ def event_version(event: PoopEvent) -> str:
     """Opaque revision includes raw values, even values grouped together in the UI."""
     import hashlib
     import json
+    def timestamp(value):
+        # These columns store UTC without a zone; SQLAlchemy defaults are aware until reload.
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(UTC).replace(tzinfo=None)
+        return str(value)
+
     return hashlib.sha256(json.dumps([
         event.id, event.session_id, event.user_id, event.origin_chat_id,
-        event.event_n, event.bristol, event.feeling, str(event.updated_at),
-        str(event.occurred_at), event.source,
+        event.event_n, event.bristol, event.feeling, timestamp(event.updated_at),
+        timestamp(event.occurred_at), event.source,
     ]).encode()).hexdigest()
 
 

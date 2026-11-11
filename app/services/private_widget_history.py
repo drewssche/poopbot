@@ -141,8 +141,6 @@ def editor_view(event=None, key=None, back="home", title=""):
     return page
 
 def icon_page(db, sess, route):
-    if route == "new":
-        return editor_view()
     if route == "menu":
         from app.services.q1_service import render_q1_private, should_show_restore_streak_button
 
@@ -156,7 +154,7 @@ def icon_page(db, sess, route):
         nav.extend([["Мини-апп", "app", "↗"], ["Назад", "home", "‹"]])
         body = "\n".join(text.splitlines()[4:]).split("\n\n")[0]
         return dict(title="Итоги дня", body=body[:180], nav=nav)
-    page = view(db, sess, route)
+    page = editor_view() if route == "new" else view(db, sess, route)
     if "nav" in page:
         icons = {"Ещё": "›", "Месяц": "▦", "К опросу": "⌂", "Назад": "‹"}
         page["nav"] = [[label, key, icons.get(label, label)] for label, key in page["nav"]]

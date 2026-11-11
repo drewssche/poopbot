@@ -23,7 +23,9 @@ function mark(el,n){
   if(n)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+el.textContent+'</b>'+(n>1?'<i>'+n+'</i>':'')
 }
 function record([label,key]){
-  const el=control(panel,'Редактировать: '+label,label,()=>visit('u'+key.slice(1)));
+  const [number,time,...details]=label.split(' · ');
+  const caption=[number,time].filter(Boolean).join(' · ')+(details.length?'\n'+details.join(', '):'');
+  const el=control(panel,'Редактировать: '+label,caption,()=>visit('u'+key.slice(1)));
   el.className='entry';
   const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
 }

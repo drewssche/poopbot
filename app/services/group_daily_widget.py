@@ -1,6 +1,5 @@
 """Native daily questions for personal chats and the group pilot. All counts use the event ledger."""
 
-import base64
 import hashlib
 import json
 import re
@@ -66,7 +65,7 @@ def render(day, private=False):
         f'<span class="day" id="d{i}">{(start + timedelta(days=i)).day}</span></div>'
         for i, name in enumerate(DAYS)
     )
-    logo = base64.b64encode((ASSETS / "daily-brand.png").read_bytes()).decode()
+    logo = (ASSETS / "brand.svg").read_text().strip()
     menu_icon = (ROOT / "web/demo/assets/menu.svg").read_text()
     html = (
         "<style>"
@@ -74,8 +73,7 @@ def render(day, private=False):
         + "</style>"
         + (ASSETS / "daily-live.html")
         .read_text()
-        .replace("__LOGO__", "data:image/png;base64," + logo)
-        .replace("__FACE__", base64.b64encode((ASSETS / "daily-face.png").read_bytes()).decode())
+        .replace("__LOGO__", logo)
         .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
         .replace("__WEEK__", cells)
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
@@ -89,7 +87,18 @@ def render(day, private=False):
     return html
 
 
-def snapshot(db, sess, revision):
+def fit_widget_history(payload, state):
+    """Telegram allows 1024 UTF-8 bytes for each state or request answer."""
+    if "h" not in state or len(encode(payload).encode()) <= 1024:
+        return
+    heading, _, events = state["h"].partition("- #")
+    entries = ("- #" + events).splitlines() if events else []
+    while entries and len(encode(payload).encode()) > 1024:
+        entries.pop(0)
+        state["h"] = heading + "…\n" + "\n".join(entries)
+
+
+def snapshot(db, sess, revision, widget_ack=None):
     day = sess.session_date - timedelta(days=sess.session_date.weekday())
     counts = dict(
         db.execute(
@@ -121,6 +130,9 @@ def snapshot(db, sess, revision):
         data["h"] = "\n".join(summary.splitlines()[4:])
         data["restore"] = not data["c"] and should_show_restore_streak_button(db, chat_id=sess.chat_id,
             session_date=sess.session_date, viewer_user_id=sess.chat_id, is_private_chat=True)
+        if widget_ack:
+            data["ack"] = json.loads(widget_ack)
+        fit_widget_history(data, data)
     return data
 
 
@@ -237,6 +249,7 @@ def mutate(db, q):
         a = {"t": msg, "s": snapshot(db, sess, row.revision)}
         if event and op == "+":
             a.update(e=event.id, v=event_version(event)[:16])
+        fit_widget_history(a, a["s"])
         return a
 
     if receipt:
@@ -335,6 +348,17 @@ def mutate(db, q):
             notify_pending=False,
         )
     )
+    if chat_id > 0:
+        ack = {"n": nonce, "t": msg}
+        if event and op == "+":
+            ack.update(e=event.id, v=event_version(event)[:16])
+        db.flush()
+        db.execute(
+            update(WeeklyReport).where(WeeklyReport.id == row.id).values(
+                widget_ack=encode(ack), revision=WeeklyReport.revision + 1,
+                attempts=0, retry_at=None,
+            )
+        )
     return result(msg, event)
 
 

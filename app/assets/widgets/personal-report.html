@@ -1,18 +1,18 @@
 <style>
 *{box-sizing:border-box}body{margin:0;background:#fff;color:#181d27;font-family:system-ui,sans-serif}
-main{padding:0 7% 14px}header,.switch,.pair,.animal{display:flex;align-items:center;gap:6px}
-header{justify-content:center;padding:10px}header img{width:174px;height:40px}small,.date{font-size:12px;color:#645b5b}
+main{padding:0 8% 14px}header,.switch,.pair,.animal{display:flex;align-items:center;gap:6px}
+header{justify-content:center;padding:10px}.brand{width:174px;height:40px}small,.date{font-size:12px;color:#645b5b}
 h2{font-weight:500;font-size:21px;margin:8px 0 2px}.switch{margin:10px 0}
-button{border:0;min-height:36px;border-radius:24px;background:#f4f0ec;color:#645b5b;padding:6px 11px}
+button{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;font:inherit;font-size:15px;line-height:1.2;border:0;min-height:40px;border-radius:24px;background:#f4f0ec;color:#645b5b;padding:8px 10px}
 button.selected{background:#934c21;color:white}.pair{align-items:stretch;margin:6px 0}
-.tile,.animal{padding:8px;background:#f4f0ec;border-radius:12px;font-size:12px}.tile{flex:1;min-width:0}
+.tile,.animal{padding:8px;background:#f4f0ec;border-radius:12px;font-size:12px}.tile{flex:1;min-width:0;line-height:1.25}.tile b{margin-bottom:3px}
 b{display:block;font-size:20px;color:#934c21}.blue{color:#3da5ff}
 #calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center;margin:8px 0;font-size:10px}
 #calendar.year{grid-template-columns:repeat(6,1fr)}.day{border-radius:9px;padding:3px 0;background:#f4f0ec;color:#645b5b}
 .day strong{display:block;font-size:12px}.marked{background:#934c21;color:white}.animal img{width:34px;object-fit:contain}
-h3{margin:8px 0 3px;font-size:15px}.answer{display:flex;justify-content:space-between;padding:4px 9px;border-radius:8px;background:#f4f0ec;margin-bottom:2px;font-size:13px}
+h3{margin:8px 0 3px;font-size:15px}.answer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 9px;border-radius:8px;background:#f4f0ec;margin-bottom:2px;font-size:13px}
 </style>
-<main><header><img alt="PoopCheck" src="data:image/png;base64,__LOGO__"></header><small>__LABEL__</small>
+<main><header>__LOGO__</header><small>__LABEL__</small>
 <h2>__TITLE__</h2><div class="date">__PERIOD__</div>
 <div class="switch"><button id="totals" class="selected">Итоги</button><button id="details">Уточнения</button></div>
 <section id="overview"><div class="pair"><div class="tile"><b id="total"></b>отметок</div><div class="tile"><b id="active"></b>дней с отметками</div></div>

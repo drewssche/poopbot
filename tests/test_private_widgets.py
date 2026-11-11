@@ -79,8 +79,16 @@ async def test_scheduled_private_question_is_scoped_to_owner(factory):
     assert "s" not in press(43)
     assert "s" not in press(43, 43)
     assert "s" not in press(42, msg=14)
-    assert press(42)["s"]["d"][0] == 1
-    assert press(42)["s"]["d"][0] == 1
+    reply = press(42)
+    assert reply["s"]["d"][0] == 1
+    assert press(42)["e"] == reply["e"]
+    worker = ReportWorker(bot, factory, "", None)
+    with factory() as db:
+        report_id = db.scalar(select(WeeklyReport.id))
+    await worker.deliver(report_id)
+    state = json.loads(bot.await_args.args[0].chat_data)
+    assert state["d"][0] == 1
+    assert state["ack"] == {"n": "0123456789abcdef", "t": reply["t"], "e": reply["e"], "v": reply["v"]}
 
 
 @pytest.mark.asyncio

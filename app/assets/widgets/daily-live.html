@@ -1,11 +1,11 @@
-<main aria-label="__SCOPE__"><header>__MENU__<img src="__LOGO__" alt="PoopCheck"></header>
+<main aria-label="__SCOPE__"><header>__MENU____LOGO__</header>
 <section class="calendar"><h2>__DATE__</h2><div class="week">__WEEK__</div></section>
-<article><section id="form"><h3><img id="face" src="data:image/png;base64,__FACE__" alt=""><span id="title"></span></h3><div id="panel"></div>
-<div class="controls"><button id="minus" aria-label="Убрать отметку">−</button><span>За день: <b id="count">—</b></span><button id="plus" aria-label="Добавить отметку">+</button></div>
+<article><section id="form"><h3><svg id="face" aria-hidden="true" fill="none" viewBox="60 330 32 31"><path fill="#934c21" d="M73 330s2.8.6 5 2.4 3.8 4 3.3 6.7a4 4 0 0 1 3.2 1.4c1.4 1.5.4 3.7.4 3.7s2.9.7 3.5 2.8-.4 4.2-.4 4.2 3.4.5 4 3.4c.4 2.8-1.2 4.9-5 5.4s-11.9-.1-13.7-.5c0 0-6 1.1-9.6.3-3.6-.7-4-7.7 1.3-8.6 0 0-1.1-2.5 0-4.6s3-2.2 3-2.2-1-2.7.6-5.3a4 4 0 0 1 3.3-2 3 3 0 0 1 0-2.7q1.3-2 1.3-2.8T73 330"/><circle cx="72" cy="347" r="2" fill="#fff"/><circle cx="80" cy="347" r="2" fill="#fff"/><path stroke="#fff" stroke-linecap="round" stroke-width="2" d="M71 351c.4 1 2 3 5 3s4.6-2 5-3"/></svg><span id="title"></span></h3><div id="panel"></div>
+<div id="controls" class="controls"><button id="minus" aria-label="Убрать отметку"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="currentColor" d="M2 8h14v2H2z"/></svg></button><span>За день: <b id="count">—</b></span><button id="plus" aria-label="Добавить отметку"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="currentColor" d="M2 8h6V2h2v6h6v2h-6v6H8v-6H2z"/></svg></button></div>
 </section>__DETAILS__<div id="hint"></div></article></main>
 <script>
 const w=TelegramWidget,$=id=>document.getElementById(id),panel=$('panel'),personal=__PRIVATE__;
-let revision=-1,closed=false,busy=false,pending=sessionStorage.getItem('pending')||'';
+let revision=-1,closed=false,busy='',pending=localStorage.getItem('pending')||'';
 function message(text){$('hint').textContent=text}
 function button(text,click){
   const el=document.createElement('button');el.textContent=text;el.onclick=click;panel.appendChild(el)
@@ -30,31 +30,43 @@ function paint(state){
   $('count').textContent=state.d[__INDEX__];
   if(personal){
     $('history').textContent=state.h||'';
-    $('restore').style.display=state.restore&&!w.isForward?'block':'none';
+    $('restore').style.display=state.restore&&!w.isForward?'flex':'none';
     $('restore').onclick=()=>act('s')
   }
-  $('minus').style.display=closed||w.isForward?'none':'block';
-  $('plus').style.display=w.isForward||(closed&&Date.now()/1000>=state.x)?'none':'block';
-  if(closed){$('plus').textContent='Забыл отметиться';$('plus').className='closed'}
-  if(first||wasClosed!==closed)home()
+  $('minus').style.display=closed||w.isForward?'none':'flex';
+  $('plus').style.display=w.isForward||(closed&&Date.now()/1000>=state.x)?'none':'flex';
+  if(closed){$('plus').textContent='Забыл отметиться';$('controls').className='controls closed';$('plus').setAttribute('aria-label','Забыл отметиться')}
+  if(first||wasClosed!==closed)home();
+  if(state.ack&&pending&&pending.split(':')[2]===state.ack.n)finish(pending,state.ack)
+}
+function finish(key,a){
+  if(pending!==key)return;
+  pending='';busy='';localStorage.removeItem('pending');
+  home();message(a.t);
+  if(a.e&&!closed){
+    const edit=()=>choices('e'+a.e+'.'+a.v+'.');
+    if(personal)edit();else button('Уточнить',edit)
+  }
+}
+function check(){
+  message('Ожидаем подтверждения');screen('');
+  button('Проверить отметку',()=>act('',true))
 }
 async function act(op,retry){
-  if(busy||w.isForward||revision<0)return;
-  if(pending&&!retry){message('Сначала проверь последнее нажатие');return}
+  if(busy||w.isForward||revision<0||(!pending&&retry))return;
+  if(pending&&!retry){check();return}
   if(!pending){
-    const nonce=Array.from(crypto.getRandomValues(new Uint8Array(8)),x=>x.toString(16).padStart(2,'0')).join('');
-    pending='q:'+op+':'+nonce;sessionStorage.setItem('pending',pending)
+    const nonce=crypto.randomUUID().replace(/-/g,'').slice(-16);
+    pending='q:'+op+':'+nonce;localStorage.setItem('pending',pending)
   }
-  busy=true;message('Сохраняем…');
-  try{
-    const a=JSON.parse((await w.request(pending)).result);
-    pending='';sessionStorage.removeItem('pending');paint(a.s);home();message(a.t);
-    if(a.e&&!closed){
-      const edit=()=>choices('e'+a.e+'.'+a.v+'.');
-      if(personal)edit();else button('Уточнить',edit)
-    }
-  }catch(e){message('Ответ не получен');screen('');button('Повторить',()=>act('',true))}
-  finally{busy=false}
+  const key=pending;
+  busy=key;message('Сохраняем…');
+  let a;
+  try{a=JSON.parse((await w.request(key)).result)}catch(e){}
+  if(pending!==key)return;
+  busy='';
+  if(!a||typeof a.t!=='string'){check();return}
+  paint(a.s);finish(key,a)
 }
 function sync(){if(w.chatData)paint(JSON.parse(w.chatData))}
 if(personal)$('menu').onclick=()=>{
@@ -64,6 +76,6 @@ if(personal)$('menu').onclick=()=>{
 sync();w.onEvent('chatDataChanged',sync);
 $('plus').onclick=()=>act(closed?'f':'+');$('minus').onclick=()=>act('-');
 if(w.isForward){if(personal)$('menu').style.display='none';screen('Копия · только просмотр');$('plus').style.display='none';$('minus').style.display='none'}
-if(pending&&!w.isForward){screen('');button('Проверить последнее нажатие',()=>act('',true))}
+if(pending&&!w.isForward)check()
 w.ready()
 </script>

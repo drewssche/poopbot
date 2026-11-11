@@ -1,6 +1,5 @@
 """Render Telegram command menus as paged private widgets."""
 
-import base64
 from contextvars import ContextVar
 from functools import lru_cache
 from html import unescape
@@ -20,7 +19,7 @@ def encode(value):
 
 @lru_cache(maxsize=1)
 def layout():
-    logo = base64.b64encode((ASSETS / "daily-brand.png").read_bytes()).decode()
+    logo = (ASSETS / "brand.svg").read_text().strip()
     return (ASSETS / "menu.html").read_text().replace("__LOGO__", logo)
 
 

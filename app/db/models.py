@@ -216,6 +216,7 @@ class WeeklyReport(Base):
     visual_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     caption_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    widget_ack: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivered_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -1,21 +1,31 @@
 <style>
 *{box-sizing:border-box}body{margin:0;background:#fff;color:#181d27;font:16px system-ui,sans-serif}
-header{display:flex;justify-content:center;padding:10px}header img{width:174px;height:40px}
-section{padding:8px 7% 16px;border-radius:0 0 16px 16px;box-shadow:0 6px 13px #e6e2e2}
+header{display:flex;justify-content:center;padding:10px}.brand{width:174px;height:40px}
+section{padding:8px 8% 16px;border-radius:0 0 16px 16px;box-shadow:0 6px 13px #e6e2e2}
 h2{font-size:21px;font-weight:500;margin:0 0 8px}#body{white-space:pre-line;overflow-wrap:anywhere;font-size:15px}
-footer{padding:14px 8% 20px}button{width:100%;min-height:36px;border:0;border-radius:24px;background:#f4f0ec;color:#181d27;font:inherit;margin:3px 0}
-nav{display:flex;align-items:center;justify-content:space-between;gap:6px;color:#645b5b}nav button{width:42px;color:#934c21}#notice{font-size:14px;color:#645b5b}
+footer{padding:14px 8% 20px}button{display:flex;align-items:center;justify-content:center;text-align:center;width:100%;min-height:40px;border:0;border-radius:24px;background:#f4f0ec;color:#181d27;font:inherit;line-height:1.2;padding:8px 12px;overflow-wrap:anywhere}
+#buttons{display:grid;gap:6px}
+.with-icons button{display:grid;grid-template-columns:24px 1fr;gap:8px;padding:9px 16px;text-align:left}
+.with-icons .icon{text-align:center;line-height:1}nav{margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:6px;color:#645b5b}nav button{width:40px;height:40px;padding:0;color:#934c21}nav button:disabled{opacity:.4}#notice{font-size:14px;color:#645b5b}
 </style>
-<header><img alt="PoopCheck" src="data:image/png;base64,__LOGO__"></header>
+<header>__LOGO__</header>
 <section><h2 id="title"></h2><div id="body"></div></section>
-<footer><div id="buttons"></div><nav id="nav"><button id="prev" aria-label="Назад">‹</button><span id="page"></span><button id="next" aria-label="Дальше">›</button></nav><div id="notice"></div></footer>
+<footer><div id="buttons"></div><nav id="nav"><button id="prev" aria-label="Назад"><svg width="18" height="18" viewBox="0 0 18 18"><path d="m11 3-6 6 6 6" fill="none" stroke="#934c21" stroke-width="2"/></svg></button><span id="page"></span><button id="next" aria-label="Дальше"><svg width="18" height="18" viewBox="0 0 18 18"><path d="m7 3 6 6-6 6" fill="none" stroke="#934c21" stroke-width="2"/></svg></button></nav><div id="notice"></div></footer>
 <script>
 const w=TelegramWidget,$=id=>document.getElementById(id);
 let current=null,busy=false;
 function draw(s){
  current=s;$('title').textContent=s.t;$('body').textContent=s.b;$('buttons').textContent='';
+ const prefix=/^(\p{Extended_Pictographic}\S*)\s+/u;
+ const icons=s.a.some(([label])=>prefix.test(label));
+ $('buttons').className=icons?'with-icons':'';
  s.a.forEach(([label,link],i)=>{
-  const button=document.createElement('button');button.textContent=label;
+  const button=document.createElement('button');
+  if(icons){
+    const match=label.match(prefix),icon=document.createElement('span'),text=document.createElement('span');
+    icon.className='icon';icon.textContent=match?match[1]:'';
+    text.textContent=label.replace(prefix,'');button.appendChild(icon);button.appendChild(text)
+  }else button.textContent=label;
   button.onclick=()=>link?(link.startsWith('https://t.me/')?w.openTelegramLink(link):w.openLink(link)):request(s.p,i);
   $('buttons').appendChild(button)
  });

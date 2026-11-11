@@ -16,7 +16,7 @@ h3{gap:6px;font-size:19px;text-align:center;margin-bottom:8px}
 #face{width:24px;height:23px;flex:none}
 button{font:inherit;line-height:1.2;text-align:center;padding:0;border:0;color:inherit;background:#f4f0ec;border-radius:26px}
 #panel{display:grid;gap:6px}
-#panel button,#restore{width:100%;min-height:40px;padding:8px 12px}
+#panel button,#summary button{width:100%;min-height:40px;padding:8px 12px}
 .controls{justify-content:space-between;gap:8px;margin:10px 0;text-align:center}
 .controls button{width:42px;height:42px;flex:none}
 #plus{color:white;background:#934c21}

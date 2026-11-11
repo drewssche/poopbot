@@ -23,7 +23,6 @@ from app.db.models import (
 from app.db.session import db_session
 from app.services.daily_widget_demo import (
     ASSETS,
-    ROOT,
     DAYS,
     AnswerWidget,
     SendWidget,
@@ -66,7 +65,7 @@ def render(day, private=False):
         for i, name in enumerate(DAYS)
     )
     logo = (ASSETS / "brand.svg").read_text().strip()
-    menu_icon = (ROOT / "web/demo/assets/menu.svg").read_text()
+    menu_icon = '<svg width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>'
     html = (
         "<style>"
         + (ASSETS / "daily-live.css").read_text()
@@ -77,7 +76,7 @@ def render(day, private=False):
         .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
         .replace("__WEEK__", cells)
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
-        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button></section>' if private else "")
+        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button><button id="past">Прошлые дни в приложении</button></section>' if private else "")
         .replace("__PRIVATE__", "true" if private else "false")
         .replace("__DATE__", f"{months[day.month - 1]} {day.year}")
         .replace("__INDEX__", str(day.weekday()))

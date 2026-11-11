@@ -43,6 +43,7 @@ PILOT = -1001739559442
 FLAG = "group_daily_widget_pilot"
 PRIVATE_FLAG = "private_native_widgets"
 PREFIX = "widget:q1:"
+JOURNAL_PREFIX = PREFIX + "journal:"
 
 
 def enabled(db, chat_id):
@@ -79,10 +80,11 @@ def source_template(private):
         + "</style>"
         + (ASSETS / "daily-live.html")
         .read_text()
+        .replace('<div class="week">', '<div id="week">' if private else '<div class="week">')
         .replace("__VIEW__", (ASSETS / ("daily-private.js" if private else "daily-group.js")).read_text())
         .replace("__RETRY__", "control(panel,'Проверить отметку','↻',()=>act('',true))" if private
                  else "button('Проверить отметку',()=>act('',true))")
-        .replace("__MONTH__", '<button id="month">__DATE__ ⌄</button>' if private else "__DATE__")
+        .replace("__MONTH__", '<button id="month"></button>' if private else "__DATE__")
         .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
         .replace("__MENU__", '<button id="menu" aria-label="Меню">☰</button>' if private else "")
@@ -100,7 +102,7 @@ def render(day, private=False):
         for i, name in enumerate(DAYS)
     )
     template = (ASSETS / "daily-private.min.html").read_text() if private else source_template(False)
-    html = (template.replace("__WEEK__", cells)
+    html = (template.replace("__WEEK__", "" if private else cells)
             .replace("__STAMP__", day.strftime("%Y%m%d"))
             .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
             .replace("__INDEX__", str(day.weekday())))
@@ -120,7 +122,29 @@ def fit_widget_history(payload, state):
         state["h"] = heading + "…\n" + "\n".join(entries)
 
 
-def snapshot(db, sess, revision, widget_ack=None):
+def confirmed_view(db, sess, ack):
+    # Rebuild history from the ledger so a later refresh cannot expose a deleted entry.
+    result = dict(ack)
+    stamp = result.pop("stamp", None)
+    if stamp is not None:
+        day = history.EPOCH + timedelta(days=stamp)
+        page = history.journal_day(db, sess, day, highlight=result.get("e"))
+        if day != sess.session_date or any(label == "‹" for label, _ in page["nav"]):
+            result["page"] = page
+    return result
+
+
+def snapshot(db, sess, revision, widget_ack=None, *, journal=False):
+    if journal:
+        week = history.week_data(db, sess.chat_id, sess.session_date, sess.session_date)
+        timezone = ZoneInfo(db.get(Chat, sess.chat_id).timezone)
+        events = list_origin_events(db, sess.session_id, sess.chat_id, sess.chat_id)
+        expiry = datetime.combine(sess.session_date + timedelta(days=2), time.min, tzinfo=timezone)
+        state = dict(**week, r=revision, c=int(sess.status == "closed"), x=int(expiry.timestamp()),
+                     items=[history.compact_entry(e, timezone) for e in reversed(events[-3:])])
+        if widget_ack:
+            state["ack"] = confirmed_view(db, sess, json.loads(widget_ack))
+        return state
     day = sess.session_date - timedelta(days=sess.session_date.weekday())
     counts = dict(
         db.execute(
@@ -176,7 +200,7 @@ async def send(bot, db, sess):
     )
     # The worker re-reads after commit, catching changes racing the initial projection.
     row = WeeklyReport(
-        delivery_key=f"{PREFIX}{sess.session_id}:{uuid4()}",
+        delivery_key=f"{JOURNAL_PREFIX if sess.chat_id > 0 else PREFIX}{sess.session_id}:{uuid4()}",
         source_chat_id=sess.chat_id,
         destination_chat_id=sess.chat_id,
         q1_session_id=sess.session_id,
@@ -195,7 +219,7 @@ async def send(bot, db, sess):
         SendWidget(
             chat_id=sess.chat_id,
             html=render(day, private=sess.chat_id > 0),
-            chat_data=encode(snapshot(db, sess, 1)),
+            chat_data=encode(snapshot(db, sess, 1, journal=sess.chat_id > 0)),
             public_data=private_brand()[1] if sess.chat_id > 0 else None,
         )
     )
@@ -236,6 +260,9 @@ def mutate(db, q):
     if row is None:
         return reject("Этот вопрос уже неактуален")
     data = str(q.get("data", ""))
+    journal = row.delivery_key.startswith(JOURNAL_PREFIX)
+    if data.startswith("q:j:") and journal and chat_id > 0:
+        return history.journal_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:n:") and chat_id > 0:
         return history.personal_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:p:") and chat_id > 0:
@@ -243,12 +270,14 @@ def mutate(db, q):
     if data.startswith("q:v:"):
         return history.view(db, db.get(DaySession, row.q1_session_id), data[4:])
     match = re.fullmatch(
-        r"q:([+fs-]|a[0-3][0-2]|[eE]([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])"
+        r"q:([+fs-]|a[0-3_][0-2_]|[eE]([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3_])([0-2_])"
         r"|D([1-9]\d{0,9})\.([a-f0-9]{16})):([a-f0-9]{16})", data,
     )
     if not match:
         return reject("Неизвестное действие")
     op, eid, version, kind, feeling, delete_id, delete_version, nonce = match.groups()
+    if "_" in op and (not journal or chat_id <= 0 or op[0] not in ("a", "E")):
+        return reject("Неизвестное действие")
     private_entry = op[0] in "ED"
     if private_entry and chat_id < 0:
         return reject("Доступно только в личной сессии")
@@ -281,25 +310,33 @@ def mutate(db, q):
     digest = hashlib.sha256(op.encode()).hexdigest()
     receipt = db.get(MiniAppRequest, (uid, rid))
 
-    def result(msg, event=None):
+    def result(msg, event=None, confirmation=None):
         db.flush()
         db.refresh(row)
-        a = {"t": msg, "s": snapshot(db, sess, row.revision)}
+        a = {"t": msg, "s": snapshot(db, sess, row.revision, journal=journal)}
         if event and op == "+":
             a.update(e=event.id, v=event_version(event)[:16])
         if chat_id > 0 and msg in ("Отметка сохранена", "Уточнения сохранены", "Отметка удалена"):
             a["ok"] = True
+        if confirmation:
+            a.update(confirmed_view(db, sess, confirmation))
         fit_widget_history(a, a["s"])
         return a
 
     if receipt:
         if receipt.payload_hash != digest:
             return reject("Нажатие уже обработано")
+        confirmation = {}
+        if journal and op[0] in "aED":
+            confirmation = {"ok": True, "e": receipt.event_id}
+            if receipt.notify_date and (op.startswith("E") or receipt.notify_date != sess.session_date):
+                confirmation["stamp"] = (receipt.notify_date - history.EPOCH).days
         return result(
             "Нажатие уже обработано",
-            db.get(PoopEvent, receipt.event_id) if receipt.event_id else None,
+            db.get(PoopEvent, receipt.event_id) if receipt.event_id else None, confirmation,
         )
     event = None
+    event_day = sess.session_date
     if op != "f" and not private_entry and (
         sess.status != "active"
         or window.is_blocked_window
@@ -318,11 +355,13 @@ def mutate(db, q):
         if chat_id <= 0:
             return reject("Доступно только в личной сессии")
         try:
-            record_mark(db, chat_id, uid, {
+            created = record_mark(db, chat_id, uid, {
                 "requestId": str(uuid5(NAMESPACE_URL, "add:" + rid)),
                 "date": sess.session_date.isoformat(),
-                "kind": int(op[1]), "feeling": int(op[2]),
-            })
+                "kind": None if op[1] == "_" else int(op[1]),
+                "feeling": None if op[2] == "_" else int(op[2]),
+            }, optional_details=journal)
+            event = db.get(PoopEvent, int(created["eventId"]))
         except MarkRejected as exc:
             return result(str(exc))
         msg = "Отметка сохранена"
@@ -353,9 +392,9 @@ def mutate(db, q):
             eventId=eid, version=event_version(event), date=event_day.isoformat(),
         )
         if action == "edit":
-            body.update(kind=int(kind), feeling=int(feeling))
+            body.update(kind=None if kind == "_" else int(kind), feeling=None if feeling == "_" else int(feeling))
         try:
-            change_mark(db, chat_id, uid, body)
+            change_mark(db, chat_id, uid, body, optional_details=journal)
         except MarkRejected as exc:
             return result(str(exc))
         if delete_id:
@@ -380,16 +419,22 @@ def mutate(db, q):
             payload_hash=digest,
             event_id=event.id if event else None,
             chat_id=chat_id,
-            notify_date=sess.session_date,
+            notify_date=event_day,
             notify_pending=False,
         )
     )
+    confirmation = {}
     if chat_id > 0:
         ack = {"n": nonce, "t": msg}
         if op.startswith(("a", "E", "D")):
             ack["ok"] = True
         if event and op == "+":
             ack.update(e=event.id, v=event_version(event)[:16])
+        if journal and ack.get("ok"):
+            confirmation = {"ok": True, "e": event.id if event else None}
+            if op.startswith("E") or event_day != sess.session_date:
+                confirmation["stamp"] = (event_day - history.EPOCH).days
+            ack.update(confirmation)
         db.flush()
         db.execute(
             update(WeeklyReport).where(WeeklyReport.id == row.id).values(
@@ -397,7 +442,7 @@ def mutate(db, q):
                 attempts=0, retry_at=None,
             )
         )
-    return result(msg, event)
+    return result(msg, event, confirmation)
 
 
 class GroupQueries:

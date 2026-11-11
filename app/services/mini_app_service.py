@@ -90,7 +90,20 @@ class MarkRejected(ValueError):
     pass
 
 
-def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: datetime | None = None) -> dict:
+def mark_details(body, *, optional):
+    values = []
+    for key, options in (('kind', (2, 4, 6, 7)), ('feeling', ('great', 'ok', 'bad'))):
+        index = body[key]
+        if optional and index is None:
+            values.append(None)
+        elif type(index) is int and index in range(len(options)):
+            values.append(options[index])
+        else:
+            raise ValueError('Invalid choices')
+    return values
+
+
+def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: datetime | None = None, optional_details=False) -> dict:
     """Atomic mark + receipt. Caller commits before any Telegram UI operation."""
     import hashlib
     import json
@@ -100,16 +113,15 @@ def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: dat
     from app.services.q1_service import apply_plus
 
     if 'action' in body:
-        return change_mark(db, chat_id, user_id, body, now=now)
+        return change_mark(db, chat_id, user_id, body, now=now, optional_details=optional_details)
     if set(body) != {'requestId', 'date', 'kind', 'feeling'}:
         raise ValueError('Invalid mark')
     try:
         request_id = str(UUID(body['requestId']))
     except (ValueError, TypeError, AttributeError):
         raise ValueError('Invalid request ID') from None
-    if (type(body['kind']) is not int or body['kind'] not in range(4)
-            or type(body['feeling']) is not int or body['feeling'] not in range(3)
-            or not isinstance(body['date'], str)):
+    details = mark_details(body, optional=optional_details)
+    if not isinstance(body['date'], str):
         raise ValueError('Invalid mark')
     payload = hashlib.sha256(json.dumps([chat_id, body['date'], body['kind'], body['feeling']]).encode()).hexdigest()
     # Shared with Q1 +/- so concurrent bot/app actions cannot reuse event_n.
@@ -146,8 +158,7 @@ def record_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now: dat
     state = db.get(SessionUserState, (sess.session_id, user_id))
     event = db.scalar(select(PoopEvent).where(PoopEvent.session_id == sess.session_id,
                                             PoopEvent.user_id == user_id, PoopEvent.event_n == state.poops_n))
-    event.bristol = (2, 4, 6, 7)[body['kind']]
-    event.feeling = ('great', 'ok', 'bad')[body['feeling']]
+    event.bristol, event.feeling = details
     event.occurred_at = local_now.astimezone(UTC)
     state.bristol, state.feeling = event.bristol, event.feeling
     db.add(MiniAppRequest(user_id=user_id, request_id=request_id, payload_hash=payload, event_id=event.id,
@@ -167,7 +178,7 @@ def event_version(event: PoopEvent) -> str:
     ]).encode()).hexdigest()
 
 
-def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None) -> dict:
+def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None, optional_details=False) -> dict:
     import hashlib
     import hmac
     import json
@@ -193,9 +204,8 @@ def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None
             or not isinstance(body['version'], str) or not re.fullmatch(r'[0-9a-f]{64}', body['version'])
             or body['date'] != day.isoformat()):
         raise ValueError('Invalid event')
-    if action == 'edit' and (type(body['kind']) is not int or body['kind'] not in range(4)
-                            or type(body['feeling']) is not int or body['feeling'] not in range(3)):
-        raise ValueError('Invalid choices')
+    if action == 'edit':
+        details = mark_details(body, optional=optional_details)
     payload = hashlib.sha256(json.dumps([chat_id, body], sort_keys=True).encode()).hexdigest()
     db.scalar(select(User).where(User.user_id == user_id).with_for_update())
     chat = db.get(Chat, chat_id)
@@ -231,8 +241,7 @@ def change_mark(db: Session, chat_id: int, user_id: int, body: dict, *, now=None
             or state is None or state.poops_n != len(rows)):
         raise MarkRejected('Данные этой сессии требуют проверки. Обратись к владельцу бота.')
     if action == 'edit':
-        event.bristol = (2, 4, 6, 7)[body['kind']]
-        event.feeling = ('great', 'ok', 'bad')[body['feeling']]
+        event.bristol, event.feeling = details
     else:
         rows.remove(event)
         # Explicit nulling also preserves receipts in test DBs without FK enforcement.

@@ -1,6 +1,5 @@
-let state, reading=0;
-const trail=['home'];
-const nav=$('nav'), art=JSON.parse(w.publicData||'[]');
+let state,reading=0,flash;
+const trail=[],nav=$('nav'),art=JSON.parse(w.publicData||'[]');
 function icon(box,path,fill){
   return '<svg width="20" height="20" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
 }
@@ -19,103 +18,126 @@ function link(parent,label,key,glyph=label){
     return visit(key)
   })
 }
-function mark(el,n){
-  el.className='day';
-  if(n)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+el.textContent+'</b>'+(n>1?'<i>'+n+'</i>':'')
+function calendar(v,month){
+  const grid=month?panel:$('week');
+  grid.textContent='';
+  grid.className='grid';
+  for(const name of 'пн вт ср чт пт сб вс'.split(' ')){
+    const el=document.createElement('small');el.textContent=name;grid.appendChild(el)
+  }
+  for(let i=0;i<(v.offset||0);i++)grid.appendChild(document.createElement('span'));
+  (v.cells||v.d).forEach((count,i)=>{
+    const day=v.start+i, num=String(new Date(day*86400000).getUTCDate());
+    const el=link(grid,num,'t'+day,num);
+    el.disabled=day>state.day;
+    el.className=day===(v.day??state.day)?'day selected':'day';
+    if(count>0)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+num+'</b>'+(count>1?'<i>'+count+'</i>':'')
+  })
 }
-function record([label,key]){
-  const [number,time,...details]=label.split(' · ');
-  const el=control(panel,label,'',()=>visit('u'+key.slice(1)));
-  const caption=document.createElement('div');
-  const meta=document.createElement('small');
-  meta.textContent=[number,time].filter(Boolean).join(' · ');
-  caption.appendChild(meta);
-  caption.appendChild(document.createTextNode(details.join(' · ')));
-  el.appendChild(caption);
+function record([display,key,description]){
+  const el=control(panel,'Редактировать '+display+' '+description,display,()=>visit('u'+key));
   el.className='entry';
+  if(key.split('.')[0]===String(flash))el.className+=' saved';
   const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
 }
 function editor(v){
-  panel.innerHTML=v.form;
   const values=v.values;
-  const save=control(nav,'Сохранить','✓',()=>{if(!save.disabled)return act(values.every(n=>n<0)?'+':v.op+values.join(''))});
-  const rows=Array.from(panel.querySelectorAll('.choices'));
-  function update(){
-    save.disabled=values.some(n=>n<0)&&!(v.op==='a'&&values.every(n=>n<0));
-    save.className=save.disabled?'':'active';
-    rows.forEach((row,i)=>Array.from(row.children).forEach((b,n)=>{
-      b.className=values[i]===n?'active':'';
-      b.setAttribute('aria-pressed',String(values[i]===n));
-      if(values[i]===n)row.previousElementSibling.textContent=b.getAttribute('aria-label');
-      b.onclick=()=>{values[i]=n;update()}
-    }))
-  }
-  update();
-  if(v.remove)control(nav,'Удалить','',()=>visit(v.remove)).innerHTML=v.trash
-
+  panel.innerHTML=v.form;
+  Array.from(panel.querySelectorAll('.choices')).forEach((row,i)=>{
+    function select(index){
+      values[i]=index;
+      Array.from(row.children).forEach((b,n)=>{
+        b.className=n===index?'active':'';
+        b.setAttribute('aria-pressed',String(n===index))
+      })
+    }
+    Array.from(row.children).forEach((b,n)=>{b.onclick=()=>select(values[i]===n?-1:n)});
+    select(values[i])
+  });
+  const save=control(nav,'Сохранить','✓',()=>{
+    if(pending)return;
+    save.disabled=true;save.textContent='…';
+    return act(v.op+values.map(n=>n<0?'_':n).join(''))
+  });
+  save.className='active';
+  if(v.remove)link(nav,'Удалить',v.remove,'🗑')
 }
-function show(v){
-  const home=!v||v.home;
-  if(home)trail.length=1;
+function show(){
+  const v=trail.at(-1)||state,home=v===state;
   const menu=$('menu');
   menu.textContent=home?'☰':'←';
   menu.setAttribute('aria-label',home?'Меню':'Назад');
-  $('calendar').style.display=home?'block':'none';
-  $('controls').style.display=home?'flex':'none';
-  setQuestion(home?(closed?'Сессия закрыта':''):v.title||'');
-  if(home){
-    (state.entries||[]).forEach(record);
-    if(state.d[__INDEX__]>3)link(nav,'Ещё отметки','d__STAMP__.1','…');
-    return
+  $('calendar').style.display=v.d?'block':'none';
+  $('controls').style.display=home&&(!closed||Date.now()/1000<state.x)?'flex':'none';
+  setQuestion(home&&closed?'Сессия закрыта':v.title||'');
+  if(v.d){
+    $('month').textContent=v.label+' ⌄';
+    calendar(v,false)
   }
   if(v.body){panel.className='note';button(v.body,null)}
-  else if(v.month){
-    panel.className='grid';
-    for(const name of 'пн вт ср чт пт сб вс'.split(' '))button(name,null);
-    for(let i=0;i<v.offset;i++)button('',null);
-    v.cells.forEach((n,index)=>{
-      const day=String(index+1);
-      if(n<0)button(day,null);
-      else mark(link(panel,day,'d'+v.month+day.padStart(2,'0')),n)
-    })
-  }else if(v.form)editor(v);
-  else (v.items||[]).forEach(record);
-  v.nav.forEach(row=>link(nav,...row))
+  if(v.month)calendar(v,true);
+  if(v.op)editor(v);
+  (v.items||[]).forEach(record);
+  if(home&&v.d[v.day-v.start]>3)link(nav,'Ещё отметки','t'+v.day+'.1','…');
+  for(const [label,key,glyph] of v.nav||[]){
+    const el=link(nav,label,key,glyph);
+    if(key===v.active){el.className='active';el.disabled=true}
+  }
 }
-async function visit(key,back=false){
+async function visit(key){
   if(pending||!state)return;
   const seq=++reading;
-  if(key==='home'){message('');show();return}
+  if(key==='back'){trail.pop();show();message('');return}
   message('…');
   function failed(){if(seq===reading){reading++;message('Попробуй ещё раз')}}
   const timer=setTimeout(failed,12000);
   try{
-    const v=JSON.parse((await w.request('q:n:'+key)).result);
+    const v=JSON.parse((await w.request('q:j:'+key)).result);
     if(seq!==reading||pending)return;
     message(v.t||'');
     if(v.t)return;
-    if(back)trail.pop();
-    else if(key!==trail.at(-1))trail.push(key);
-    show(v)
+    const previous=trail.at(-1);
+    if(v.home)trail.length=0;
+    else{
+      if(previous&&(v.d&&previous.d||v.active&&previous.active||v.month&&previous.month))trail.pop();
+      trail.push(v)
+    }
+    show()
   }catch(e){failed()}
   finally{clearTimeout(timer)}
 }
 function paint(s){
   if(w.isForward||!s||s.r<revision)return;
   state=s;revision=s.r;closed=!!s.c;
-  s.d.forEach((n,i)=>{
-    const el=$('d'+i);el.textContent=el.getAttribute('data-day');mark(el,n)
-  });
-  $('plus').style.display=closed&&Date.now()/1000>=s.x?'none':'flex';
-  if(!pending&&trail.length===1)show();
+  if(!pending&&!trail.length)show();
   if(s.ack&&pending&&pending.split(':')[2]===s.ack.n)finish(pending,s.ack)
 }
-function done(a){reading++;show();message(a.ok||a.t.startsWith('Твоих отметок:')?'':a.t)}
+function done(a){
+  reading++;
+  if(a.ok||a.t.startsWith('Твоих отметок:')){
+    while(trail.length&&!trail.at(-1).d&&!trail.at(-1).month)trail.pop();
+    if(a.page){
+      if(trail.at(-1)?.d)trail.pop();
+      const month=trail.at(-1);
+      if(month?.cells){
+        const offset=a.page.day-month.start;
+        if(offset>=0&&offset<month.cells.length)month.cells[offset]=a.page.d[a.page.day-a.page.start]
+      }
+      trail.push(a.page)
+    }
+    else trail.length=0;
+    flash=a.e;setTimeout(()=>{flash=null},1500);
+    message('')
+  }else message(a.t);
+  show()
+}
 function bind(){
   $('wordmark').setAttribute('d',art[0]||'');
   if(w.isForward){$('controls').style.display='none';return}
   $('plus').onclick=()=>closed?act('f'):visit('new');
-  for(let i=0;i<=__INDEX__;i++)$('w'+i).onclick=()=>visit('w'+i);
-  $('month').onclick=()=>visit('m');
-  $('menu').onclick=()=>trail.length===1?visit('menu'):visit(trail.at(-2),true)
+  $('month').onclick=()=>{
+    const day=(trail.at(-1)||state).day;
+    return visit('m'+new Date(day*86400000).toISOString().slice(0,7).replace('-',''))
+  };
+  $('menu').onclick=()=>visit(trail.length?'back':'menu')
 }

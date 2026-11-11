@@ -197,14 +197,17 @@ async def test_personal_history_scopes_calendar_edits_and_targeted_deletes(facto
     kinds = press("v:"+editor["items"][0][1])
     feelings = press("v:"+kinds["items"][1][1])
     edit = feelings["items"][1][1][1:]
-    assert press(edit+":0000000000000001")["t"] == "Уточнения сохранены"
+    updated = press(edit+":0000000000000001")
+    assert updated["t"] == "Уточнения сохранены"
+    assert updated["page"]["title"] == "08.11.2026"
+    assert updated["page"]["d"][-1] == 5
     assert "изменилась" in press("D"+key[1:]+":0000000000000002")["t"]
     newer = press("v:d20261108.1")["items"][0]
     assert "Норма" in newer[0] and "Сойдёт" in newer[0]
     detail = press("v:"+newer[1])
     confirm = press("v:"+detail["items"][1][1])
     deletion = confirm["items"][0][1][1:]+":0000000000000003"
-    assert press(deletion)["t"] == "Отметка удалена"
+    assert press(deletion)["page"]["d"][-1] == 4
     assert press(deletion)["s"]["d"][0] == 0
     with factory() as db:
         remaining = db.scalars(select(PoopEvent).where(PoopEvent.user_id==42).order_by(PoopEvent.event_n)).all()
@@ -241,3 +244,38 @@ async def test_navigation_inside_personal_question(factory):
     assert empty["body"] == "Нет отметок"
     assert empty["nav"] == [["Календарь", "m202611"]]
     assert page("new")["nav"] == []
+
+
+@pytest.mark.parametrize(("selection", "details"),[
+    ("__", (None, None)), ("2_", (6, None)), ("_1", (None, "ok")),
+])
+@pytest.mark.asyncio
+async def test_partial_journal_marks_roundtrip(factory, monkeypatch, selection, details):
+    from app.services import mini_app_service
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 9, 12, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(mini_app_service, "datetime", Clock)
+    with factory.begin() as db:
+        sess = db.scalar(select(DaySession))
+        await _post_q1(AsyncMock(return_value=SimpleNamespace(message_id=13)), db, 42, sess.session_id, DAY, False)
+        db.flush()
+
+        def press(op):
+            return mutate(db, {"from":{"id":42}, "chat":{"type":"private","id":42}, "message_id":13, "data":"q:"+op})
+
+        added = press("a"+selection+":0000000000000001")
+        assert added.get("ok"), added
+        assert press("a"+selection+":0000000000000001")["e"] == added["e"]
+        event = db.get(PoopEvent, added["e"])
+        assert (event.bristol, event.feeling) == details
+        key = added["s"]["items"][0][1]
+        assert press("E"+key+"._2:0000000000000002")["ok"]
+        assert (event.bristol, event.feeling) == (None,"bad")
+        from app.services.mini_app_service import event_version
+        confirmation = press(f"j:x{event.id}.{event_version(event)[:16]}")
+        assert "15:00" in confirmation["title"]
+        assert confirmation["nav"][0][0] == "Удалить"

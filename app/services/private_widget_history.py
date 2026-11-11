@@ -121,23 +121,31 @@ def view(db, sess, route):
     return dict(title=title, items=items, nav=nav)
 
 
-def editor_view(event=None, key=None, back="home", title=""):
+KIND_ICONS = ("🪨", "🪵", "💩", "💧")
+FEELING_ICONS = ("🙂", "😐", "🙁")
+
+
+def editor_view(event=None, key=None, back="home", title="", *, labeled=False):
     from app.services.daily_widget_demo import ASSETS
 
     sections = []
     for name, options, glyphs in (
-        ("Консистенция", KINDS, ("🪨", "🪵", "💩", "💧")),
-        ("Самочувствие", FEELINGS.values(), ("🙂", "😐", "🙁")),
+        ("Консистенция", KINDS, KIND_ICONS),
+        ("Самочувствие", FEELINGS.values(), FEELING_ICONS),
     ):
-        choices = "".join(f'<button aria-label="{label}">{glyph}</button>'
-                          for label, glyph in zip(options, glyphs))
+        choices = "".join(
+            f"<button>{glyph}<br>{label}</button>" if labeled else f'<button aria-label="{label}">{glyph}</button>'
+            for label, glyph in zip(options, glyphs)
+        )
         sections.append(f'<b>{name}</b><div class="choices">{choices}</div>')
     kind = event_kind(event) if event else None
     feeling = list(FEELINGS).index(event.feeling) if event and event.feeling in FEELINGS else -1
     page = dict(title=title.partition(" · ")[0], form="".join(sections), values=[-1 if kind is None else kind, feeling],
-                op=f"E{key}." if key else "a", nav=[["Назад", back]])
+                op=f"E{key}." if key else "a", nav=[] if labeled else [["Назад", back]])
     if key:
-        page.update(remove=f"x{key}", trash=(ASSETS / "trash.svg").read_text().strip().replace("#fff", "#934c21"))
+        page["remove"] = f"x{key}"
+        if not labeled:
+            page["trash"] = (ASSETS / "trash.svg").read_text().strip().replace("#fff", "#934c21")
     return page
 
 def icon_page(db, sess, route):
@@ -210,4 +218,89 @@ def personal_page(db, sess, route):
         if page["title"].endswith(" · Нет отметок"):
             page["title"] = page["title"].split(" · ")[0]
             page["body"] = "Нет отметок"
+    return page
+
+
+EPOCH = date(1970, 1, 1)
+
+
+def week_data(db, owner, selected, anchor):
+    start = selected - timedelta(days=selected.weekday())
+    counts = dict(db.execute(
+        select(DaySession.session_date, func.count(PoopEvent.id))
+        .join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+        .where(DaySession.chat_id == owner, PoopEvent.origin_chat_id == owner, PoopEvent.user_id == owner,
+               DaySession.session_date.between(start, min(start + timedelta(days=6), anchor)))
+        .group_by(DaySession.session_date)
+    ).all())
+    return dict(start=(start - EPOCH).days, day=(selected - EPOCH).days,
+                label=f"{MONTHS[selected.month - 1]} {selected.year}",
+                d=[counts.get(start + timedelta(days=i), 0) for i in range(7)])
+
+
+def compact_entry(event, timezone):
+    occurred = event_occurrence_time(event)
+    time = occurred.astimezone(timezone).strftime("%H:%M") if occurred else "—"
+    kind = event_kind(event)
+    choices = []
+    if kind is not None:
+        choices.append((KIND_ICONS[kind], KINDS[kind]))
+    if event.feeling in FEELINGS:
+        choices.append((FEELING_ICONS[list(FEELINGS).index(event.feeling)], FEELINGS[event.feeling]))
+    return [" ".join([time, *(icon for icon, _ in choices)]), f"{event.id}.{event_version(event)[:16]}",
+            ", ".join(label for _, label in choices)]
+
+
+def journal_day(db, sess, day, page=0, *, highlight=None):
+    owner = sess.chat_id
+    week = week_data(db, owner, day, sess.session_date)
+    sid = db.scalar(select(DaySession.session_id).where(DaySession.chat_id == owner, DaySession.session_date == day))
+    events = list(reversed(list_origin_events(db, sid, owner, owner))) if sid else []
+    if highlight:
+        page = next((i // 3 for i, event in enumerate(events) if event.id == highlight), page)
+    page = min(page, max(0, (len(events) - 1) // 3))
+    nav = []
+    for offset, label in ((-1, "‹"), (1, "›")):
+        target = page + offset
+        if 0 <= target * 3 < len(events):
+            nav.append([label, f"t{week['day']}.{target}"])
+    timezone = ZoneInfo(db.get(Chat, owner).timezone)
+    return dict(**week, title=day.strftime("%d.%m.%Y"), nav=nav,
+                body="" if events else "Нет отметок",
+                items=[compact_entry(e, timezone) for e in events[page * 3:page * 3 + 3]])
+
+
+def journal_page(db, sess, route):
+    if sess.chat_id <= 0:
+        return {"t": "Доступно только в личной сессии"}
+    day_match = re.fullmatch(r"t(\d{5})(?:\.([0-3]))?", route)
+    if day_match:
+        day = EPOCH + timedelta(days=int(day_match[1]))
+        if day > sess.session_date:
+            return {"t": "Этот день ещё не наступил"}
+        if day == sess.session_date and not int(day_match[2] or 0):
+            return {"home": True}
+        return journal_day(db, sess, day, int(day_match[2] or 0))
+    if route == "new":
+        return editor_view(labeled=True)
+    event_route = re.fullmatch(r"([ux])([1-9]\d{0,9})\.([a-f0-9]{16})", route)
+    if event_route:
+        action, eid, version = event_route.groups()
+        row = dated_event(db, sess.chat_id, eid, sess.session_date)
+        if not row or event_version(row[0])[:16] != version:
+            return {"t": "Отметка изменилась. Выбери её заново"}
+        event = row[0]
+        occurred = event_occurrence_time(event)
+        time = occurred.astimezone(ZoneInfo(db.get(Chat, sess.chat_id).timezone)).strftime("%H:%M") if occurred else None
+        key = route[1:]
+        if action == "u":
+            return editor_view(event, key, title=time or "Отметка", labeled=True)
+        title = f"Удалить отметку за {time}?" if time else f"Удалить отметку №{event.event_n}?"
+        return dict(title=title, nav=[["Удалить", "!D" + key]])
+    page = personal_page(db, sess, route)
+    if "month" in page:
+        month = date.fromisoformat(page["month"] + "01")
+        page["start"] = (month - EPOCH).days
+    elif route in ("week", "month", "year") and "body" in page:
+        page.update(active=route, nav=[["Неделя", "week"], ["Месяц", "month"], ["Год", "year"]])
     return page

@@ -118,9 +118,9 @@ class ReportWorker:
             if row is None or row.disabled or row.revision <= row.delivered_revision:
                 return None
             if row.delivery_key.startswith('widget:q1:'):
-                from app.services.group_daily_widget import encode, snapshot
+                from app.services.group_daily_widget import JOURNAL_PREFIX, encode, snapshot
                 sess = db.get(DaySession, row.q1_session_id)
-                return row, None, encode(snapshot(db, sess, row.revision, row.widget_ack))
+                return row, None, encode(snapshot(db, sess, row.revision, row.widget_ack, journal=row.delivery_key.startswith(JOURNAL_PREFIX)))
             card = project_card(db, row.source_chat_id, row.period_start, row.period_end,
                                 row.chat_title or 'Личные отметки', row.label, period=row.report_period,
                                 layout='daily' if row.q1_session_id is not None else

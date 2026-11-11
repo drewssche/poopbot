@@ -130,6 +130,49 @@ async def test_private_command_navigation_and_replayed_setting(tmp_path, monkeyp
     await tap(action("stats:back:root"))
     await tap(action("stats:open:my"))
     assert action("stats:period:my:week:0")
+    # The same callbacks inside the journal must never publish menu state over the daily ledger.
+    from app.db.models import Session as DaySession
+    from app.services.group_daily_widget import send as send_question
+    from app.services.repo_service import set_session_message_id
+
+    with sessions.begin() as db:
+        sess = DaySession(chat_id=42, status="active", session_date=datetime.now(UTC).date())
+        db.add(sess)
+        db.flush()
+        question = await send_question(bot, db, sess)
+        mid = question.message_id
+        set_session_message_id(db, sess.session_id, "Q1", mid)
+    start = len(transport.calls)
+
+    async def journal(key, **kw):
+        result = await tap("q:j:" + key, **kw)
+        assert len(encode(result).encode()) <= 1024
+        return result
+
+    def button(page, name):
+        return next(key for label, key in page["nav"] if name in label)
+
+    assert "t" in await journal("cmd.help", uid=43)
+    help_page = await journal("cmd.help")
+    settings_page = await journal(button(help_page, "Настройки"))
+    notify = await journal(button(settings_page, "Уведомления"))
+    toggle = button(notify, "Уведомления:")
+    await journal(toggle)
+    await journal(toggle)
+    with sessions() as db:
+        assert db.get(Chat, 42).notifications_enabled
+    help_page = await journal("cmd.help")
+    about = await journal(button(help_page, "О боте"))
+    assert button(about, "GitHub").startswith("https://github.com/")
+    assert "Настройки" in str((await journal(about["up"]))["nav"])
+    stats = await journal("cmd.stats")
+    for scope in ("Моя", "В этой личке", "Среди чатов", "Глобальная"):
+        assert button(stats, scope)
+    mine = await journal(button(stats, "Моя"))
+    week = await journal(button(mine, "Неделя"))
+    assert "Архив" in week["title"]
+    await journal(button(week, "Раньше"))
+    assert all(call.__api_method__ not in ("sendWidget", "sendMessage", "editMessageText", "editMessageWidgetData") for call in transport.calls[start:])
     # A group goes directly to the normal Telegram transport.
     await bot.send_message(
         -42, "Stats", reply_markup=commands.stats_root_kb(False, False)

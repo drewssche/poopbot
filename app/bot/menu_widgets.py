@@ -18,11 +18,12 @@ from aiogram.methods import (
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy import delete, update
 
-from app.db.models import PrivateMenu
+from app.db.models import PrivateMenu, WeeklyReport
 from app.services.daily_widget_demo import AnswerWidget, EditWidget, SendWidget
-from app.services.group_daily_widget import enabled
+from app.services.group_daily_widget import JOURNAL_PREFIX, enabled, question_query
 from app.services.menu_widget import (
     encode,
+    journal_menu_page,
     layout,
     make_pages,
     page_state,
@@ -48,6 +49,7 @@ class Press:
     query_id: str
     pages: list
     notice: str = ""
+    embedded: bool = False
 
 
 active_press = ContextVar("private_menu_press", default=None)
@@ -90,7 +92,7 @@ class MenuWidgets:
                 result.append([button.text, action])
         return result
 
-    async def pages(self, bot, text, buttons):
+    async def pages(self, bot, text, buttons, *, embedded=False):
         if text.startswith("Помощь\n") and any(
             a.startswith("help:about:") for _, a in buttons
         ):
@@ -102,7 +104,7 @@ class MenuWidgets:
                 ],
                 ["Статистика", "stats:back:root"],
             ]
-        return make_pages(text, buttons)
+        return make_pages(text, buttons, embedded=embedded)
 
     async def outgoing(self, make_request, bot, method):
         press = active_press.get()
@@ -169,6 +171,12 @@ class MenuWidgets:
 
         if isinstance(method, (EditMessageText, EditMessageReplyMarkup)):
             address = (chat_id, method.message_id)
+            if press and press.embedded and address == press.address:
+                buttons = await self.buttons(bot, method.reply_markup)
+                if buttons is None or not isinstance(method, EditMessageText):
+                    raise ValueError("Unsupported journal menu edit")
+                press.pages = await self.pages(bot, method.text, buttons, embedded=True)
+                return True
             with self.sessions() as db:
                 row = db.get(PrivateMenu, address)
                 old = json.loads(row.content) if row else None
@@ -202,51 +210,72 @@ class MenuWidgets:
     async def incoming(self, handler, event, data):
         q = (event.model_extra or {}).get("widget_query") or {}
         raw = q.get("data")
-        if not isinstance(raw, str) or not raw.startswith("m:"):
+        if not isinstance(raw, str):
             return await handler(event, data)
+        embedded = raw.startswith(("q:j:cmd.", "q:j:m:"))
+        if not embedded and not raw.startswith("m:"):
+            return await handler(event, data)
+        route = raw[4:] if embedded else raw
+        match = QUERY.fullmatch(route)
+        root = route if route in ("cmd.help", "cmd.stats") else None
         bot = data["bot"]
         chat, actor = q.get("chat") or {}, q.get("from") or {}
-        match = QUERY.fullmatch(raw)
         address = (chat.get("id"), q.get("message_id"))
-        answer = {"msg": "Открой команду заново в личке с ботом."}
+        unavailable = {"msg": "Открой меню заново в личке с ботом."}
+        answer = unavailable
         if (
-            match
+            (match or root)
             and chat.get("type") == "private"
-            and type(address[0]) is int
-            and address[0] > 0
-            and actor.get("id") == address[0]
-            and not actor.get("is_bot")
-            and type(address[1]) is int
+            and type(address[0]) is int and address[0] > 0
+            and actor.get("id") == address[0] and not actor.get("is_bot")
+            and type(address[1]) is int and address[1] > 0
         ):
-            answer = await self.handle(bot, address, q, match, answer)
+            answer = await self.handle(bot, address, q, match, unavailable, embedded=embedded, root=root)
+        if embedded and "msg" in answer and "title" not in answer:
+            answer = {"t": answer["msg"]}
         return await bot(AnswerWidget(widget_query_id=q["id"], data=encode(answer)))
 
-    async def handle(self, bot, address, q, match, unavailable):
-        revision, page, index = match.groups()
-        page = int(page)
+    async def handle(self, bot, address, q, match, unavailable, *, embedded=False, root=None):
+        # Embedded menus have separate state so menu refreshes cannot replace Q1 chat_data.
+        storage = (address[0], -address[1]) if embedded else address
+        render = journal_menu_page if embedded else page_state
         with self.sessions.begin() as db:
-            row = db.get(PrivateMenu, address, with_for_update=True)
-            if row is None or not enabled(db, address[0]):
+            if not enabled(db, address[0]):
                 return unavailable
+            if embedded and db.scalar(question_query(*address).where(
+                WeeklyReport.delivery_key.startswith(JOURNAL_PREFIX)
+            ).with_for_update(of=WeeklyReport)) is None:
+                return unavailable
+            row = db.get(PrivateMenu, storage, with_for_update=True)
+            if row is None:
+                if not root:
+                    return unavailable
+                row = PrivateMenu(chat_id=storage[0], message_id=storage[1], revision=new_revision(), content="[]")
+                db.add(row)
             pages = json.loads(row.content)
             if row.revision.startswith("!"):
                 return {
                     "msg": "Действие выполняется. Если ответ не пришёл, открой команду снова."
                 }
-            if revision != row.revision or page >= len(pages):
-                return page_state(pages, row.revision)
-            if index is None:
-                return page_state(pages, revision, page)
-            buttons = pages[page]["buttons"]
-            if int(index) >= len(buttons):
-                return unavailable
-            action = buttons[int(index)][1]
-            if not action.startswith(PREFIXES):
-                return unavailable
+            if root:
+                action = f"help:back:{address[0]}" if root == "cmd.help" else "stats:back:root"
+            else:
+                revision, page, index = match.groups()
+                page = int(page)
+                if revision != row.revision or page >= len(pages):
+                    return render(pages, row.revision) if pages else unavailable
+                if index is None:
+                    return render(pages, revision, page)
+                buttons = pages[page]["buttons"]
+                if int(index) >= len(buttons):
+                    return unavailable
+                action = buttons[int(index)][1]
+                if not action.startswith(PREFIXES):
+                    return unavailable
             # Consume this screen before invoking an action (including toggles and broadcasts).
             claimed = row.revision = "!" + token_hex(7)
 
-        press = Press(address, q["id"], pages)
+        press = Press(address, q["id"], pages, embedded=embedded)
         token = active_press.set(press)
         try:
             cb = CallbackQuery.model_validate(
@@ -271,19 +300,18 @@ class MenuWidgets:
             active_press.reset(token)
 
         with self.sessions.begin() as db:
-            row = db.get(PrivateMenu, address, with_for_update=True)
+            row = db.get(PrivateMenu, storage, with_for_update=True)
             if not row:
+                if embedded and press.notice and action.startswith("help:delete_confirm_db:"):
+                    return {"title": press.notice, "active": "command", "nav": []}
                 return {"msg": press.notice} if press.notice else unavailable
             if row.revision != claimed:
-                return page_state(json.loads(row.content), row.revision)
+                return render(json.loads(row.content), row.revision)
             row.content = encode(press.pages)
             row.revision = new_revision()
-            state = page_state(press.pages, row.revision)
-        await bot(
-            EditWidget(
-                chat_id=address[0], message_id=address[1], chat_data=encode(state)
-            )
-        )
+            state = render(press.pages, row.revision) if press.pages else unavailable
+        if not embedded:
+            await bot(EditWidget(chat_id=address[0], message_id=address[1], chat_data=encode(state)))
         if press.notice:
             with_notice = {**state, "msg": press.notice}
             return (

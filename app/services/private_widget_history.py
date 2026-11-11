@@ -321,6 +321,8 @@ def journal_page(db, sess, route):
         title = f"Удалить отметку за {time}?" if time else f"Удалить отметку №{event.event_n}?"
         return dict(title=title, nav=[["Удалить", "!D" + key]])
     page = personal_page(db, sess, route)
+    if route == "menu":
+        page["nav"] = [[label, {"week": "cmd.stats", "help": "cmd.help"}.get(key, key)] for label, key in page["nav"]]
     if "month" in page:
         month = date.fromisoformat(page["month"] + "01")
         page["start"] = (month - EPOCH).days

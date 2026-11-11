@@ -38,7 +38,7 @@ def chunks(text, budget):
     yield text
 
 
-def make_pages(text, buttons):
+def make_pages(text, buttons, *, embedded=False):
     if any(a.startswith("help:about:") for _, a in buttons) and text.startswith(
         "🤖 О боте"
     ):
@@ -54,7 +54,11 @@ def make_pages(text, buttons):
     heading, _, body = plain.strip().partition("\n")
     title = next(chunks(heading, 105))
     body = (heading[len(title) :] + "\n" + body).strip()
-    pages = [{"t": title, "b": part, "buttons": []} for part in chunks(body, 420)]
+    if embedded:
+        whole = [{"t": title, "b": body, "buttons": buttons}]
+        if len(buttons) <= 5 and len(encode(journal_menu_page(whole, "0" * 16)).encode()) <= 980:
+            return whole
+    pages = [{"t": title, "b": part, "buttons": []} for part in chunks(body, 320 if embedded else 420)]
     # Keep a destructive confirmation behind its full explanation.
     index = (
         len(pages) - 1
@@ -66,7 +70,7 @@ def make_pages(text, buttons):
         if (
             len(page["buttons"]) >= 5
             or len(encode(public_buttons(page["buttons"] + [[label, action]])).encode())
-            > 390
+            > (240 if embedded else 390)
         ):
             index += 1
             if index == len(pages):
@@ -92,3 +96,27 @@ def page_state(pages, revision, index=0):
         b=page["b"],
         a=public_buttons(page["buttons"]),
     )
+
+def journal_menu_page(pages, revision, index=0):
+    page = pages[index]
+    def key(p, i=None):
+        return f"m:{revision}:{p}" + (f":{i}" if i is not None else "")
+
+    nav = []
+    up = None
+    for p, part in enumerate(pages):
+        for i, (label, action) in enumerate(part["buttons"]):
+            if label.removeprefix("⬅️ ").strip() == "Назад":
+                up = key(p, i)
+            if p != index or action == "stats:noop":
+                continue
+            if action.startswith("https://t.me/") and action.endswith("?startapp"):
+                target = "app"
+            else:
+                target = action if action.startswith("https://") else key(p, i)
+            nav.append([label, target])
+    if index:
+        nav.append([f"‹ {index}/{len(pages)}", key(index - 1)])
+    if index + 1 < len(pages):
+        nav.append([f"Далее · {index + 2}/{len(pages)} ›", key(index + 1)])
+    return dict(title=page["t"], body=page["b"], nav=nav, active="command", up=up or "back")

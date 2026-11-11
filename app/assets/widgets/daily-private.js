@@ -14,6 +14,7 @@ function control(parent,label,draw,click){
 function link(parent,label,key,glyph=label){
   return control(parent,label,glyph,()=>{
     if(key[0]==='!')return act(key.slice(1));
+    if(key.startsWith('https://'))return w.openLink(key);
     if(key==='app')return w.openTelegramLink('https://t.me/poopcheck_bot?startapp');
     return visit(key)
   })
@@ -102,7 +103,7 @@ async function visit(key){
   try{
     const v=JSON.parse((await w.request('q:j:'+key)).result);
     if(seq!==reading||pending)return;
-    message(v.t||'');
+    message(v.t||v.msg||'');
     if(v.t)return;
     const previous=trail.at(-1);
     if(v.home)trail.length=0;
@@ -148,5 +149,5 @@ function bind(){
   $('month').onclick=()=>{
     return visit((trail.at(-1)||state).m)
   };
-  $('menu').onclick=()=>visit(trail.length?'back':'menu')
+  $('menu').onclick=()=>visit(trail.at(-1)?.up||(trail.length?'back':'menu'))
 }

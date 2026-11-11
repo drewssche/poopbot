@@ -242,6 +242,24 @@ async def send(bot, db, sess):
     return sent
 
 
+def question_query(chat_id, message_id):
+    return (
+        select(WeeklyReport)
+        .join(
+            SessionMessage,
+            (SessionMessage.session_id == WeeklyReport.q1_session_id)
+            & (SessionMessage.kind == "Q1")
+            & (SessionMessage.message_id == WeeklyReport.photo_message_id),
+        )
+        .where(
+            WeeklyReport.source_chat_id == chat_id,
+            WeeklyReport.photo_message_id == message_id,
+            WeeklyReport.delivery_key.startswith(PREFIX),
+            WeeklyReport.disabled.is_(False),
+        )
+    )
+
+
 def mutate(db, q):
     chat = q.get("chat") or {}
     actor = q.get("from") or {}
@@ -255,21 +273,7 @@ def mutate(db, q):
             return reject("Недоступно для этого чата")
     elif chat.get("type") not in ("group", "supergroup") or not enabled(db, chat_id):
         return reject("Недоступно для этого чата")
-    row = db.scalar(
-        select(WeeklyReport)
-        .join(
-            SessionMessage,
-            (SessionMessage.session_id == WeeklyReport.q1_session_id)
-            & (SessionMessage.kind == "Q1")
-            & (SessionMessage.message_id == WeeklyReport.photo_message_id),
-        )
-        .where(
-            WeeklyReport.source_chat_id == chat_id,
-            WeeklyReport.photo_message_id == q.get("message_id"),
-            WeeklyReport.delivery_key.startswith(PREFIX),
-            WeeklyReport.disabled.is_(False),
-        )
-    )
+    row = db.scalar(question_query(chat_id, q.get("message_id")))
     if row is None:
         return reject("Этот вопрос уже неактуален")
     data = str(q.get("data", ""))

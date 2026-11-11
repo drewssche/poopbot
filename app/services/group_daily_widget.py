@@ -10,7 +10,6 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-import minify_html
 from sqlalchemy import func, select, update
 
 from app.db.models import (
@@ -72,18 +71,10 @@ def private_brand():
     return logo.replace(f'd="{path}"', 'id="wordmark"'), encode(art)
 
 
-@lru_cache(maxsize=32)
-def render(day, private=False):
-    start = day - timedelta(days=day.weekday())
-    tag = "button" if private else "div"
-    cells = "".join(
-        f'<{tag} id="w{i}" class="cell{" today" if i == day.weekday() else ""}">{name}'
-        f'<span class="day" id="d{i}" data-day="{(start + timedelta(days=i)).day}">{(start + timedelta(days=i)).day}</span></{tag}>'
-        for i, name in enumerate(DAYS)
-    )
+def source_template(private):
     logo = private_brand()[0] if private else (ASSETS / "brand.svg").read_text().strip()
     menu_icon = '<svg width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>'
-    html = (
+    return (
         "<style>"
         + (ASSETS / ("daily-private.css" if private else "daily-live.css")).read_text()
         + "</style>"
@@ -96,14 +87,24 @@ def render(day, private=False):
         .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
         .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
-        .replace("__WEEK__", cells)
-        .replace("__STAMP__", day.strftime("%Y%m%d"))
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
-        .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
-        .replace("__INDEX__", str(day.weekday()))
     )
-    if private:
-        html = minify_html.minify(html, minify_js=True, minify_css=True, keep_closing_tags=True)
+
+
+@lru_cache(maxsize=32)
+def render(day, private=False):
+    start = day - timedelta(days=day.weekday())
+    tag = "button" if private else "div"
+    cells = "".join(
+        f'<{tag} id="w{i}" class="cell{" today" if i == day.weekday() else ""}">{name}'
+        f'<span class="day" id="d{i}" data-day="{(start + timedelta(days=i)).day}">{(start + timedelta(days=i)).day}</span></{tag}>'
+        for i, name in enumerate(DAYS)
+    )
+    template = (ASSETS / "daily-private.min.html").read_text() if private else source_template(False)
+    html = (template.replace("__WEEK__", cells)
+            .replace("__STAMP__", day.strftime("%Y%m%d"))
+            .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
+            .replace("__INDEX__", str(day.weekday())))
     if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4010:
         raise ValueError("Widget size budget exceeded")
     return html

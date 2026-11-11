@@ -16,11 +16,13 @@ button{font:inherit;border:0;border-radius:24px;padding:0;background:#f4f0ec;col
 .day b{position:relative;color:white;font-weight:500;padding-top:8px;font-size:15px}
 .day i{position:absolute;top:0;right:0;color:#934c21;background:#ffe30b;border-radius:12px;font:10px system-ui;padding:1px 3px}
 article{padding:12px 5%}#panel{display:grid;gap:6px;white-space:pre-line}h3:not(:empty){margin-bottom:8px}#panel.note{background:#f4f0ec;border-radius:14px;padding:12px}
-.entry{border-radius:14px;padding:8px 12px;justify-content:space-between}
+.empty{text-align:center;color:#645b5b}
+.entry{text-align:left;gap:6px;border-radius:14px;padding:8px 12px;justify-content:space-between}
 .entry span,#plus,.active{background:#934c21;color:white}
 .entry span{border-radius:50%;padding:5px}
 .controls,.choices,#nav{gap:5px;margin:6px 0}#nav{flex-wrap:wrap}
-#plus{width:44px;height:44px;font-size:25px}
+#plus{min-width:44px;height:44px;padding:0 12px}
+#plus:not(.restore){font-size:25px}
 #nav button{min-width:38px;padding:4px 10px}
 .choices button{flex:1;min-width:0;padding:4px 0;font-size:13px;white-space:pre-line}
 .day:disabled{opacity:.4}

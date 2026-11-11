@@ -129,9 +129,17 @@ def confirmed_view(db, sess, ack):
     if stamp is not None:
         day = history.EPOCH + timedelta(days=stamp)
         page = history.journal_day(db, sess, day, highlight=result.get("e"))
-        if day != sess.session_date or any(label == "‹" for label, _ in page["nav"]):
+        if day != sess.session_date or page.get("number"):
             result["page"] = page
     return result
+
+
+def fit_journal_confirmation(payload, confirmation):
+    # A full home page plus a full archive page can exceed Telegram's 1 KiB.
+    # Keep the live ledger and reopen the exact archive page with a read-only query.
+    if "page" in confirmation and len(encode(payload).encode()) > 1024:
+        page = confirmation.pop("page")
+        confirmation["goto"] = f"t{page['day']}.{page.get('number', 0)}"
 
 
 def snapshot(db, sess, revision, widget_ack=None, *, journal=False):
@@ -142,8 +150,13 @@ def snapshot(db, sess, revision, widget_ack=None, *, journal=False):
         expiry = datetime.combine(sess.session_date + timedelta(days=2), time.min, tzinfo=timezone)
         state = dict(**week, r=revision, c=int(sess.status == "closed"), x=int(expiry.timestamp()),
                      items=[history.compact_entry(e, timezone) for e in reversed(events[-3:])])
+        if len(events) > 3:
+            state["more"] = [history.more_entries(week["day"], len(events) - 3, 1)]
+        if state["c"] and not events:
+            state["restore"] = f"Отметить за {history.short_date(sess.session_date)}"
         if widget_ack:
             state["ack"] = confirmed_view(db, sess, json.loads(widget_ack))
+            fit_journal_confirmation(state, state["ack"])
         return state
     day = sess.session_date - timedelta(days=sess.session_date.weekday())
     counts = dict(
@@ -320,6 +333,7 @@ def mutate(db, q):
             a["ok"] = True
         if confirmation:
             a.update(confirmed_view(db, sess, confirmation))
+            fit_journal_confirmation(a, a)
         fit_widget_history(a, a["s"])
         return a
 

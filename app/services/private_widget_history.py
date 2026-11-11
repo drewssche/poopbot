@@ -8,9 +8,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from app.db.models import Chat, PoopEvent, Session as DaySession
+from app.services.daily_widget_demo import MONTHS as MONTH_NAMES
 from app.services.event_time_service import event_occurrence_time
 from app.services.mini_app_service import event_kind, event_version
 from app.services.poop_event_service import list_origin_events
+from app.services.weekly_report_card import plural
 
 MONTHS = "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь".split()
 KINDS = ("Жестко", "Норма", "Мягко", "Водичка")
@@ -140,7 +142,7 @@ def editor_view(event=None, key=None, back="home", title="", *, labeled=False):
         sections.append(f'<b>{name}</b><div class="choices">{choices}</div>')
     kind = event_kind(event) if event else None
     feeling = list(FEELINGS).index(event.feeling) if event and event.feeling in FEELINGS else -1
-    page = dict(title=title.partition(" · ")[0], form="".join(sections), values=[-1 if kind is None else kind, feeling],
+    page = dict(title=title if labeled else title.partition(" · ")[0], form="".join(sections), values=[-1 if kind is None else kind, feeling],
                 op=f"E{key}." if key else "a", nav=[] if labeled else [["Назад", back]])
     if key:
         page["remove"] = f"x{key}"
@@ -234,7 +236,7 @@ def week_data(db, owner, selected, anchor):
         .group_by(DaySession.session_date)
     ).all())
     return dict(start=(start - EPOCH).days, day=(selected - EPOCH).days,
-                label=f"{MONTHS[selected.month - 1]} {selected.year}",
+                label=f"{MONTHS[selected.month - 1]} {selected.year}", m=selected.strftime("m%Y%m"),
                 d=[counts.get(start + timedelta(days=i), 0) for i in range(7)])
 
 
@@ -242,13 +244,27 @@ def compact_entry(event, timezone):
     occurred = event_occurrence_time(event)
     time = occurred.astimezone(timezone).strftime("%H:%M") if occurred else "—"
     kind = event_kind(event)
-    choices = []
+    details = []
     if kind is not None:
-        choices.append((KIND_ICONS[kind], KINDS[kind]))
+        details.append(("Твёрдый стул", "Обычный стул", "Мягкий стул", "Жидкий стул")[kind])
     if event.feeling in FEELINGS:
-        choices.append((FEELING_ICONS[list(FEELINGS).index(event.feeling)], FEELINGS[event.feeling]))
-    return [" ".join([time, *(icon for icon, _ in choices)]), f"{event.id}.{event_version(event)[:16]}",
-            ", ".join(label for _, label in choices)]
+        icon = FEELING_ICONS[list(FEELINGS).index(event.feeling)]
+        details.append(f"{icon}\N{NO-BREAK SPACE}{FEELINGS[event.feeling]}")
+    summary = " · ".join(details) or "Без уточнений"
+    return [f"{time}\n{summary}", f"{event.id}.{event_version(event)[:16]}", ""]
+
+
+def short_date(day):
+    return f"{day.day} {MONTH_NAMES[day.month - 1]}"
+
+
+def more_entries(day, remaining, next_page):
+    noun = plural(remaining, "отметка", "отметки", "отметок")
+    return [f"Ещё {remaining} {noun}", f"t{day}.{next_page}"]
+
+
+def journal_home_link(sess):
+    return ["К опросу" if sess.status == "closed" else "К сегодня", "home"]
 
 
 def journal_day(db, sess, day, page=0, *, highlight=None):
@@ -260,12 +276,16 @@ def journal_day(db, sess, day, page=0, *, highlight=None):
         page = next((i // 3 for i, event in enumerate(events) if event.id == highlight), page)
     page = min(page, max(0, (len(events) - 1) // 3))
     nav = []
-    for offset, label in ((-1, "‹"), (1, "›")):
-        target = page + offset
-        if 0 <= target * 3 < len(events):
-            nav.append([label, f"t{week['day']}.{target}"])
+    if page:
+        nav.append(["‹", f"t{week['day']}.{page - 1}"])
+    remaining = len(events) - 3 * (page + 1)
+    if remaining > 0:
+        nav.append(more_entries(week["day"], remaining, page + 1))
+    if day != sess.session_date:
+        nav.append(journal_home_link(sess))
     timezone = ZoneInfo(db.get(Chat, owner).timezone)
-    return dict(**week, title=day.strftime("%d.%m.%Y"), nav=nav,
+    weekday = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[day.weekday()]
+    return dict(**week, title=f"{weekday}, {short_date(day)}", nav=nav, number=page,
                 body="" if events else "Нет отметок",
                 items=[compact_entry(e, timezone) for e in events[page * 3:page * 3 + 3]])
 
@@ -273,6 +293,8 @@ def journal_day(db, sess, day, page=0, *, highlight=None):
 def journal_page(db, sess, route):
     if sess.chat_id <= 0:
         return {"t": "Доступно только в личной сессии"}
+    if route == "home":
+        return {"home": True}
     day_match = re.fullmatch(r"t(\d{5})(?:\.([0-3]))?", route)
     if day_match:
         day = EPOCH + timedelta(days=int(day_match[1]))
@@ -282,7 +304,7 @@ def journal_page(db, sess, route):
             return {"home": True}
         return journal_day(db, sess, day, int(day_match[2] or 0))
     if route == "new":
-        return editor_view(labeled=True)
+        return editor_view(title="Новая отметка", labeled=True)
     event_route = re.fullmatch(r"([ux])([1-9]\d{0,9})\.([a-f0-9]{16})", route)
     if event_route:
         action, eid, version = event_route.groups()
@@ -294,13 +316,15 @@ def journal_page(db, sess, route):
         time = occurred.astimezone(ZoneInfo(db.get(Chat, sess.chat_id).timezone)).strftime("%H:%M") if occurred else None
         key = route[1:]
         if action == "u":
-            return editor_view(event, key, title=time or "Отметка", labeled=True)
+            title = " · ".join(filter(None, ("Отметка", time, short_date(row[1]) if row[1] != sess.session_date else None)))
+            return editor_view(event, key, title=title, labeled=True)
         title = f"Удалить отметку за {time}?" if time else f"Удалить отметку №{event.event_n}?"
         return dict(title=title, nav=[["Удалить", "!D" + key]])
     page = personal_page(db, sess, route)
     if "month" in page:
         month = date.fromisoformat(page["month"] + "01")
         page["start"] = (month - EPOCH).days
+        page["nav"].append(journal_home_link(sess))
     elif route in ("week", "month", "year") and "body" in page:
         page.update(active=route, nav=[["Неделя", "week"], ["Месяц", "month"], ["Год", "year"]])
     return page

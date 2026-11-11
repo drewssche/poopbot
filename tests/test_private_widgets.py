@@ -199,7 +199,7 @@ async def test_personal_history_scopes_calendar_edits_and_targeted_deletes(facto
     edit = feelings["items"][1][1][1:]
     updated = press(edit+":0000000000000001")
     assert updated["t"] == "Уточнения сохранены"
-    assert updated["page"]["title"] == "08.11.2026"
+    assert updated["page"]["title"] == "Вс, 8 ноября"
     assert updated["page"]["d"][-1] == 5
     assert "изменилась" in press("D"+key[1:]+":0000000000000002")["t"]
     newer = press("v:d20261108.1")["items"][0]
@@ -280,3 +280,30 @@ async def test_partial_journal_marks_roundtrip(factory, monkeypatch, selection, 
         confirmation = press("j:x"+edited["s"]["items"][0][1])
         assert "15:00" in confirmation["title"]
         assert confirmation["nav"][0][0] == "Удалить"
+
+
+def test_full_archive_confirmation_can_reopen_page_within_telegram_budget(factory):
+    from datetime import timedelta
+    from app.services.group_daily_widget import encode, snapshot
+    from app.services.private_widget_history import EPOCH, journal_page
+
+    with factory.begin() as db:
+        today = db.scalar(select(DaySession))
+        past = DaySession(chat_id=42, session_date=DAY - timedelta(days=1), status="closed")
+        db.add(past)
+        db.flush()
+        for session in (today, past):
+            for n in range(1, 11):
+                db.add(PoopEvent(id=1000000 + session.session_id * 100 + n, session_id=session.session_id,
+                                 user_id=42, origin_chat_id=42, event_n=n, bristol=3, feeling="great"))
+        db.flush()
+        target = 1000000 + past.session_id * 100 + 6
+        stamp = (past.session_date - EPOCH).days
+        ack = dict(n="a" * 16, t="Уточнения сохранены", ok=True, e=target, stamp=stamp)
+        state = snapshot(db, today, 200, encode(ack), journal=True)
+        assert len(encode(state).encode()) <= 1024
+        assert state["more"][0][0] == "Ещё 7 отметок"
+        assert state["ack"]["goto"] == f"t{stamp}.1"
+        page = journal_page(db, today, state["ack"]["goto"])
+        assert any(key.startswith(f"{target}.") for _, key, _ in page["items"])
+        assert ["К сегодня", "home"] in page["nav"]

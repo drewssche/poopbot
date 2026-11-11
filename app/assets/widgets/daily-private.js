@@ -34,8 +34,8 @@ function calendar(v,month){
     if(count>0)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+num+'</b>'+(count>1?'<i>'+count+'</i>':'')
   })
 }
-function record([display,key,description]){
-  const el=control(panel,'Редактировать '+display+' '+description,display,()=>visit('u'+key));
+function record([display,key]){
+  const el=control(panel,'Редактировать '+display,display,()=>visit('u'+key));
   el.className='entry';
   if(key.split('.')[0]===String(flash))el.className+=' saved';
   const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
@@ -68,18 +68,21 @@ function show(){
   menu.textContent=home?'☰':'←';
   menu.setAttribute('aria-label',home?'Меню':'Назад');
   $('calendar').style.display=v.d?'block':'none';
-  $('controls').style.display=home&&(!closed||Date.now()/1000<state.x)?'flex':'none';
+  const plus=$('plus');
+  plus.className=closed?'restore':'';
+  plus.textContent=state.restore||'+';
+  plus.setAttribute('aria-label',state.restore||'Добавить отметку');
+  $('controls').style.display=home&&(!closed||state.restore&&Date.now()/1000<state.x)?'flex':'none';
   setQuestion(home&&closed?'Сессия закрыта':v.title||'');
   if(v.d){
     $('month').textContent=v.label+' ⌄';
     calendar(v,false)
   }
-  if(v.body){panel.className='note';button(v.body,null)}
+  if(v.body){panel.className=v.d?'empty':'note';button(v.body,null)}
   if(v.month)calendar(v,true);
   if(v.op)editor(v);
   (v.items||[]).forEach(record);
-  if(home&&v.d[v.day-v.start]>3)link(nav,'Ещё отметки','t'+v.day+'.1','…');
-  for(const [label,key,glyph] of v.nav||[]){
+  for(const [label,key,glyph] of v.nav||v.more||[]){
     const el=link(nav,label,key,glyph);
     if(key===v.active){el.className='active';el.disabled=true}
   }
@@ -87,7 +90,12 @@ function show(){
 async function visit(key){
   if(pending||!state)return;
   const seq=++reading;
-  if(key==='back'){trail.pop();show();message('');return}
+  if(key==='home')trail.length=0;
+  if(key==='back'){
+    const child=trail.pop(),parent=trail.at(-1);
+    if(child?.d&&parent?.month&&'m'+parent.month!==child.m)return visit(child.m)
+  }
+  if(key==='home'||key==='back'){show();message('');return}
   message('…');
   function failed(){if(seq===reading){reading++;message('Попробуй ещё раз')}}
   const timer=setTimeout(failed,12000);
@@ -99,7 +107,8 @@ async function visit(key){
     const previous=trail.at(-1);
     if(v.home)trail.length=0;
     else{
-      if(previous&&(v.d&&previous.d||v.active&&previous.active||v.month&&previous.month))trail.pop();
+      if(v.month)trail.length=0;
+      else if(previous&&(v.d&&previous.d||v.active&&previous.active))trail.pop();
       trail.push(v)
     }
     show()
@@ -116,6 +125,7 @@ function done(a){
   reading++;
   if(a.ok||a.t.startsWith('Твоих отметок:')){
     while(trail.length&&!trail.at(-1).d&&!trail.at(-1).month)trail.pop();
+    if(a.goto){show();return visit(a.goto)}
     if(a.page){
       if(trail.at(-1)?.d)trail.pop();
       const month=trail.at(-1);
@@ -136,8 +146,7 @@ function bind(){
   if(w.isForward){$('controls').style.display='none';return}
   $('plus').onclick=()=>closed?act('f'):visit('new');
   $('month').onclick=()=>{
-    const day=(trail.at(-1)||state).day;
-    return visit('m'+new Date(day*86400000).toISOString().slice(0,7).replace('-',''))
+    return visit((trail.at(-1)||state).m)
   };
   $('menu').onclick=()=>visit(trail.length?'back':'menu')
 }

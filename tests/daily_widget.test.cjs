@@ -8,7 +8,7 @@ const source=fs.readFileSync('app/assets/widgets/daily-live.html','utf8').match(
   .replace('__VIEW__',fs.readFileSync('app/assets/widgets/daily-private.js','utf8'))
   .replace('__RETRY__',"control(panel,'Проверить отметку','↻',()=>act('',true))")
   .replaceAll('__INDEX__','0').replaceAll('__STAMP__','20261109');
-const state=(r,n,ack)=>({r,day:20766,start:20766,label:'ноябрь 2026',d:[n,0,0,0,0,0,0],ack});
+const state=(r,n,ack)=>({r,day:20766,start:20766,label:'ноябрь 2026',m:'m202611',d:[n,0,0,0,0,0,0],ack});
 function element(){
   return {style:{},children:[],getAttribute(k){return this[k]},setAttribute(k,v){this[k]=v},
     set textContent(value){this.text=value;this.children=[]},get textContent(){return this.text},
@@ -102,7 +102,7 @@ test('header returns from help and an empty day to the screen that opened them',
   assert.equal(menu['aria-label'],'Меню');
   const month={title:'ноябрь',month:'202611',start:20758,offset:0,cells:[0],nav:[]};
   await tap(w.get('month'),'m202611',month);
-  await tap(w.get('panel').children.at(-1),'t20758',{day:20758,start:20752,d:[0,0,0,0,0,0,0],title:'01.11.2026',body:'Нет отметок',nav:[]});
+  await tap(w.get('panel').children.at(-1),'t20758',{day:20758,m:'m202611',start:20752,d:[0,0,0,0,0,0,0],title:'01.11.2026',body:'Нет отметок',nav:[]});
   assert.equal(w.get('title').text,'01.11.2026');
   assert.equal(w.get('calendar').style.display,'block');
   await menu.onclick();
@@ -120,4 +120,23 @@ test('an optional choice can be cleared and saving one answer keeps the same req
   assert.match(request.key,/^q:a_1:/);
   request.resolve({result:JSON.stringify({ok:true,t:'Отметка сохранена',s:state(1,1)})});
   await saving;
+});
+
+test('opening a month from an archive day drops the previous branch',async()=>{
+  const w=open(), back=w.get('menu');
+  async function go(button,page){
+    const done=button.onclick();
+    w.requests.pop().resolve({result:JSON.stringify(page)});
+    await done
+  }
+  const day={...state(1,0),day:20765,title:'Вс, 8 ноября',nav:[['К сегодня','home']]};
+  const month={title:'ноябрь',month:'202611',start:20758,cells:[0],nav:[['К сегодня','home']]};
+  await go(w.get('week').children[7],day);
+  await go(w.get('month'),month);
+  await go(w.get('panel').children.at(-1),day);
+  await back.onclick();assert.equal(w.get('title').text,'ноябрь');
+  await back.onclick();assert.equal(back['aria-label'],'Меню');
+  await go(w.get('month'),month);
+  await w.get('nav').children[0].onclick();
+  assert.equal(back['aria-label'],'Меню');
 });

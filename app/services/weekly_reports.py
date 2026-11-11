@@ -76,6 +76,7 @@ def delivery_failure_reason(exc):
         message = exc.message.lower()
         for fragment, reason in (
             ('message to edit not found', 'message_missing'),
+            ('message with widget to edit not found', 'message_missing'),
             ("message can't be edited", 'message_uneditable'),
             ('chat not found', 'chat_missing'),
         ):
@@ -263,8 +264,9 @@ class ReportWorker:
             notify = await database_work(self.failed, report_id, revision, exc)
             if notify and self.owner_id:
                 try:
+                    label = "ежедневный опрос" if row.q1_session_id is not None else "отчёт"
                     await self.bot.send_message(chat_id=self.owner_id,
-                        text=f'⚠️ Не удалось обновить отчёт №{report_id}. '
+                        text=f'⚠️ Не удалось обновить {label} №{report_id}. '
                              'Задание сохранено. Требуется проверка журнала бота.', request_timeout=15)
                 except Exception:
                     log.warning('Could not notify owner about weekly report id=%s', report_id)

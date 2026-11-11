@@ -27,6 +27,7 @@ class SendWidget(TelegramMethod[Message]):
     chat_id: int
     html: str
     chat_data: str
+    public_data: str | None = None
     allow_queries: bool = True
 
 

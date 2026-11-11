@@ -5,11 +5,11 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 
 const source = fs.readFileSync('app/assets/widgets/daily-live.html', 'utf8')
-  .match(/<script>([\s\S]*)<\/script>/)[1].replace('__PRIVATE__', 'true').replace('__INDEX__', '0');
+  .match(/<script>([\s\S]*)<\/script>/)[1].replace('__VIEW__',fs.readFileSync('app/assets/widgets/daily-private.js','utf8')).replaceAll('__INDEX__','0').replaceAll('__STAMP__','20261109');
 const state = (r, n, ack) => ({r, d: [n,0,0,0,0,0,0], ack});
 function open(initial = state(0, 0), store = new Map(), timers = {setTimeout, clearTimeout}) {
   const elements = new Map(), requests = [];
-  const element = () => ({ style: {}, appendChild(child){ this.lastChild = child; } });
+  const element = () => ({ style: {}, setAttribute(k,v){this[k]=v;}, appendChild(child){ this.lastChild = child; } });
   function get(id) {
     if (!elements.has(id)) elements.set(id, element());
     return elements.get(id);
@@ -31,8 +31,8 @@ const ack = request => ({n:request.key.split(':')[2],t:'Твоих отмето�
 test('a published receipt wins over a late failure, even during the next tap',async()=>{
   const w=open(), first=w.get('plus').onclick(), request=w.requests[0];
   w.push(state(1,1,ack(request)));
-  assert.equal(w.get('hint').textContent,'Твоих отметок: 1');
-  const second=w.get('minus').onclick();
+  assert.equal(w.get('hint').textContent,'');
+  const second=w.get('plus').onclick();
   request.reject(new Error('TIMEOUT')); await first;
   assert.equal(w.store.get('pending'),w.requests[1].key);
   w.requests[1].resolve({result:JSON.stringify({s:state(2,0),t:'Удалено'})}); await second;
@@ -53,18 +53,22 @@ test('unconfirmed tap survives reload and retries with the original key',async()
   reopened.requests[0].reject(new Error('TIMEOUT')); await retry;
   assert.equal(w.store.size,0);
   assert.equal(reopened.get('count').textContent,2);
-  assert.equal(reopened.get('hint').textContent,'Твоих отметок: 2');
+  assert.equal(reopened.get('hint').textContent,'');
 });
 
 test('native screen object does not interrupt details or saving confirmation', async()=>{
   const w=open(), tap=w.get('plus').onclick(), request=w.requests[0];
   const receipt=ack(request);
-  request.resolve({result:JSON.stringify({...receipt,s:state(1,1)})}); await tap;
-  assert.equal(w.get('hint').textContent,receipt.t);
-  w.get('panel').lastChild.onclick();
+  assert.equal(w.get('panel').lastChild,undefined);
+  const entry='31.cccccccccccccccc';
+  request.resolve({result:JSON.stringify({...receipt,s:{...state(1,1),entries:[['№1','i'+entry]]}})}); await tap;
+  assert.equal(w.get('hint').textContent,'');
+  const openEntry=w.get('panel').lastChild.onclick(), read=w.requests[1];
+  assert.equal(read.key,'q:v:i'+entry);
+  read.resolve({result:JSON.stringify({title:'Мои ощущения',items:[['Ужасно','!E'+entry+'.32']],nav:[]})}); await openEntry;
   assert.equal(w.get('title').textContent,'Мои ощущения');
-  const detail=w.get('panel').lastChild.onclick(), edit=w.requests[1];
-  assert.ok(edit.key.startsWith('q:e31.cccccccccccccccc.32:'));
+  const detail=w.get('panel').lastChild.onclick(), edit=w.requests[2];
+  assert.ok(edit.key.startsWith('q:E31.cccccccccccccccc.32:'));
   edit.resolve({result:JSON.stringify({s:state(2,1),t:'Уточнения сохранены'})}); await detail;
   assert.equal(w.get('count').textContent,1);
   assert.equal(w.get('hint').textContent,'Уточнения сохранены');

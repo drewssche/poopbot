@@ -11,6 +11,12 @@ from app.services.event_time_service import event_occurrence_time
 from app.services.stats_streaks import best_streak_from_days, current_streak_from_days
 
 
+def event_kind(event: PoopEvent) -> int | None:
+    if event.bristol is None:
+        return None
+    return 0 if event.bristol <= 2 else 1 if event.bristol <= 4 else 2 if event.bristol <= 6 else 3
+
+
 def read_view(db: Session, chat_id: int, user_id: int, month: str | None, *, now: datetime | None = None) -> dict:
     chat = db.get(Chat, chat_id)
     if chat is None or db.get(ChatMember, (chat_id, user_id)) is None:
@@ -48,8 +54,7 @@ def read_view(db: Session, chat_id: int, user_id: int, month: str | None, *, now
         events.append({
             "id": str(event.id), "version": event_version(event), "date": day.isoformat(),
             "time": occurred.astimezone(timezone).strftime("%H:%M") if occurred else None,
-            "kind": (0 if event.bristol <= 2 else 1 if event.bristol <= 4 else 2 if event.bristol <= 6 else 3)
-                    if event.bristol is not None else None,
+            "kind": event_kind(event),
             "feeling": {"great": 0, "ok": 1, "bad": 2}.get(event.feeling),
         })
     return {

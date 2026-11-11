@@ -153,3 +153,60 @@ async def test_private_report_sends_then_updates_same_widget(factory, period):
     updated = json.loads(edit.chat_data)
     assert updated["total"] == 1 and updated["animal"] and sum(updated["counts"]) == 1
     assert len(edit.chat_data.encode()) <= 1024
+
+
+@pytest.mark.asyncio
+async def test_personal_history_scopes_calendar_edits_and_targeted_deletes(factory, monkeypatch):
+    from datetime import timedelta
+    from app.services.group_daily_widget import encode
+    from app.services.q1_service import apply_plus
+    from app.services.mini_app_service import event_version
+    from app.services import mini_app_service
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 9, 12, tzinfo=UTC).astimezone(tz)
+    monkeypatch.setattr(mini_app_service, "datetime", Clock)
+    bot = AsyncMock(return_value=SimpleNamespace(message_id=13))
+    with factory.begin() as db:
+        current = db.scalar(select(DaySession))
+        await _post_q1(bot, db, 42, current.session_id, DAY, False)
+        past = DaySession(chat_id=42, session_date=DAY-timedelta(days=1), status="closed")
+        db.add(past)
+        db.flush()
+        for _ in range(5):
+            apply_plus(db, past.session_id, 42, 42)
+        other = db.scalar(select(PoopEvent).where(PoopEvent.user_id == 43))
+        foreign = f"i{other.id}.{event_version(other)[:16]}"
+    def press(data):
+        with factory.begin() as db:
+            result = mutate(db, {"from":{"id":42}, "chat":{"type":"private","id":42},
+                                 "message_id":13,"data":"q:"+data})
+            assert len(encode(result).encode()) <= 1024
+            return result
+    assert press("v:m")["marked"] == [8]
+    assert press("v:m202610")["days"] == 31
+    assert "t" in press("v:d20261110")
+    assert "t" in press("v:"+foreign)
+    assert not press("v:d20261107")["items"]
+    items = press("v:d20261108.1")["items"]
+    assert len(items) == 2
+    key = items[0][1]
+    editor = press("v:"+key)
+    kinds = press("v:"+editor["items"][0][1])
+    feelings = press("v:"+kinds["items"][1][1])
+    edit = feelings["items"][1][1][1:]
+    assert press(edit+":0000000000000001")["t"] == "Уточнения сохранены"
+    assert "изменилась" in press("D"+key[1:]+":0000000000000002")["t"]
+    newer = press("v:d20261108.1")["items"][0]
+    assert "Норма" in newer[0] and "Сойдёт" in newer[0]
+    detail = press("v:"+newer[1])
+    confirm = press("v:"+detail["items"][1][1])
+    deletion = confirm["items"][0][1][1:]+":0000000000000003"
+    assert press(deletion)["t"] == "Отметка удалена"
+    assert press(deletion)["s"]["d"][0] == 0
+    with factory() as db:
+        remaining = db.scalars(select(PoopEvent).where(PoopEvent.user_id==42).order_by(PoopEvent.event_n)).all()
+        assert [e.event_n for e in remaining] == [1,2,3,4]
+        assert all(e.id != int(key[1:].split('.')[0]) for e in remaining)

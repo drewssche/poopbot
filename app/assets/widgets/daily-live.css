@@ -13,7 +13,6 @@ h2{font-size:21px;margin-bottom:12px}
 .today{color:#934c21}.today .day{background:#934c21;color:white}
 article{padding:19px 8% 12px}
 h3{gap:6px;font-size:19px;text-align:center;margin-bottom:8px}
-#face{width:24px;height:23px;flex:none}
 button{font:inherit;line-height:1.2;text-align:center;padding:0;border:0;color:inherit;background:#f4f0ec;border-radius:26px}
 #panel{display:grid;gap:6px}
 #panel button,#summary button{width:100%;min-height:40px;padding:8px 12px}
@@ -24,3 +23,9 @@ button{font:inherit;line-height:1.2;text-align:center;padding:0;border:0;color:i
 #hint,#history{font-size:14px;color:#645b5b;white-space:pre-line}
 #hint{text-align:center}
 @media(max-width:270px){.brand{width:140px;height:33px}article,.calendar{padding-left:10px;padding-right:10px}.day{width:25px;height:25px}}
+#month{background:white}
+#panel.grid{grid-template-columns:repeat(7,1fr);text-align:center}
+#panel.grid button{min-height:30px;padding:0}
+#nav{display:flex;justify-content:center;gap:6px}#nav button{flex:1;min-height:34px;margin-top:8px}
+
+button.cell{background:white}.grid .marked{background:#934c21;color:white}

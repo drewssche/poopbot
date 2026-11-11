@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 import zlib
+from functools import lru_cache
+from xml.etree import ElementTree
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -27,6 +29,7 @@ from app.services.daily_widget_demo import (
     AnswerWidget,
     SendWidget,
 )
+from app.services import private_widget_history as history
 from app.services.mini_app_notifications import database_work
 from app.services.mini_app_service import change_mark, event_version, record_mark, MarkRejected
 from app.services.poop_event_service import list_origin_events
@@ -56,15 +59,23 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+@lru_cache(maxsize=1)
+def private_brand():
+    # Split static artwork across Telegram's HTML and public-data budgets.
+    logo = (ASSETS / "brand.svg").read_text().strip()
+    path = ElementTree.fromstring(logo).findall("{*}path")[-1].attrib["d"]
+    return logo.replace(f'd="{path}"', 'id="wordmark"'), path
+
+
 def render(day, private=False):
     start = day - timedelta(days=day.weekday())
-    months = "январь февраль март апрель май июнь июль август сентябрь октябрь ноябрь декабрь".split()
+    tag = "button" if private else "div"
     cells = "".join(
-        f'<div class="cell{" today" if i == day.weekday() else ""}">{name}'
-        f'<span class="day" id="d{i}">{(start + timedelta(days=i)).day}</span></div>'
+        f'<{tag} id="w{i}" class="cell{" today" if i == day.weekday() else ""}">{name}'
+        f'<span class="day" id="d{i}">{(start + timedelta(days=i)).day}</span></{tag}>'
         for i, name in enumerate(DAYS)
     )
-    logo = (ASSETS / "brand.svg").read_text().strip()
+    logo = private_brand()[0] if private else (ASSETS / "brand.svg").read_text().strip()
     menu_icon = '<svg width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>'
     html = (
         "<style>"
@@ -72,13 +83,16 @@ def render(day, private=False):
         + "</style>"
         + (ASSETS / "daily-live.html")
         .read_text()
+        .replace("__VIEW__", (ASSETS / ("daily-private.js" if private else "daily-group.js")).read_text())
+        .replace("__MONTH__", '<button id="month">__DATE__ ⌄</button>' if private else "__DATE__")
+        .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
         .replace("__MENU__", f'<button id="menu" aria-label="Итоги дня">{menu_icon}</button>' if private else "")
         .replace("__WEEK__", cells)
+        .replace("__STAMP__", day.strftime("%Y%m%d"))
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
-        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button><button id="past">Прошлые дни в приложении</button></section>' if private else "")
-        .replace("__PRIVATE__", "true" if private else "false")
-        .replace("__DATE__", f"{months[day.month - 1]} {day.year}")
+        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button><button id="past">Открыть мини-апп</button></section>' if private else "")
+        .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
         .replace("__INDEX__", str(day.weekday()))
     )
     if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4010:
@@ -112,10 +126,11 @@ def snapshot(db, sess, revision, widget_ack=None):
             .group_by(DaySession.session_date)
         ).all()
     )
+    timezone = ZoneInfo(db.get(Chat, sess.chat_id).timezone)
     expiry = datetime.combine(
         sess.session_date + timedelta(days=2),
         time.min,
-        tzinfo=ZoneInfo(db.get(Chat, sess.chat_id).timezone),
+        tzinfo=timezone,
     )
     data = dict(
         r=revision,
@@ -129,6 +144,8 @@ def snapshot(db, sess, revision, widget_ack=None):
         data["h"] = "\n".join(summary.splitlines()[4:])
         data["restore"] = not data["c"] and should_show_restore_streak_button(db, chat_id=sess.chat_id,
             session_date=sess.session_date, viewer_user_id=sess.chat_id, is_private_chat=True)
+        events = list_origin_events(db, sess.session_id, sess.chat_id, sess.chat_id)
+        data["entries"] = [history.entry(e, timezone) for e in reversed(events[-3:])]
         if widget_ack:
             data["ack"] = json.loads(widget_ack)
         fit_widget_history(data, data)
@@ -170,6 +187,7 @@ async def send(bot, db, sess):
             chat_id=sess.chat_id,
             html=render(day, private=sess.chat_id > 0),
             chat_data=encode(snapshot(db, sess, 1)),
+            public_data=private_brand()[1] if sess.chat_id > 0 else None,
         )
     )
     row.photo_message_id = (
@@ -191,12 +209,6 @@ def mutate(db, q):
             return reject("Недоступно для этого чата")
     elif chat.get("type") not in ("group", "supergroup") or not enabled(db, chat_id):
         return reject("Недоступно для этого чата")
-    match = re.fullmatch(
-        r"q:([+fs-]|a[0-3][0-2]|e([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])):([a-f0-9]{16})",
-        str(q.get("data", "")),
-    )
-    if not match:
-        return reject("Неизвестное действие")
     row = db.scalar(
         select(WeeklyReport)
         .join(
@@ -214,7 +226,21 @@ def mutate(db, q):
     )
     if row is None:
         return reject("Этот вопрос уже неактуален")
-    op, eid, version, kind, feeling, nonce = match.groups()
+    data = str(q.get("data", ""))
+    if data.startswith("q:v:"):
+        return history.view(db, db.get(DaySession, row.q1_session_id), data[4:])
+    match = re.fullmatch(
+        r"q:([+fs-]|a[0-3][0-2]|[eE]([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3])([0-2])"
+        r"|D([1-9]\d{0,9})\.([a-f0-9]{16})):([a-f0-9]{16})", data,
+    )
+    if not match:
+        return reject("Неизвестное действие")
+    op, eid, version, kind, feeling, delete_id, delete_version, nonce = match.groups()
+    private_entry = op[0] in "ED"
+    if private_entry and chat_id < 0:
+        return reject("Доступно только в личной сессии")
+    if delete_id:
+        eid, version = delete_id, delete_version
     if op == "f":
         lock_restore_chat(db, chat_id)
     # Two simultaneous first taps must converge on the same user lock as the Mini App.
@@ -259,7 +285,7 @@ def mutate(db, q):
             db.get(PoopEvent, receipt.event_id) if receipt.event_id else None,
         )
     event = None
-    if op != "f" and (
+    if op != "f" and not private_entry and (
         sess.status != "active"
         or window.is_blocked_window
         or sess.session_date != window.session_date
@@ -272,10 +298,10 @@ def mutate(db, q):
     ):
         return result("Слишком быстро. Попробуй через пару секунд")
     ensure_chat_member(db, chat_id, uid)
+    db.flush()
     if op.startswith("a"):
         if chat_id <= 0:
             return reject("Доступно только в личной сессии")
-        db.flush()
         try:
             record_mark(db, chat_id, uid, {
                 "requestId": str(uuid5(NAMESPACE_URL, "add:" + rid)),
@@ -296,34 +322,30 @@ def mutate(db, q):
             return result("Восстановление недоступно")
         _, msg = restore_streak_for_user(db, chat_id, uid, sess.session_date)
     elif eid:
-        event = db.scalar(
-            select(PoopEvent).where(
-                PoopEvent.id == int(eid),
-                PoopEvent.user_id == uid,
-                PoopEvent.origin_chat_id == chat_id,
-                PoopEvent.session_id == sess.session_id,
-            )
-        )
+        if private_entry:
+            event, event_day = history.dated_event(db, uid, eid, sess.session_date) or (None, None)
+        else:
+            event = db.scalar(select(PoopEvent).where(
+                PoopEvent.id == int(eid), PoopEvent.user_id == uid,
+                PoopEvent.origin_chat_id == chat_id, PoopEvent.session_id == sess.session_id,
+            ))
+            event_day = sess.session_date
         if not event or event_version(event)[:16] != version:
             return result("Отметка изменилась. Открой /app")
+        action = "delete" if delete_id else "edit"
+        body = dict(
+            action=action, requestId=str(uuid5(NAMESPACE_URL, action + ":" + rid)),
+            eventId=eid, version=event_version(event), date=event_day.isoformat(),
+        )
+        if action == "edit":
+            body.update(kind=int(kind), feeling=int(feeling))
         try:
-            change_mark(
-                db,
-                chat_id,
-                uid,
-                dict(
-                    action="edit",
-                    requestId=str(uuid5(NAMESPACE_URL, "edit:" + rid)),
-                    eventId=eid,
-                    version=event_version(event),
-                    date=sess.session_date.isoformat(),
-                    kind=int(kind),
-                    feeling=int(feeling),
-                ),
-            )
+            change_mark(db, chat_id, uid, body)
         except MarkRejected as exc:
             return result(str(exc))
-        msg = "Уточнения сохранены"
+        if delete_id:
+            event = None
+        msg = "Отметка удалена" if delete_id else "Уточнения сохранены"
     else:
         changed, msg = (
             apply_plus(db, sess.session_id, uid, chat_id)

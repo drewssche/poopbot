@@ -545,3 +545,16 @@ def test_visual_weekly_empty_and_cross_year_periods(private):
         layout='weekly', details=WeeklyDetails(0,0,(0,)*5,(0,)*4))
     image = Image.open(BytesIO(render_card(card)))
     assert image.size == (840,992)
+
+
+def test_missing_private_widget_is_retired_without_alert(env):
+    from app.services.daily_widget_demo import EditWidget
+    factory, _, worker = env
+    with factory.begin() as db:
+        row = enqueue_weekly_report(db, 1, END, chat_title='Личные отметки')
+        row.photo_message_id = 10
+        rid = row.id
+    error = TelegramBadRequest(method=EditWidget(chat_id=1, message_id=10, chat_data='{}'),
+                               message='Bad Request: message with widget to edit not found')
+    assert not worker.failed(rid, 1, error)
+    assert worker.get(rid).disabled

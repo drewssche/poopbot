@@ -1,54 +1,19 @@
 <main aria-label="__SCOPE__"><header>__MENU____LOGO__</header>
-<section class="calendar"><h2>__DATE__</h2><div class="week">__WEEK__</div></section>
-<article><section id="form"><h3><svg id="face" aria-hidden="true" fill="none" viewBox="60 330 32 31"><path fill="#934c21" d="M73 330q9 3 8 9 5 0 4 5 5 2 3 7 6 2 3 7-2 4-18 1-14 3-12-4 1-3 4-4-2-5 3-7-1-6 4-7-1-2 0-4z"/><circle cx="72" cy="347" r="2" fill="#fff"/><circle cx="80" cy="347" r="2" fill="#fff"/><path stroke="#fff" stroke-linecap="round" stroke-width="2" d="M71 351c.4 1 2 3 5 3s4.6-2 5-3"/></svg><span id="title"></span></h3><div id="panel"></div>
-<div id="controls" class="controls"><button id="minus" aria-label="Убрать отметку"><svg width="18" height="18"><path fill="currentColor" d="M2 8h14v2H2z"/></svg></button><span>За день: <b id="count">—</b></span><button id="plus" aria-label="Добавить отметку"><svg width="18" height="18"><path fill="currentColor" d="M2 8h6V2h2v6h6v2h-6v6H8v-6H2z"/></svg></button></div>
-</section>__DETAILS__<div id="hint"></div></article></main>
+<section class="calendar" id="calendar"><h2>__MONTH__</h2><div class="week">__WEEK__</div></section>
+<article><section id="form">__FORM__</section>__DETAILS__<div id="hint"></div></article></main>
 <script>
 (()=>{
-const w=TelegramWidget,$=id=>document.getElementById(id),panel=$('panel'),personal=__PRIVATE__;
+const w=TelegramWidget,$=id=>document.getElementById(id),panel=$('panel');
 let revision=-1,closed=false,busy='',pending=localStorage.getItem('pending')||'';
 function message(text){$('hint').textContent=text}
 function button(text,click){
-  const el=document.createElement('button');el.textContent=text;el.onclick=click;panel.appendChild(el)
+  const el=document.createElement(click?'button':'div');el.textContent=text;if(click)el.onclick=click;panel.appendChild(el)
 }
-function setQuestion(title){$('face').style.display=title==='Консистенция кала'?'block':'none';$('title').textContent=title;panel.textContent=''}
-function choices(prefix){
-  setQuestion('Консистенция кала');
-  ['Жестко','Норма','Мягко','Водичка'].forEach((label,k)=>button(label,()=>{
-    setQuestion('Мои ощущения');
-    ['Прекрасно','Сойдёт','Ужасно'].forEach((name,f)=>button(name,()=>act(prefix+k+f)))
-  }))
-}
-function home(){
-  if(w.isForward)setQuestion('Копия · только просмотр');
-  else if(personal&&!closed)choices('a');
-  else setQuestion(closed?'Сессия закрыта':'Кто сегодня какал?')
-}
-function paint(state){
-  if(!state||state.r<revision)return;
-  const first=revision<0,wasClosed=closed;
-  revision=state.r;closed=!!state.c;
-  state.d.forEach((n,i)=>$('d'+i).className=n?'day marked':'day');
-  $('count').textContent=state.d[__INDEX__];
-  if(personal){
-    $('history').textContent=state.h||'';
-    $('restore').style.display=state.restore&&!w.isForward?'flex':'none';
-    $('restore').onclick=()=>act('s')
-  }
-  $('minus').style.display=closed||w.isForward?'none':'flex';
-  $('plus').style.display=w.isForward||(closed&&Date.now()/1000>=state.x)?'none':'flex';
-  if(closed){$('plus').textContent='Забыл отметиться';$('controls').className='controls closed';$('plus').setAttribute('aria-label','Забыл отметиться')}
-  if(first||wasClosed!==closed)home();
-  if(state.ack&&pending&&pending.split(':')[2]===state.ack.n)finish(pending,state.ack)
-}
+__VIEW__
 function finish(key,a){
   if(pending!==key)return;
   pending='';busy='';localStorage.removeItem('pending');
-  message(a.t);
-  if(a.e&&!closed){
-    const edit=()=>choices('e'+a.e+'.'+a.v+'.');
-    if(personal)edit();else {home();button('Уточнить',edit)}
-  }else home()
+  done(a)
 }
 function check(){
   message('Ожидаем подтверждения');setQuestion('');
@@ -76,14 +41,7 @@ async function act(op,retry){
   paint(a.s);finish(key,a)
 }
 function sync(){if(w.chatData)paint(JSON.parse(w.chatData))}
-if(personal)$('past').onclick=()=>w.openTelegramLink('https://t.me/poopcheck_bot?startapp');
-if(personal)$('menu').onclick=()=>{
-  const box=$('summary'),show=box.style.display==='none';
-  box.style.display=show?'block':'none';$('form').style.display=show?'none':'block'
-};
-sync();w.onEvent('chatDataChanged',sync);
-$('plus').onclick=()=>act(closed?'f':'+');$('minus').onclick=()=>act('-');
-if(w.isForward){home();$('controls').style.display='none'}
+sync();w.onEvent('chatDataChanged',sync);bind();
 if(pending&&!w.isForward)check()
 w.ready()
 })()

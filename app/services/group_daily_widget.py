@@ -10,6 +10,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+import minify_html
 from sqlalchemy import func, select, update
 
 from app.db.models import (
@@ -64,26 +65,33 @@ def private_brand():
     # Split static artwork across Telegram's HTML and public-data budgets.
     logo = (ASSETS / "brand.svg").read_text().strip()
     path = ElementTree.fromstring(logo).findall("{*}path")[-1].attrib["d"]
-    return logo.replace(f'd="{path}"', 'id="wordmark"'), path
+    art = [path]
+    for name in ("day", "edit"):
+        icon = ElementTree.parse(ASSETS / f"{name}.svg")
+        art.append(icon.find(".//{*}path").attrib["d"])
+    return logo.replace(f'd="{path}"', 'id="wordmark"'), encode(art)
 
 
+@lru_cache(maxsize=32)
 def render(day, private=False):
     start = day - timedelta(days=day.weekday())
     tag = "button" if private else "div"
     cells = "".join(
         f'<{tag} id="w{i}" class="cell{" today" if i == day.weekday() else ""}">{name}'
-        f'<span class="day" id="d{i}">{(start + timedelta(days=i)).day}</span></{tag}>'
+        f'<span class="day" id="d{i}" data-day="{(start + timedelta(days=i)).day}">{(start + timedelta(days=i)).day}</span></{tag}>'
         for i, name in enumerate(DAYS)
     )
     logo = private_brand()[0] if private else (ASSETS / "brand.svg").read_text().strip()
     menu_icon = '<svg width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>'
     html = (
         "<style>"
-        + (ASSETS / "daily-live.css").read_text()
+        + (ASSETS / ("daily-private.css" if private else "daily-live.css")).read_text()
         + "</style>"
         + (ASSETS / "daily-live.html")
         .read_text()
         .replace("__VIEW__", (ASSETS / ("daily-private.js" if private else "daily-group.js")).read_text())
+        .replace("__RETRY__", "control(panel,'Проверить отметку','↻',()=>act('',true))" if private
+                 else "button('Проверить отметку',()=>act('',true))")
         .replace("__MONTH__", '<button id="month">__DATE__ ⌄</button>' if private else "__DATE__")
         .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
@@ -91,10 +99,11 @@ def render(day, private=False):
         .replace("__WEEK__", cells)
         .replace("__STAMP__", day.strftime("%Y%m%d"))
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
-        .replace("__DETAILS__", '<section id="summary" style="display:none"><h3>Итоги дня</h3><div id="history"></div><button id="restore">Вернуть стрик</button><button id="past">Открыть мини-апп</button></section>' if private else "")
         .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
         .replace("__INDEX__", str(day.weekday()))
     )
+    if private:
+        html = minify_html.minify(html, minify_js=True, minify_css=True, keep_closing_tags=True)
     if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4010:
         raise ValueError("Widget size budget exceeded")
     return html
@@ -227,6 +236,8 @@ def mutate(db, q):
     if row is None:
         return reject("Этот вопрос уже неактуален")
     data = str(q.get("data", ""))
+    if data.startswith("q:p:") and chat_id > 0:
+        return history.icon_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:v:"):
         return history.view(db, db.get(DaySession, row.q1_session_id), data[4:])
     match = re.fullmatch(
@@ -274,6 +285,8 @@ def mutate(db, q):
         a = {"t": msg, "s": snapshot(db, sess, row.revision)}
         if event and op == "+":
             a.update(e=event.id, v=event_version(event)[:16])
+        if chat_id > 0 and msg in ("Отметка сохранена", "Уточнения сохранены", "Отметка удалена"):
+            a["ok"] = True
         fit_widget_history(a, a["s"])
         return a
 
@@ -371,6 +384,8 @@ def mutate(db, q):
     )
     if chat_id > 0:
         ack = {"n": nonce, "t": msg}
+        if op.startswith(("a", "E", "D")):
+            ack["ok"] = True
         if event and op == "+":
             ack.update(e=event.id, v=event_version(event)[:16])
         db.flush()

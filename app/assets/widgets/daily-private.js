@@ -1,74 +1,105 @@
-let state,route='home',reading=0;
+let state, route='home', reading=0;
+const nav=$('nav'), art=JSON.parse(w.publicData||'[]');
+function icon(box,path,fill){
+  return '<svg width="20" height="20" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
+}
 function setQuestion(title){
-  $('title').textContent=title;panel.className='';panel.textContent='';$('nav').textContent=''
+  $('title').textContent=title;panel.className='';panel.textContent='';nav.textContent=''
 }
-function action(label,key,parent=panel){
-  const el=document.createElement('button');el.textContent=label;parent.appendChild(el);
-  el.onclick=()=>key[0]==='!'?act(key.slice(1)):visit(key);
-  return el
+function control(parent,label,draw,click){
+  const el=document.createElement('button');
+  el.textContent=draw;el.setAttribute('aria-label',label);
+  el.onclick=click;parent.appendChild(el);return el
 }
-function show(view){
-  const home=!view||view.home;
-  if(home)route='home';
-  $('calendar').style.display=view?.month?'none':'block';
-  $('controls').style.display=home?'flex':'none';
-  setQuestion(home?(closed?'Сессия закрыта':''):view.title);
-  if(home){
-    (state.entries||[]).forEach(([label,key])=>action(label+'  ›',key));
-    if(state.d[__INDEX__]>3)action('Ещё отметки','d__STAMP__.1')
-  }else{
-    if(view.month){
-      panel.className='grid';
-      for(const name of 'пн вт ср чт пт сб вс'.split(' '))button(name,null);
-      for(let i=0;i<view.offset;i++)button('',null);
-      for(let i=1;i<=view.days;i++){
-        if(i>view.until)button(String(i),null);
-        else action(String(i),'d'+view.month+String(i).padStart(2,'0')).className=view.marked.includes(i)?'marked':''
-      }
-    }else view.items.forEach(row=>action(...row));
-    view.nav.forEach(([label,key])=>action(label,key,$('nav')))
+function link(parent,label,key,glyph=label){
+  return control(parent,label,glyph,()=>{
+    if(key[0]==='!')return act(key.slice(1));
+    if(key==='app')return w.openTelegramLink('https://t.me/poopcheck_bot?startapp');
+    return visit(key)
+  })
+}
+function mark(el,n){
+  el.className='day'+(n?' marked':'');
+  if(n)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+el.textContent+'</b>'+(n>1?'<i>'+n+'</i>':'')
+}
+function record([label,key]){
+  const el=control(panel,'Редактировать: '+label,label,()=>visit('u'+key.slice(1)));
+  el.className='entry';
+  const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
+}
+function editor(v){
+  panel.innerHTML=v.form;
+  const values=v.values;
+  const save=control(nav,'Сохранить','✓',()=>{if(!save.disabled)return act(values.every(n=>n<0)?'+':v.op+values.join(''))});
+  const rows=Array.from(panel.querySelectorAll('.choices'));
+  function update(){
+    save.disabled=values.some(n=>n<0)&&!(v.op==='a'&&values.every(n=>n<0));
+    save.className=save.disabled?'':'active';
+    rows.forEach((row,i)=>Array.from(row.children).forEach((b,n)=>{
+      b.className=values[i]===n?'active':'';
+      b.setAttribute('aria-pressed',String(values[i]===n));
+      if(values[i]===n)row.previousElementSibling.textContent=b.getAttribute('aria-label');
+      b.onclick=()=>{values[i]=n;update()}
+    }))
   }
+  update();
+  if(v.remove)control(nav,'Удалить','',()=>visit(v.remove)).innerHTML=v.trash
+
+}
+function show(v){
+  const home=!v||v.home;
+  if(home)route='home';
+  $('calendar').style.display=home?'block':'none';
+  $('controls').style.display=home?'flex':'none';
+  setQuestion(home?(closed?'Сессия закрыта':''):v.title||'');
+  if(home){
+    (state.entries||[]).forEach(record);
+    if(state.d[__INDEX__]>3)link(nav,'Ещё отметки','d__STAMP__.1','…');
+    return
+  }
+  if(v.body)button(v.body,null);
+  else if(v.month){
+    panel.className='grid';
+    for(const name of 'пн вт ср чт пт сб вс'.split(' '))button(name,null);
+    for(let i=0;i<v.offset;i++)button('',null);
+    for(let i=1;i<=v.days;i++){
+      if(i>v.until)button(String(i),null);
+      else mark(link(panel,String(i),'d'+v.month+String(i).padStart(2,'0')),v.counts[i]||0)
+    }
+  }else if(v.form)editor(v);
+  else (v.items||[]).forEach(record);
+  v.nav.forEach(row=>link(nav,...row))
 }
 async function visit(key){
   if(pending||!state)return;
   const seq=++reading;
   message('');
   if(key==='home'){show();return}
-  route=key;
-  $('summary').style.display='none';$('form').style.display='block';
-  $('controls').style.display='none';setQuestion('');message('Загрузка…');
-  const timeout=setTimeout(()=>{if(reading===seq){reading++;show();message('Попробуй ещё раз')}},12000);
+  route=key;message('…');
+  const timer=setTimeout(()=>{if(seq===reading){reading++;show();message('Попробуй ещё раз')}},12000);
   try{
-    const view=JSON.parse((await w.request('q:v:'+key)).result);
-    if(seq!==reading)return;
-    if(!view)throw Error('Попробуй ещё раз');
-    if(view.t){show();message(view.t);return}
-    message('');show(view)
-  }catch(e){if(seq===reading){show();message('Не удалось открыть. Попробуй ещё раз')}}
-  finally{clearTimeout(timeout)}
+    const v=JSON.parse((await w.request('q:p:'+key)).result);
+    if(seq!==reading||pending)return;
+    message(v.t||'');show(v.t?null:v)
+  }catch(e){if(seq===reading){show();message('Попробуй ещё раз')}}
+  finally{clearTimeout(timer)}
 }
 function paint(s){
   if(w.isForward||!s||s.r<revision)return;
   state=s;revision=s.r;closed=!!s.c;
-  s.d.forEach((n,i)=>$('d'+i).className=n?'day marked':'day');
-  $('count').textContent=s.d[__INDEX__];
-  $('history').textContent=(s.h||'').split('\n\n')[0];
-  $('restore').style.display=s.restore?'flex':'none';
+  s.d.forEach((n,i)=>{
+    const el=$('d'+i);el.textContent=el.getAttribute('data-day');mark(el,n)
+  });
   $('plus').style.display=closed&&Date.now()/1000>=s.x?'none':'flex';
-  if(closed){$('plus').textContent='Забыл отметиться';$('controls').className='controls closed';$('plus').setAttribute('aria-label','Забыл отметиться')}
   if(!pending&&route==='home')show();
   if(s.ack&&pending&&pending.split(':')[2]===s.ack.n)finish(pending,s.ack)
 }
-function done(a){reading++;message(a.t.startsWith('Твоих отметок:')?'':a.t);show()}
+function done(a){reading++;show();message(a.ok||a.t.startsWith('Твоих отметок:')?'':a.t)}
 function bind(){
-  $('wordmark').setAttribute('d',w.publicData||'');
-  if(w.isForward){$('controls').style.display=$('menu').style.display='none';setQuestion('Копия · только просмотр');return}
-  $('plus').onclick=()=>act(closed?'f':'+');$('restore').onclick=()=>act('s');
+  $('wordmark').setAttribute('d',art[0]||'');
+  if(w.isForward){$('controls').style.display='none';return}
+  $('plus').onclick=()=>closed?act('f'):visit('new');
   for(let i=0;i<=__INDEX__;i++)$('w'+i).onclick=()=>visit('w'+i);
-  $('past').onclick=()=>w.openTelegramLink('https://t.me/poopcheck_bot?startapp');
   $('month').onclick=()=>visit('m');
-  $('menu').onclick=()=>{
-    const box=$('summary'),show=box.style.display==='none';
-    box.style.display=show?'block':'none';$('form').style.display=show?'none':'block'
-  }
+  $('menu').onclick=()=>visit('menu')
 }

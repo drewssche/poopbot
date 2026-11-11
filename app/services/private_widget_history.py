@@ -5,7 +5,7 @@ import re
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.models import Chat, PoopEvent, Session as DaySession
 from app.services.event_time_service import event_occurrence_time
@@ -39,11 +39,11 @@ def dated_event(db, owner, eid, last_day):
 
 def month_view(db, owner, month, anchor):
     last = month.replace(day=calendar.monthrange(month.year, month.month)[1])
-    marked = set(db.scalars(
-        select(DaySession.session_date).join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
+    counts = dict(db.execute(
+        select(DaySession.session_date, func.count(PoopEvent.id)).join(PoopEvent, PoopEvent.session_id == DaySession.session_id)
         .where(DaySession.chat_id == owner, PoopEvent.user_id == owner, PoopEvent.origin_chat_id == owner,
-               DaySession.session_date.between(month, min(last, anchor))).distinct()
-    ))
+               DaySession.session_date.between(month, min(last, anchor))).group_by(DaySession.session_date)
+    ).all())
     nav = []
     if month > date(2000, 1, 1):
         nav.append(["‹", "m" + (month - timedelta(days=1)).strftime("%Y%m")])
@@ -52,7 +52,7 @@ def month_view(db, owner, month, anchor):
         nav.append(["›", "m" + (last + timedelta(days=1)).strftime("%Y%m")])
     return dict(title=f"{MONTHS[month.month - 1]} {month.year}", month=month.strftime("%Y%m"),
                 offset=month.weekday(), days=last.day, until=min(anchor,last).day,
-                marked=[d.day for d in sorted(marked)], nav=nav)
+                marked=[d.day for d in sorted(counts)], counts={d.day:n for d,n in counts.items()}, nav=nav)
 
 
 def view(db, sess, route):
@@ -91,7 +91,7 @@ def view(db, sess, route):
             nav.append(["Ещё", f"d{stamp}.{page + 1}"])
         nav.extend([["Месяц", "m" + stamp[:6]], ["К опросу", "home"]])
         return dict(title=day.strftime("%d.%m.%Y") + (" · Нет отметок" if not events else ""), items=items, nav=nav)
-    match = re.fullmatch(r"([ikxf])([1-9]\d{0,9})\.([a-f0-9]{16})(?:\.([0-3]))?", route)
+    match = re.fullmatch(r"([uikxf])([1-9]\d{0,9})\.([a-f0-9]{16})(?:\.([0-3]))?", route)
     if not match:
         return {"t": "Неизвестное действие"}
     step, eid, version, kind = match.groups()
@@ -103,6 +103,8 @@ def view(db, sess, route):
     back = "home" if day == anchor else "d" + day.strftime("%Y%m%d")
     nav = [["Назад", back]]
     title = entry(event, ZoneInfo(db.get(Chat, owner).timezone))[0]
+    if step == "u":
+        return editor_view(event, key, back, title)
     if step == "i":
         items = [["Редактировать", "k" + key], ["Удалить", "x" + key]]
     elif step == "x":
@@ -117,3 +119,49 @@ def view(db, sess, route):
     else:
         return {"t": "Неизвестное действие"}
     return dict(title=title, items=items, nav=nav)
+
+
+def editor_view(event=None, key=None, back="home", title=""):
+    from app.services.daily_widget_demo import ASSETS
+
+    sections = []
+    for name, options, glyphs in (
+        ("Консистенция", KINDS, ("🪨", "🪵", "💩", "💧")),
+        ("Самочувствие", FEELINGS.values(), ("🙂", "😐", "🙁")),
+    ):
+        choices = "".join(f'<button aria-label="{label}">{glyph}</button>'
+                          for label, glyph in zip(options, glyphs))
+        sections.append(f'<b>{name}</b><div class="choices">{choices}</div>')
+    kind = event_kind(event) if event else None
+    feeling = list(FEELINGS).index(event.feeling) if event and event.feeling in FEELINGS else -1
+    page = dict(title=title.partition(" · ")[0], form="".join(sections), values=[-1 if kind is None else kind, feeling],
+                op=f"E{key}." if key else "a", nav=[["Назад", back]])
+    if key:
+        page.update(remove=f"x{key}", trash=(ASSETS / "trash.svg").read_text().strip().replace("#fff", "#934c21"))
+    return page
+
+def icon_page(db, sess, route):
+    if route == "new":
+        return editor_view()
+    if route == "menu":
+        from app.services.q1_service import render_q1_private, should_show_restore_streak_button
+
+        owner = sess.chat_id
+        text = render_q1_private(db, owner, sess.session_id, owner, sess.session_date, closed=sess.status == "closed")
+        nav = []
+        if sess.status != "closed" and should_show_restore_streak_button(
+            db, chat_id=owner, session_date=sess.session_date, viewer_user_id=owner, is_private_chat=True
+        ):
+            nav.append(["Вернуть стрик", "!s", "↶"])
+        nav.extend([["Мини-апп", "app", "↗"], ["Назад", "home", "‹"]])
+        body = "\n".join(text.splitlines()[4:]).split("\n\n")[0]
+        return dict(title="Итоги дня", body=body[:180], nav=nav)
+    page = view(db, sess, route)
+    if "nav" in page:
+        icons = {"Ещё": "›", "Месяц": "▦", "К опросу": "⌂", "Назад": "‹"}
+        page["nav"] = [[label, key, icons.get(label, label)] for label, key in page["nav"]]
+        if route.startswith("x"):
+            label, key = page.pop("items")[0]
+            page["nav"].insert(0, [label, key, "✓"])
+        page.pop("marked", None)
+    return page

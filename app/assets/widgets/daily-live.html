@@ -1,6 +1,6 @@
 <main aria-label="__SCOPE__"><header>__MENU____LOGO__</header>
 <section class="calendar" id="calendar"><h2>__MONTH__</h2><div class="week">__WEEK__</div></section>
-<article><section id="form">__FORM__</section>__DETAILS__<div id="hint"></div></article></main>
+<article>__FORM__<div id="hint"></div></article></main>
 <script>
 (()=>{
 const w=TelegramWidget,$=id=>document.getElementById(id),panel=$('panel');
@@ -17,7 +17,7 @@ function finish(key,a){
 }
 function check(){
   message('Ожидаем подтверждения');setQuestion('');
-  button('Проверить отметку',()=>act('',true))
+  __RETRY__
 }
 async function act(op,retry){
   if(busy||w.isForward||revision<0||(!pending&&retry))return;

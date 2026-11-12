@@ -23,6 +23,7 @@ from app.db.models import (
     WeeklyReport,
 )
 from app.db.session import db_session
+from app.services.widget_art import brand_data
 from app.services.daily_widget_demo import (
     ASSETS,
     DAYS,
@@ -62,14 +63,8 @@ def encode(value):
 
 @lru_cache(maxsize=1)
 def private_brand():
-    # Split static artwork across Telegram's HTML and public-data budgets.
-    logo = (ASSETS / "brand.svg").read_text().strip()
-    path = ElementTree.fromstring(logo).findall("{*}path")[-1].attrib["d"]
-    art = [path]
-    for name in ("day", "edit"):
-        icon = ElementTree.parse(ASSETS / f"{name}.svg")
-        art.append(icon.find(".//{*}path").attrib["d"])
-    return logo.replace(f'd="{path}"', 'id="wordmark"'), encode(art)
+    # Inline the tail at build time; public_data carries the prefix offline.
+    return '<img class="brand" id="brand" alt="PoopCheck">', brand_data()[:1024]
 
 
 def source_template(private):
@@ -87,6 +82,9 @@ def source_template(private):
         .replace("__MONTH__", '<button id="month"></button>' if private else "__DATE__")
         .replace("__FORM__", (ASSETS / ("daily-private.html" if private else "daily-group.html")).read_text())
         .replace("__LOGO__", logo)
+        .replace("__LOGO_TAIL__", brand_data()[1024:] if private else "")
+        .replace("__DAY_PATH__", ElementTree.parse(ASSETS / "figma-day.svg").find(".//{*}path").attrib["d"] if private else "")
+        .replace("__PENCIL__", ElementTree.parse(ASSETS / "edit.svg").find(".//{*}path").attrib["d"] if private else "")
         .replace("__MENU__", '<button id="menu" aria-label="Меню">☰</button>' if private else "")
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
     )

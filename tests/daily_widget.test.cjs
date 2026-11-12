@@ -63,7 +63,7 @@ test('both rows belong to one draft, and a versioned edit uses the selected reco
   const adding=save.onclick(), add=w.requests[0], key='31.cccccccccccccccc';
   assert.match(add.key,/^q:a12:/);
   add.resolve({result:JSON.stringify({ok:true,t:'Отметка сохранена',s:{...state(1,1),items:[['11:17　🪵　🙁',key,'11:17, Норма, Ужасно']]}})});
-  await adding;assert.match(w.get('week').children[7].innerHTML,/<svg/);
+  await adding;assert.equal(w.get('week').children[7].className,'day selected');
   const opening=w.get('panel').children[0].onclick(), read=w.requests[1];
   assert.equal(read.key,'q:j:u'+key);
   read.resolve({result:JSON.stringify({form:'choices',values:[1,2],op:'E'+key+'.',nav:[]})});await opening;
@@ -139,4 +139,22 @@ test('opening a month from an archive day drops the previous branch',async()=>{
   await go(w.get('month'),month);
   await w.get('nav').children[0].onclick();
   assert.equal(back['aria-label'],'Меню');
+});
+
+test('week and month distinguish the selected date from entries and their count',async()=>{
+  const w=open({...state(0,0),day:20769,d:[1,11,0,3,0,0,0]});
+  const days=w.get('week').children.slice(7);
+  assert.match(days[0].innerHTML,/<svg/);assert.doesNotMatch(days[0].innerHTML,/<i>/);
+  assert.match(days[1].innerHTML,/<i>11<\/i>/);
+  assert.doesNotMatch(days[2].innerHTML,/<svg|<i>/);
+  assert.equal(days[3].className,'day selected');assert.doesNotMatch(days[3].innerHTML,/<svg/);
+  assert.match(days[3].innerHTML,/<i>3<\/i>/);assert.ok(days[4].disabled);
+  const read=days[1].onclick();
+  w.requests.pop().resolve({result:JSON.stringify({...state(0,0),day:20767})});
+  await read;
+  const month=w.get('month').onclick();
+  w.requests.pop().resolve({result:JSON.stringify({month:'202611',start:20766,offset:2,cells:[1,11,0,3]})});
+  await month;
+  const selected=w.get('panel').children[10];
+  assert.equal(selected.className,'day selected');assert.match(selected.innerHTML,/<i>11<\/i>/);
 });

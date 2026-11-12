@@ -10,6 +10,7 @@ import zlib
 
 from PIL import Image
 
+from app.services.widget_art import brand_image
 from app.services.daily_widget_demo import ASSETS
 from app.services.group_daily_widget import encode
 from app.services.report_animals import mass_comparison
@@ -87,7 +88,7 @@ def state(db, chat_id, card):
 
 def template(row):
     source = (ASSETS / "personal-report.html").read_text()
-    logo = (ASSETS / "brand.svg").read_text().strip()
+    logo = brand_image()
     spec = report_period(row.report_period)
     html = (
         source.replace("__LOGO__", logo)

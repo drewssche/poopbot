@@ -32,7 +32,13 @@ def fixture(tmp_path, monkeypatch):
         autoflush=False,
     )
     Base.metadata.create_all(factory.kw["bind"])
-    day = date.today()
+    day = date(2026, 11, 12)
+    class Daytime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 12, 10, tzinfo=UTC).astimezone(tz)
+    # The edit goes through the Mini App service, which checks its own clock.
+    monkeypatch.setattr("app.services.mini_app_service.datetime", Daytime)
     monkeypatch.setattr(
         "app.services.group_daily_widget.get_session_window",
         lambda _: SessionWindow(day, False, True),

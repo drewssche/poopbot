@@ -1,5 +1,5 @@
 let state,reading=0,flash;
-const trail=[],nav=$('nav'),art=JSON.parse(w.publicData||'[]');
+const trail=[],nav=$('nav');
 function icon(box,path,fill){
   return '<svg width="20" height="20" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
 }
@@ -29,17 +29,19 @@ function calendar(v,month){
   for(let i=0;i<(v.offset||0);i++)grid.appendChild(document.createElement('span'));
   (v.cells||v.d).forEach((count,i)=>{
     const day=v.start+i, num=String(new Date(day*86400000).getUTCDate());
-    const el=link(grid,num,'t'+day,num);
+    const selected=day===(v.day??state.day);
+    const el=link(grid,count>0?num+' · '+count:num,'t'+day,'');
     el.disabled=day>state.day;
-    el.className=day===(v.day??state.day)?'day selected':'day';
-    if(count>0)el.innerHTML=icon('32 374 42 40',art[1],'#934c21')+'<b>'+num+'</b>'+(count>1?'<i>'+count+'</i>':'')
+    el.className='day'+(selected?' selected':'');
+    el.innerHTML=(count>0&&!selected?icon('32 374 42 40','__DAY_PATH__','#934c21'):'')+
+      '<b>'+num+'</b>'+(count>1?'<i>'+count+'</i>':'')
   })
 }
 function record([display,key]){
   const el=control(panel,'Редактировать '+display,display,()=>visit('u'+key));
   el.className='entry';
   if(key.split('.')[0]===String(flash))el.className+=' saved';
-  const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24',art[2],'white');el.appendChild(pencil)
+  const pencil=document.createElement('span');pencil.innerHTML=icon('326 584 24 24','__PENCIL__','white');el.appendChild(pencil)
 }
 function editor(v){
   const values=v.values;
@@ -108,7 +110,7 @@ async function visit(key){
     const previous=trail.at(-1);
     if(v.home)trail.length=0;
     else{
-      if(v.month)trail.length=0;
+      if(v.month){v.day=previous?.day??state.day;trail.length=0}
       else if(previous&&(v.d&&previous.d||v.active&&previous.active))trail.pop();
       trail.push(v)
     }
@@ -143,7 +145,7 @@ function done(a){
   show()
 }
 function bind(){
-  $('wordmark').setAttribute('d',art[0]||'');
+  $('brand').setAttribute('src','data:image/webp;base64,'+w.publicData+'__LOGO_TAIL__');
   if(w.isForward){$('controls').style.display='none';return}
   $('plus').onclick=()=>closed?act('f'):visit('new');
   $('month').onclick=()=>{

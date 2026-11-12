@@ -6,6 +6,7 @@ from html import unescape
 import json
 import re
 
+from app.services.widget_art import brand_image
 from app.services.daily_widget_demo import ASSETS
 
 
@@ -19,7 +20,7 @@ def encode(value):
 
 @lru_cache(maxsize=1)
 def layout():
-    logo = (ASSETS / "brand.svg").read_text().strip()
+    logo = brand_image()
     return (ASSETS / "menu.html").read_text().replace("__LOGO__", logo)
 
 

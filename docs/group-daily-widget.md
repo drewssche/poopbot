@@ -17,3 +17,11 @@
 
 Сброс настройки отключает действия пилота и возвращает прежний формат для
 новых вопросов; уже отправленное сообщение от этого не становится фотографией.
+
+В личном дневнике логотип берётся из экспорта Figma
+`web/demo/assets/logo.svg` (слой 15:203). Чтобы пересобрать WebP,
+запустите `python -m scripts.export_widget_brand` с CairoSVG и Pillow,
+затем `python -m scripts.build_private_widget`. Изображение хранится в самом
+сообщении: начало в public_data, остаток в HTML. Дополнительного запроса нет.
+Силуэт для дней — экспорт `web/demo/assets/poop-day.svg`, подготовленный командой
+`npx svgo@4.0.0 -p 1 -i web/demo/assets/poop-day.svg -o app/assets/widgets/figma-day.svg`.

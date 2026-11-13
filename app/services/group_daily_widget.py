@@ -88,7 +88,8 @@ def source_template(private):
         .replace("__LOGO_TAIL__", brand_data()[1024:] if private else "")
         .replace("__DAY_PATH__", ElementTree.parse(ASSETS / "figma-day.svg").find(".//{*}path").attrib["d"] if private else "")
         .replace("__PENCIL__", ElementTree.parse(ASSETS / "edit.svg").find(".//{*}path").attrib["d"] if private else "")
-        .replace("__MENU__", '<button id="menu" aria-label="Меню">☰</button>' if private else "")
+        .replace("__MENU__", '<button id="menu" aria-label="Меню"></button>' if private else "")
+        .replace("__MENU_PATH__", ElementTree.parse(ASSETS / "figma-menu.svg").find(".//{*}path").attrib["d"] if private else "")
         .replace("__SCOPE__", "Личная сессия" if private else "Наш чат")
     )
 
@@ -107,7 +108,8 @@ def render(day, private=False):
             .replace("__STAMP__", day.strftime("%Y%m%d"))
             .replace("__DATE__", f"{history.MONTHS[day.month - 1]} {day.year}")
             .replace("__INDEX__", str(day.weekday())))
-    if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > 4010:
+    compressed_budget = 4050 if private else 4010  # Telegram accepts up to 4096 bytes.
+    if len(html.encode()) > 32768 or len(zlib.compress(html.encode(), 9)) > compressed_budget:
         raise ValueError("Widget size budget exceeded")
     return html
 

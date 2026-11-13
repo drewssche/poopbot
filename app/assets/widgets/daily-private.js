@@ -1,7 +1,7 @@
 let state,reading=0,flash;
 const trail=[],nav=$('nav');
-function icon(box,path,fill){
-  return '<svg width="20" height="20" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
+function icon(box,path,fill,size=20){
+  return '<svg width="'+size+'" height="'+size+'" viewBox="'+box+'"><path fill="'+fill+'" d="'+path+'"/></svg>'
 }
 function setQuestion(title){
   $('title').textContent=title;panel.className='';panel.textContent='';nav.textContent=''
@@ -68,7 +68,7 @@ function editor(v){
 function show(){
   const v=trail.at(-1)||state,home=v===state;
   const menu=$('menu');
-  menu.textContent=home?'☰':'←';
+  menu.innerHTML=home?icon('0 0 24 24','__MENU_PATH__','#181d27',24):'←';
   menu.setAttribute('aria-label',home?'Меню':'Назад');
   $('calendar').style.display=v.d?'block':'none';
   const plus=$('plus');

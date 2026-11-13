@@ -247,7 +247,7 @@ async def test_navigation_inside_personal_question(factory):
 
 
 @pytest.mark.parametrize(("selection", "details"),[
-    ("__", (None, None)), ("2_", (6, None)), ("_1", (None, "ok")),
+    ("__", (None, None)), ("2_", (6, None)), ("_1", (None, "ok")), ("10", (4, "great")),
 ])
 @pytest.mark.asyncio
 async def test_partial_journal_marks_roundtrip(factory, monkeypatch, selection, details):
@@ -267,13 +267,19 @@ async def test_partial_journal_marks_roundtrip(factory, monkeypatch, selection, 
         def press(op):
             return mutate(db, {"from":{"id":42}, "chat":{"type":"private","id":42}, "message_id":13, "data":"q:"+op})
 
-        added = press("a"+selection+":0000000000000001")
+        draft = press("j:new")["op"]
+        assert draft != press("j:new")["op"]
+        assert not press(draft + "99:ABCDEF1234567890").get("ok")
+        added = press(draft + selection + ":ABCDEF1234567890")
         assert added.get("ok"), added
-        assert press("a"+selection+":0000000000000001")["e"] == added["e"]
+        assert press(draft + selection + ":ABCDEF1234567890")["e"] == added["e"]
+        assert press(draft + selection + ":different-client")["e"] == added["e"]
+        assert "ok" not in press(draft + "32:ABCDEF1234567890")
         event = db.get(PoopEvent, added["e"])
         assert (event.bristol, event.feeling) == details
         key = added["s"]["items"][0][1]
-        edited = press("E"+key+"._2:0000000000000002")
+        edit = press("j:u" + key)["op"]
+        edited = press(edit + "_2:ABCDEF1234567890")
         assert edited["ok"]
         assert (event.bristol, event.feeling) == (None,"bad")
         db.expire_all()  # The next widget click loads the timestamp from the database.

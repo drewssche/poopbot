@@ -2,6 +2,7 @@
 
 import calendar
 import re
+from secrets import token_hex
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
@@ -144,6 +145,10 @@ def editor_view(event=None, key=None, back="home", title="", *, labeled=False):
     feeling = list(FEELINGS).index(event.feeling) if event and event.feeling in FEELINGS else -1
     page = dict(title=title if labeled else title.partition(" · ")[0], form="".join(sections), values=[-1 if kind is None else kind, feeling],
                 op=f"E{key}." if key else "a", nav=[] if labeled else [["Назад", back]])
+    if labeled:
+        # Shipped widgets append both choices and their own acknowledgement ID.
+        # A fresh form has its own receipt even if the client reuses that ID.
+        page["op"] = token_hex(6) + "." + page["op"]
     if key:
         page["remove"] = f"x{key}"
         if not labeled:

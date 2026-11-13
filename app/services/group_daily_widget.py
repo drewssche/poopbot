@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 import zlib
 from functools import lru_cache
@@ -39,6 +40,8 @@ from app.services.rate_limit_service import check_rate_limit
 from app.services.repo_service import ensure_chat_member, upsert_user
 from app.services.restore_period_service import lock_restore_chat, mark_forgotten_day
 from app.services.time_service import get_session_window
+
+log = logging.getLogger(__name__)
 
 PILOT = -1001739559442
 FLAG = "group_daily_widget_pilot"
@@ -284,13 +287,39 @@ def mutate(db, q):
         return history.icon_page(db, db.get(DaySession, row.q1_session_id), data[4:])
     if data.startswith("q:v:"):
         return history.view(db, db.get(DaySession, row.q1_session_id), data[4:])
+    # Published widgets concatenate the server's form prefix, the two choices
+    # and a client-generated suffix. Only the latter is echoed for UI acknowledgement.
+    route, _, nonce = data.rpartition(":")
+    form = re.fullmatch(
+        r"q:([a-f0-9]{12})\.(a|E[1-9]\d{0,9}\.[a-f0-9]{16}\.)"
+        r"([0-3_])(?:\.0)?([0-2_])(?:\.0)?", route,
+    ) if journal and chat_id > 0 else None
+
+    def invalid_action(reason):
+        if journal:
+            log.warning("Private widget rejected action: %s, route length=%d, suffix length=%d",
+                        reason, len(route), len(nonce))
+            return reject("Вернись назад и открой форму ещё раз.")
+        return reject("Неизвестное действие")
+
+    if form:
+        if len(nonce) > 16 or not (nonce.isascii() and nonce.isprintable()):
+            return invalid_action("invalid suffix")
+        form_id, prefix, kind, feeling = form.groups()
+        receipt_key = "form:" + form_id
+        route = f"q:{prefix}{kind}{feeling}"
+    else:
+        # A form that was already open still uses the legacy client ID.
+        if not re.fullmatch(r"[a-fA-F0-9{}-]{16}" if journal else r"[a-f0-9]{16}", nonce):
+            return invalid_action("invalid legacy suffix")
+        receipt_key = nonce
     match = re.fullmatch(
         r"q:([+fs-]|a[0-3_][0-2_]|[eE]([1-9]\d{0,9})\.([a-f0-9]{16})\.([0-3_])([0-2_])"
-        r"|D([1-9]\d{0,9})\.([a-f0-9]{16})):([a-f0-9]{16})", data,
+        r"|D([1-9]\d{0,9})\.([a-f0-9]{16}))", route,
     )
     if not match:
-        return reject("Неизвестное действие")
-    op, eid, version, kind, feeling, delete_id, delete_version, nonce = match.groups()
+        return invalid_action("invalid operation")
+    op, eid, version, kind, feeling, delete_id, delete_version = match.groups()
     if "_" in op and (not journal or chat_id <= 0 or op[0] not in ("a", "E")):
         return reject("Неизвестное действие")
     private_entry = op[0] in "ED"
@@ -319,7 +348,7 @@ def mutate(db, q):
     rid = str(
         uuid5(
             NAMESPACE_URL,
-            f"poopcheck:widget:{chat_id}:{row.photo_message_id}:{uid}:{nonce}",
+            f"poopcheck:widget:{chat_id}:{row.photo_message_id}:{uid}:{receipt_key}",
         )
     )
     digest = hashlib.sha256(op.encode()).hexdigest()

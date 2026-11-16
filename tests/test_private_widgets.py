@@ -313,3 +313,37 @@ def test_full_archive_confirmation_can_reopen_page_within_telegram_budget(factor
         page = journal_page(db, today, state["ack"]["goto"])
         assert any(key.startswith(f"{target}.") for _, key, _ in page["items"])
         assert ["К сегодня", "home"] in page["nav"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("daily", [True, False], ids=["question", "report"])
+async def test_explicit_widget_denial_falls_back_to_one_photo(factory, daily):
+    from aiogram.exceptions import TelegramBadRequest
+
+    async def deny(method, **kwargs):
+        assert method.__api_method__ == "sendWidget"
+        raise TelegramBadRequest(method=method, message="Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED")
+
+    bot = AsyncMock(side_effect=deny)
+    bot.send_photo.return_value = SimpleNamespace(message_id=91)
+    worker = ReportWorker(bot, factory, "", owner_id=100)
+    if daily:
+        with factory.begin() as db:
+            sess = db.scalar(select(DaySession))
+            await _post_q1(bot, db, 42, sess.session_id, DAY, False)
+        assert bot.send_photo.await_args.kwargs["reply_markup"]
+    else:
+        with factory.begin() as db:
+            rid = enqueue_report(db, 42, DAY, scheduled=True).id
+        await worker.deliver(rid)
+        assert rid in worker.pending()[0]
+        await worker.deliver(rid)
+    with factory() as db:
+        row, = db.scalars(select(WeeklyReport)).all()
+        assert not row.widget_report and not row.delivery_key.startswith("widget:")
+        assert row.photo_message_id == 91 and row.revision == row.delivered_revision
+        assert not row.attempts
+        rid = row.id
+    await worker.deliver(rid)
+    bot.send_photo.assert_awaited_once()
+    bot.send_message.assert_not_awaited()

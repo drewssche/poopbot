@@ -4,7 +4,9 @@ from hashlib import sha256
 import json
 from uuid import uuid4
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile
+from app.services.daily_widget_demo import widget_send_denied
 from app.db.models import Session as DaySession, WeeklyReport
 from app.services.q1_card_state import queue_question_view, question_caption
 from app.services.scheduler_telegram import safe_edit_message_text
@@ -24,7 +26,14 @@ async def send_question(bot, db, *, chat_id, session_id, text, reply_markup=None
     sess = db.get(DaySession, session_id)
     from app.services import group_daily_widget
     if group_daily_widget.enabled(db, chat_id):
-        return await group_daily_widget.send(bot, db, sess)
+        try:
+            with db.begin_nested():
+                return await group_daily_widget.send(bot, db, sess)
+        except TelegramBadRequest as exc:
+            if not widget_send_denied(exc):
+                raise
+            # Roll back the unsent widget publisher before registering the photo.
+
     period = period_to_range(sess.session_date, 'week')
     title = 'Личные отметки' if chat_id > 0 else 'Отметки этого чата'
     db.flush()

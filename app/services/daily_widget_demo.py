@@ -31,6 +31,11 @@ class SendWidget(TelegramMethod[Message]):
     allow_queries: bool = True
 
 
+def widget_send_denied(exc):
+    return (isinstance(exc, TelegramBadRequest) and isinstance(exc.method, SendWidget)
+            and exc.message.removeprefix("Bad Request: ").strip().upper() == "INPUT_MEDIA_WIDGET_NOT_ALLOWED")
+
+
 class EditWidget(TelegramMethod[bool | Message]):
     __api_method__ = 'editMessageWidgetData'
     __returning__ = bool | Message

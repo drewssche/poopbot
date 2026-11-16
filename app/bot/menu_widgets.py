@@ -8,6 +8,7 @@ import logging
 import re
 from secrets import token_hex
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
@@ -19,7 +20,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 from sqlalchemy import delete, update
 
 from app.db.models import PrivateMenu, WeeklyReport
-from app.services.daily_widget_demo import AnswerWidget, EditWidget, SendWidget
+from app.services.daily_widget_demo import AnswerWidget, EditWidget, SendWidget, widget_send_denied
 from app.services.group_daily_widget import JOURNAL_PREFIX, enabled, question_query
 from app.services.menu_widget import (
     encode,
@@ -139,14 +140,19 @@ class MenuWidgets:
                         options["reply_parameters"] = {
                             "message_id": method.reply_to_message_id
                         }
-                    sent = await bot(
-                        SendWidget(
-                            chat_id=chat_id,
-                            html=layout(),
-                            chat_data=encode(page_state(pages, revision)),
-                            **options,
+                    try:
+                        sent = await bot(
+                            SendWidget(
+                                chat_id=chat_id,
+                                html=layout(),
+                                chat_data=encode(page_state(pages, revision)),
+                                **options,
+                            )
                         )
-                    )
+                    except TelegramBadRequest as exc:
+                        if not widget_send_denied(exc):
+                            raise
+                        return await make_request(bot, method)
                     with self.sessions.begin() as db:
                         db.add(
                             PrivateMenu(

@@ -9,7 +9,7 @@ from uuid import uuid4
 import psycopg
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.methods import EditMessageCaption, EditMessageMedia
-from app.services.daily_widget_demo import EditWidget
+from app.services.daily_widget_demo import EditWidget, widget_send_denied
 from aiogram.types import BufferedInputFile, InputMediaPhoto, InlineKeyboardMarkup
 from sqlalchemy import select, update
 from sqlalchemy.engine import make_url
@@ -70,6 +70,8 @@ def delivery_failure_reason(exc):
     """Fixed categories only: never copy Telegram payloads into logs."""
     if isinstance(exc, TelegramForbiddenError):
         return 'access_denied'
+    if widget_send_denied(exc):
+        return 'widget_not_allowed'
     if isinstance(exc, TelegramRetryAfter):
         return 'rate_limited'
     if isinstance(exc, TelegramBadRequest):
@@ -194,7 +196,15 @@ class ReportWorker:
             revision = row.revision
             if row.widget_report or row.delivery_key.startswith('widget:q1:'):
                 if await self._is_current(row):
-                    await self.deliver_widget(row, caption)
+                    try:
+                        await self.deliver_widget(row, caption)
+                    except TelegramBadRequest as exc:
+                        if not (row.widget_report and row.photo_message_id is None and widget_send_denied(exc)):
+                            raise
+                        # Telegram explicitly rejected the send. Keep this outbox job and
+                        # use its regular photo publisher for delivery and future edits.
+                        await database_work(self.save_values, row.id, {"widget_report": False})
+                        self.wake.set()
                 return
             caption_hash = digest(caption)
             from app.bot.keyboards.debug import debug_explain_kb

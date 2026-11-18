@@ -3,11 +3,15 @@ import asyncio
 from hashlib import sha256
 import json
 from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile
 from app.services.daily_widget_demo import widget_send_denied
-from app.db.models import Session as DaySession, WeeklyReport
+from app.db.models import Chat, Session as DaySession, WeeklyReport
+from app.services.repo_service import get_session_message_id, set_session_message_id
 from app.services.q1_card_state import queue_question_view, question_caption
 from app.services.scheduler_telegram import safe_edit_message_text
 from app.services.stats_common import period_to_range
@@ -56,3 +60,51 @@ async def send_question(bot, db, *, chat_id, session_id, text, reply_markup=None
         revision=1, delivered_revision=1))
     db.flush()
     return sent
+
+
+def recover_question(db, sess, message, bot_id):
+    """Recover a delivered Q1 whose send response or following commit was lost."""
+    sender = getattr(message, "from_user", None)
+    if (not sender or sender.id != bot_id or not sender.is_bot
+            or getattr(message, "forward_origin", None)
+            or not getattr(message, "photo", None)
+            or message.chat.id != sess.chat_id):
+        return False
+    title = "💩 Твоя личная сессия" if sess.chat_id > 0 else "💩 Кто сегодня какал?"
+    expected = f"{title} ({sess.session_date.strftime('%d.%m.%y')})"
+    if (message.caption or "").split("\n", 1)[0] != expected:
+        return False
+    timezone = ZoneInfo(db.get(Chat, sess.chat_id).timezone)
+    if message.date.astimezone(timezone).date() != sess.session_date:
+        return False
+    markup = message.reply_markup
+    if not markup or not any(b.callback_data == "q1:plus" for row in markup.inline_keyboard for b in row):
+        return False
+    # Concurrent first taps may recover only the same canonical question.
+    db.refresh(sess, with_for_update=True)
+    if sess.status != "active":
+        return False
+    current = get_session_message_id(db, sess.session_id, "Q1")
+    if current is not None:
+        return current == message.message_id
+    period = period_to_range(sess.session_date, "week")
+    row = db.scalar(select(WeeklyReport).where(
+        WeeklyReport.source_chat_id == sess.chat_id,
+        WeeklyReport.q1_session_id == sess.session_id,
+        WeeklyReport.photo_message_id == message.message_id,
+        WeeklyReport.delivery_key.startswith("q1:"),
+        WeeklyReport.disabled.is_(False),
+    ))
+    if row is None:
+        db.add(WeeklyReport(
+            delivery_key=f"q1:{sess.session_id}:recovered:{message.message_id}",
+            source_chat_id=sess.chat_id, destination_chat_id=sess.chat_id,
+            q1_session_id=sess.session_id, report_period="week",
+            previous_period_start=period.start, period_start=period.start,
+            period_end=period.end, anchor_date=sess.session_date,
+            chat_title="Личные отметки" if sess.chat_id > 0 else "Отметки этого чата",
+            photo_message_id=message.message_id, revision=1, delivered_revision=0,
+        ))
+    set_session_message_id(db, sess.session_id, "Q1", message.message_id)
+    db.flush()
+    return True

@@ -27,7 +27,7 @@ from app.services.q1_service import (
 )
 from app.services.q2_q3_service import ensure_q2_q3_exist, render_q2_private_text, should_show_q2_q3_button
 from app.services.rate_limit_service import check_rate_limit
-from app.services.q1_card_service import edit_question, send_question
+from app.services.q1_card_service import edit_question, send_question, recover_question
 from app.services.reminder_service import LATE_REMINDER_COMMAND
 from app.services.time_service import get_time_slot, get_slot_popup
 from app.services.repo_service import (
@@ -149,6 +149,9 @@ async def q1_callbacks(cb: CallbackQuery) -> None:
                         SessionMessage.message_id == cb.message.message_id,
                     )
                 )
+                if sess is None and recover_question(db, current_sess, cb.message, getattr(cb.bot, "id", None)):
+                    sess = current_sess
+                    _log_q1_result(cb, "recovered_message", sess.session_id)
                 if sess is None:
                     _log_q1_result(cb, "unknown_message")
                     await cb.answer("Неактуально", show_alert=False)

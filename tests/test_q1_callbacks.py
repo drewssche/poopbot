@@ -228,3 +228,50 @@ def test_group_plus_plus_minus_keeps_saved_counts_after_photo_refresh(scenario, 
         assert worker.pending()[0] == []
         assert_mark(s.factory, 1, expected)
     s.cb.bot.edit_message_text.assert_not_awaited()
+
+
+def orphan_photo(s):
+    from datetime import datetime, timezone
+    from aiogram.types import InlineKeyboardMarkup
+    with s.factory.begin() as db:
+        db.delete(db.get(SessionMessage, (1, "Q1")))
+    s.cb.bot.id = 99
+    s.cb.message.from_user = SimpleNamespace(id=99, is_bot=True)
+    s.cb.message.photo = [object()]
+    s.cb.message.caption = "💩 Кто сегодня какал? (29.09.26)\nУчастники:"
+    s.cb.message.date = datetime(2026, 9, 29, 9, tzinfo=timezone.utc)
+    s.cb.message.reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
+        {"text": "+", "callback_data": "q1:plus"},
+    ]])
+
+
+def test_orphan_photo_is_recovered_and_first_tap_saved(scenario, caplog):
+    from app.db.models import WeeklyReport
+    s = scenario
+    orphan_photo(s)
+    asyncio.run(handler.q1_callbacks(s.cb))
+    assert_mark(s.factory, 1, 1)
+    with s.factory() as db:
+        assert db.get(SessionMessage, (1, "Q1")).message_id == 10
+        row, = db.scalars(select(WeeklyReport)).all()
+        assert row.photo_message_id == 10 and row.q1_session_id == 1
+    assert "outcome=recovered_message" in caplog.text
+
+
+@pytest.mark.parametrize("invalid", ["author", "date", "forward", "another_question"])
+def test_orphan_recovery_rejects_foreign_old_and_replaced_messages(scenario, invalid):
+    s = scenario
+    orphan_photo(s)
+    if invalid == "author":
+        s.cb.message.from_user.id = 12
+    elif invalid == "date":
+        s.cb.message.date -= timedelta(days=1)
+    elif invalid == "forward":
+        s.cb.message.forward_origin = object()
+    else:
+        with s.factory.begin() as db:
+            db.add(SessionMessage(session_id=1, kind="Q1", message_id=11))
+    asyncio.run(handler.q1_callbacks(s.cb))
+    with s.factory() as db:
+        assert db.scalar(select(PoopEvent.id)) is None
+    assert s.cb.answer.await_args.args[0] == "Неактуально"
